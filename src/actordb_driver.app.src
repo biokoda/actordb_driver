@@ -1,0 +1,12 @@
+{application, actordb_driver,
+ [
+  {description, "actordb sqlite nif interface"},
+  {vsn, "1"},
+  {modules, [actordb_driver, actordb_driver_nif]},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {env, []}
+ ]}.
