@@ -56,9 +56,9 @@ int g_nstatic_sqls = 0;
 typedef struct db_connection db_connection;
 typedef struct db_backup db_backup;
 typedef struct db_thread db_thread;
-typedef struct esqlite_control_data esqlite_control_data;
+typedef struct control_data control_data;
 
-struct esqlite_control_data {
+struct control_data {
     char addresses[MAX_CONNECTIONS][255];
     int ports[MAX_CONNECTIONS];
     int types[MAX_CONNECTIONS];
@@ -79,9 +79,9 @@ struct db_thread {
     // MAX_CONNECTIONS (8) servers to replicate write log to
     int sockets[MAX_CONNECTIONS];
     int socket_types[MAX_CONNECTIONS];
-    esqlite_control_data *control;
+    control_data *control;
 
-    // Prepared statements. 2d array (for every type list of sqls and versions)
+    // Prepared statements. 2d array (for every type, list of sqls and versions)
     int prepSize;
     int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
     char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
@@ -95,7 +95,6 @@ ErlNifUInt64 g_dbcount = 0;
 ErlNifMutex *g_dbcount_mutex = NULL;
 
 
-/* database connection context */
 struct db_connection{
     unsigned int thread;
     unsigned int randnum;
@@ -815,8 +814,8 @@ do_tcp_connect(db_command *cmd, db_thread *thread)
 
     if (!thread->control)
     {
-        thread->control = enif_alloc(sizeof(esqlite_control_data));
-        memset(thread->control,0,sizeof(esqlite_control_data));
+        thread->control = enif_alloc(sizeof(control_data));
+        memset(thread->control,0,sizeof(control_data));
     }
     if (!enif_get_int(cmd->env,cmd->arg3,&pos))
         return enif_make_badarg(cmd->env);
@@ -2530,31 +2529,27 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     atom_changes = enif_make_atom(env,"changes");
     atom_done = enif_make_atom(env,"done");
     
-    if (enif_is_tuple(env,info))
-    {
-        enif_get_tuple(env,info,&i,&param);
-        if (i != 2)
-            return -1;
-
-        if (!enif_get_int(env,param[0],&g_nthreads))
-            return -1;
-
-        if (!enif_is_tuple(env,param[1]))
-            return -1;
-
-        enif_get_tuple(env,param[1],&i,&param);
-        if (i > MAX_STATIC_SQLS)
-            return -1;
-
-        g_nstatic_sqls = i;
-        for (i = 0; i < g_nstatic_sqls; i++)
-            enif_get_string(env,param[i],g_static_sqls[i],256,ERL_NIF_LATIN1);
-    }
-    else if (!enif_get_int(env,info,&g_nthreads))
-    {
-        printf("Unable to read int for nthreads\r\n");
+    // Paths will determine thread numbers. Every path has a thread.
+    // {{Path1,Path2,Path3,...},{StaticSql1,StaticSql2,StaticSql3,...}}
+    enif_get_tuple(env,info,&i,&param);
+    if (i != 2)
         return -1;
-    }
+
+    if (!enif_get_int(env,param[0],&g_nthreads))
+        return -1;
+
+    if (!enif_is_tuple(env,param[1]))
+        return -1;
+
+    enif_get_tuple(env,param[1],&i,&param);
+    if (i > MAX_STATIC_SQLS)
+        return -1;
+
+    g_nstatic_sqls = i;
+    for (i = 0; i < g_nstatic_sqls; i++)
+        enif_get_string(env,param[i],g_static_sqls[i],256,ERL_NIF_LATIN1);
+    
+
     g_dbcount_mutex = enif_mutex_create("dbcountmutex");
      
     rt = enif_open_resource_type(env, "esqlite3_nif", "db_connection_type", 
@@ -2586,7 +2581,6 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
         g_threads[i].index = i;
         g_threads[i].commands = queue_create(command_destroy);
 
-        /* Start command processing thread */
         if(enif_thread_create("db_connection", &(g_threads[i].tid), thread_func, &(g_threads[i]), NULL) != 0) 
         {
             printf("Unable to create esqlite3 thread\r\n");

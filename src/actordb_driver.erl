@@ -26,9 +26,9 @@ open(Filename,ThreadNumber) ->
     {ok,Connection} = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber),
     case receive_answer(Ref) of
         {ok,[]} ->
-            {ok, {connection, make_ref(),Connection}};
+            {ok, {adb_connection, make_ref(),Connection}};
         ok ->
-            {ok, {connection, make_ref(),Connection}};
+            {ok, {adb_connection, make_ref(),Connection}};
         {error, _Msg}=Error ->
             Error
     end.
@@ -37,14 +37,14 @@ open(Filename,ThreadNumber,Sql) ->
     {ok,Connection} = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Sql),
     case receive_answer(Ref) of
         {ok,Res} ->
-            {ok, {connection, make_ref(),Connection},Res};
+            {ok, {adb_connection, make_ref(),Connection},Res};
         ok ->
-            {ok, {connection, make_ref(),Connection}};
+            {ok, {adb_connection, make_ref(),Connection}};
         {error, _Msg}=Error ->
             Error
     end.
 
-close( {connection, _Ref, _Connection}) ->
+close({adb_connection, _Ref, _Connection}) ->
     % Noop. Rely on GC. This is to avoid double closing.
     ok.
 
@@ -62,12 +62,12 @@ parse_helper(Bin) ->
 parse_helper(Bin,Offset) ->
     actordb_driver_nif:parse_helper(Bin,Offset).
 
-replicate_opts({connection, _Ref, Connection},PacketPrefix) ->
+replicate_opts({adb_connection, _Ref, Connection},PacketPrefix) ->
     actordb_driver_nif:replicate_opts(Connection,PacketPrefix,1).
-replicate_opts({connection, _Ref, Connection},PacketPrefix,Type) ->
+replicate_opts({adb_connection, _Ref, Connection},PacketPrefix,Type) ->
     actordb_driver_nif:replicate_opts(Connection,PacketPrefix,Type).
 
-replicate_status({connection, _Ref, Connection}) ->
+replicate_status({adb_connection, _Ref, Connection}) ->
     actordb_driver_nif:replicate_status(Connection).
 
 tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
@@ -97,15 +97,15 @@ lz4_decompress(B,SizeOrig) ->
 lz4_decompress(B,SizeOrig,SizeIn) ->
     actordb_driver_nif:lz4_decompress(B,SizeOrig,SizeIn).
 
-wal_pages({connection, _Ref, Connection}) ->
+wal_pages({adb_connection, _Ref, Connection}) ->
     actordb_driver_nif:wal_pages(Connection).
 
-noop({connection, _Ref, Connection}) ->
+noop({adb_connection, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:noop(Connection, Ref, self()),
     receive_answer(Ref).
 
-bind_insert(Sql, [[_|_]|_] = Params, {connection, _Ref, Connection}) ->
+bind_insert(Sql, [[_|_]|_] = Params, {adb_connection, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:bind_insert(Connection,Ref,self(),Sql,Params),
     receive_answer(Ref).
@@ -118,16 +118,16 @@ exec_script(Sql, Db, Timeout) when is_integer(Timeout) ->
     exec_script(Sql,Db,Timeout,0,0,<<>>).
 exec_script(Sql, [_|_] = Recs, Db, Timeout) when is_integer(Timeout) ->
     exec_script(Sql,Recs,Db,Timeout,0,0,<<>>).
-exec_script(Sql,  {connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+exec_script(Sql,  {adb_connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
     receive_answer(Ref,Connection,Timeout).
-exec_script(Sql, [_|_] = Recs, {connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+exec_script(Sql, [_|_] = Recs, {adb_connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
     receive_answer(Ref,Connection,Timeout).
 
-backup_init({connection, _, Dest},{connection, _, Src}) ->
+backup_init({adb_connection, _, Dest},{adb_connection, _, Src}) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:backup_init(Dest,Src,Ref,self()),
     case receive_answer(Ref) of
