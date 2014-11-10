@@ -734,6 +734,8 @@ do_open(db_command *cmd, db_thread *thread)
         memset(cmd->conn->dbpath,0,size+1);
         strcpy(cmd->conn->dbpath,filename);
 
+        sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, cmd->conn);
+
         cmd->conn->nPages = cmd->conn->nPrevPages = 0;
         cmd->conn->thread = thread->index;
         sqlite3HashInit(&cmd->conn->walPages);
