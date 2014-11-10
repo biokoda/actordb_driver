@@ -640,7 +640,7 @@ command_create(int threadnum)
     cmd->ref = 0;
     cmd->arg = cmd->arg1 = cmd->arg2 = cmd->arg3 = cmd->arg4 = 0;
     cmd->stmt = NULL;
-    cmd->connindex = 0;
+    cmd->connindex = -1;
     cmd->p = NULL;
 
     return item;
@@ -812,7 +812,7 @@ static ERL_NIF_TERM
 do_interrupt(db_command *cmd, db_thread *thread) 
 {
     sqlite3_interrupt(cmd->conn->db);
-    enif_release_resource(cmd->conn);
+    // enif_release_resource(cmd->conn);
     return atom_error;
 }
 
@@ -1123,7 +1123,7 @@ do_bind_insert(db_command *cmd, db_thread *thread)
         sqlite3_reset(statement);
     }
     sqlite3_finalize(statement);
-    enif_release_resource(cmd->conn);
+    // enif_release_resource(cmd->conn);
 
     if (rc == SQLITE_DONE)
     {
@@ -1136,8 +1136,7 @@ do_bind_insert(db_command *cmd, db_thread *thread)
         return atom_false;
 }
 
-/* 
- */
+
 static ERL_NIF_TERM
 do_exec_script(db_command *cmd, db_thread *thread)
 {
@@ -1452,19 +1451,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
     }
 
 
-    // has number of pages changed
-    // if (cmd->conn->nPages != nPages)
-    // {
-    //     if (rc != SQLITE_ERROR && rc != SQLITE_INTERRUPT)
-    //     {
-    //         write32bit(pagesBuff,cmd->conn->nPages - cmd->conn->nPrevPages);
-    //         // wal_page_hook(thread,NULL,0,pagesBuff,4);
-    //     }
-    //     // else
-    //     //     wal_page_hook(thread,NULL,0,NULL,0);
-    // }
-
-    enif_release_resource(cmd->conn);
+    // enif_release_resource(cmd->conn);
     // Errors are from 1 to 99.
     if (rc > 0 && rc < 100 && rc != SQLITE_INTERRUPT)
         return make_sqlite3_error_tuple(cmd->env, errat, rc, cmd->conn->db);
@@ -1644,21 +1631,23 @@ do_close(db_command *cmd,db_thread *thread)
 static ERL_NIF_TERM
 evaluate_command(db_command *cmd,db_thread *thread)
 {
-    if (cmd->connindex < thread->nconns)
+    if (cmd->connindex >= 0 && cmd->connindex < thread->nconns)
         cmd->conn = &thread->conns[cmd->connindex];
 
     switch(cmd->type) 
     {
     case cmd_open:
     {
-        ERL_NIF_TERM res = do_open(cmd,thread);
-        if (res != 0 || cmd->conn->nErlOpen == 0)
-            return res;
-        else
+        ERL_NIF_TERM connres = do_open(cmd,thread);
+        if (cmd->conn != NULL && cmd->arg1 == 0)
+            return enif_make_tuple2(cmd->env,atom_ok,connres);
+        if (cmd->conn == NULL)
+            return connres;
+        else if (cmd->arg1 != 0)
         {
             cmd->arg = cmd->arg1;
             cmd->arg1 = 0;
-            return do_exec_script(cmd,thread);
+            return enif_make_tuple3(cmd->env,atom_ok,connres,do_exec_script(cmd,thread));
         }
     }
     case cmd_exec_script:

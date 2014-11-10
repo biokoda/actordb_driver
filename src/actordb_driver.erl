@@ -65,8 +65,8 @@ replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix) ->
 replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix,Type) ->
     actordb_driver_nif:replicate_opts(Connection,PacketPrefix,Type).
 
-replicate_status({actordb_driver, _Ref, Connection}) ->
-    actordb_driver_nif:replicate_status(Connection).
+% replicate_status({actordb_driver, _Ref, Connection}) ->
+%     actordb_driver_nif:replicate_status(Connection).
 
 tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
     Ref = make_ref(),
