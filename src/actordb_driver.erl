@@ -9,9 +9,9 @@
          store_prepared_table/2,
          close/1,
          parse_helper/1,parse_helper/2,wal_pages/1,
-         backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
-         lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
-         replicate_opts/2,replicate_opts/3,replicate_status/1,tcp_connect/4,all_tunnel_call/1,
+         % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
+         lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
+         replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,
          tcp_connect_async/4,tcp_connect_async/5,make_wal_header/1,tcp_reconnect/0,wal_checksum/4,bind_insert/3]).
 
 
@@ -23,28 +23,26 @@ open(Filename) ->
 
 open(Filename,ThreadNumber) ->
     Ref = make_ref(),
-    {ok,Connection} = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber),
+    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber),
     case receive_answer(Ref) of
-        {ok,[]} ->
-            {ok, {adb_connection, make_ref(),Connection}};
-        ok ->
-            {ok, {adb_connection, make_ref(),Connection}};
+        {ok,Connection} ->
+            {ok, {actordb_driver, make_ref(),Connection}};
         {error, _Msg}=Error ->
             Error
     end.
 open(Filename,ThreadNumber,Sql) ->
     Ref = make_ref(),
-    {ok,Connection} = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Sql),
+    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Sql),
     case receive_answer(Ref) of
-        {ok,Res} ->
-            {ok, {adb_connection, make_ref(),Connection},Res};
-        ok ->
-            {ok, {adb_connection, make_ref(),Connection}};
+        {ok,Connection,Res} ->
+            {ok, {actordb_driver, make_ref(),Connection},Res};
+        {ok,Connection} ->
+            {ok, {actordb_driver, make_ref(),Connection}};
         {error, _Msg}=Error ->
             Error
     end.
 
-close({adb_connection, _Ref, _Connection}) ->
+close({actordb_driver, _Ref, _Connection}) ->
     % Noop. Rely on GC. This is to avoid double closing.
     ok.
 
@@ -62,12 +60,12 @@ parse_helper(Bin) ->
 parse_helper(Bin,Offset) ->
     actordb_driver_nif:parse_helper(Bin,Offset).
 
-replicate_opts({adb_connection, _Ref, Connection},PacketPrefix) ->
+replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix) ->
     actordb_driver_nif:replicate_opts(Connection,PacketPrefix,1).
-replicate_opts({adb_connection, _Ref, Connection},PacketPrefix,Type) ->
+replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix,Type) ->
     actordb_driver_nif:replicate_opts(Connection,PacketPrefix,Type).
 
-replicate_status({adb_connection, _Ref, Connection}) ->
+replicate_status({actordb_driver, _Ref, Connection}) ->
     actordb_driver_nif:replicate_status(Connection).
 
 tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
@@ -97,15 +95,15 @@ lz4_decompress(B,SizeOrig) ->
 lz4_decompress(B,SizeOrig,SizeIn) ->
     actordb_driver_nif:lz4_decompress(B,SizeOrig,SizeIn).
 
-wal_pages({adb_connection, _Ref, Connection}) ->
+wal_pages({actordb_driver, _Ref, Connection}) ->
     actordb_driver_nif:wal_pages(Connection).
 
-noop({adb_connection, _Ref, Connection}) ->
+noop({actordb_driver, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:noop(Connection, Ref, self()),
     receive_answer(Ref).
 
-bind_insert(Sql, [[_|_]|_] = Params, {adb_connection, _Ref, Connection}) ->
+bind_insert(Sql, [[_|_]|_] = Params, {actordb_driver, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:bind_insert(Connection,Ref,self(),Sql,Params),
     receive_answer(Ref).
@@ -118,37 +116,37 @@ exec_script(Sql, Db, Timeout) when is_integer(Timeout) ->
     exec_script(Sql,Db,Timeout,0,0,<<>>).
 exec_script(Sql, [_|_] = Recs, Db, Timeout) when is_integer(Timeout) ->
     exec_script(Sql,Recs,Db,Timeout,0,0,<<>>).
-exec_script(Sql,  {adb_connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+exec_script(Sql,  {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
     receive_answer(Ref,Connection,Timeout).
-exec_script(Sql, [_|_] = Recs, {adb_connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+exec_script(Sql, [_|_] = Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
     receive_answer(Ref,Connection,Timeout).
 
-backup_init({adb_connection, _, Dest},{adb_connection, _, Src}) ->
-    Ref = make_ref(),
-    ok = actordb_driver_nif:backup_init(Dest,Src,Ref,self()),
-    case receive_answer(Ref) of
-        {ok,B} ->
-            {ok,{backup,make_ref(),B}};
-        error ->
-            error
-    end.
+% backup_init({actordb_driver, _, Dest},{actordb_driver, _, Src}) ->
+%     Ref = make_ref(),
+%     ok = actordb_driver_nif:backup_init(Dest,Src,Ref,self()),
+%     case receive_answer(Ref) of
+%         {ok,B} ->
+%             {ok,{backup,make_ref(),B}};
+%         error ->
+%             error
+%     end.
 
-backup_step({backup, _Ref, B},N) ->
-    Ref = make_ref(),
-    ok = actordb_driver_nif:backup_step(B,Ref,self(),N),
-    receive_answer(Ref).
+% backup_step({backup, _Ref, B},N) ->
+%     Ref = make_ref(),
+%     ok = actordb_driver_nif:backup_step(B,Ref,self(),N),
+%     receive_answer(Ref).
 
-backup_finish({backup, _Ref, B}) ->
-    Ref = make_ref(),
-    ok = actordb_driver_nif:backup_finish(B,Ref,self()),
-    receive_answer(Ref).
+% backup_finish({backup, _Ref, B}) ->
+%     Ref = make_ref(),
+%     ok = actordb_driver_nif:backup_finish(B,Ref,self()),
+%     receive_answer(Ref).
 
-backup_pages({backup, _Ref, B}) ->
-    actordb_driver_nif:backup_pages(B).
+% backup_pages({backup, _Ref, B}) ->
+%     actordb_driver_nif:backup_pages(B).
 
 
 receive_answer(Ref) ->

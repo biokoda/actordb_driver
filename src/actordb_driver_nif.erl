@@ -3,7 +3,6 @@
 % file, You can obtain one at http://mozilla.org/MPL/2.0/.
 -module(actordb_driver_nif).
 
-%% low-level exports
 -export([init/1,
          open/4, 
          open/5,
@@ -14,10 +13,10 @@
          noop/3,
          parse_helper/2,
          wal_pages/1,
-         backup_init/4,
-         backup_finish/3,
-         backup_step/4,
-         backup_pages/1,
+         % backup_init/4,
+         % backup_finish/3,
+         % backup_step/4,
+         % backup_pages/1,
          interrupt_query/1,
          lz4_compress/1,
          lz4_decompress/2,
@@ -29,7 +28,7 @@
          replicate_opts/3,
          wal_header/1,
          wal_checksum/4,
-         replicate_status/1,
+         % replicate_status/1,
          bind_insert/5,
          all_tunnel_call/3
 ]).
@@ -46,8 +45,8 @@ bind_insert(_,_,_,_,_) ->
 wal_checksum(_,_,_,_) ->
     exit(nif_library_not_loaded).
 
-replicate_status(_) ->
-    exit(nif_library_not_loaded).
+% replicate_status(_) ->
+%     exit(nif_library_not_loaded).
 
 wal_header(_) ->
     exit(nif_library_not_loaded).
@@ -85,17 +84,17 @@ lz4_decompress(_,_) ->
 lz4_decompress(_,_,_) ->
     exit(nif_library_not_loaded).
 
-backup_init(_,_,_,_) ->
-    exit(nif_library_not_loaded).
+% backup_init(_,_,_,_) ->
+%     exit(nif_library_not_loaded).
 
-backup_finish(_,_,_) ->
-    exit(nif_library_not_loaded).
+% backup_finish(_,_,_) ->
+%     exit(nif_library_not_loaded).
 
-backup_step(_,_,_,_) ->
-    exit(nif_library_not_loaded).
+% backup_step(_,_,_,_) ->
+%     exit(nif_library_not_loaded).
 
-backup_pages(_) ->
-    exit(nif_library_not_loaded).
+% backup_pages(_) ->
+%     exit(nif_library_not_loaded).
 
 init(Threads) when is_integer(Threads); is_integer(element(1,Threads)) ->
     NifName = "actordb_driver_nif",
