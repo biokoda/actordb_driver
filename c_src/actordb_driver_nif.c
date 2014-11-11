@@ -1,8 +1,6 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-
-
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -47,183 +45,14 @@
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
 
-static ErlNifResourceType *db_connection_type = NULL;
-static ErlNifResourceType *db_backup_type = NULL;
+#include "actordb_driver_nif.h"
 
-char g_static_sqls[MAX_STATIC_SQLS][256];
-int g_nstatic_sqls = 0;
-
-typedef struct db_connection db_connection;
-typedef struct db_backup db_backup;
-typedef struct db_thread db_thread;
-typedef struct control_data control_data;
-typedef struct conn_resource conn_resource;
-
-struct control_data
-{
-    char addresses[MAX_CONNECTIONS][255];
-    int ports[MAX_CONNECTIONS];
-    int types[MAX_CONNECTIONS];
-    // connection prefixes
-    ErlNifBinary prefixes[MAX_CONNECTIONS];
-    char isopen[MAX_CONNECTIONS];
-};
-
-struct db_thread
-{
-    // All DB paths are relative to this thread path.
-    // This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
-    char *path;
-    queue *commands;
-    unsigned int dbcount;
-    unsigned int inactivity;
-    ErlNifTid tid;
-    int alive;
-    // Index in table od threads.
-    unsigned int index;
-    // so currently executing connection data is accessible from wal callback
-    db_connection *curConn; 
-
-    // Raft page replication
-    // MAX_CONNECTIONS (8) servers to replicate write log to
-    int sockets[MAX_CONNECTIONS];
-    int socket_types[MAX_CONNECTIONS];
-    control_data *control;
-
-    // Prepared statements. 2d array (for every type, list of sqls and versions)
-    int prepSize;
-    int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
-    char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
-
-    db_connection* conns;
-    int nconns;
-    // Maps DBPath (relative path to db) to connections index.
-    Hash walHash;
-};
-int g_nthreads;
-
-db_thread* g_threads;
-db_thread g_control_thread;
-
-ErlNifUInt64 g_dbcount = 0;
-ErlNifMutex *g_dbcount_mutex = NULL;
+// wal.c code has been taken out of sqlite3.c and placed in wal.c file.
+// Every wal interface function is changed, but the wal-index code remains unchanged.
+#include "wal.c"
 
 
-struct db_connection
-{
-    unsigned int thread;
-    sqlite3 *db;
-    Hash walPages;
-    char* dbpath;
-    // Is db open from erlang. It may just be open in driver.
-    char nErlOpen;
-    
-    // How many pages in wal. Decremented on checkpoints.
-    int nPages;
-    // Before a new write, remember old npages.
-    int nPrevPages;
-    ErlNifUInt64 writeNumber;
-    ErlNifUInt64 writeTermNumber;
-    char wal_configured;
-    // For every write:
-    // over how many connections data has been sent
-    char nSent;
-    // Set bit for every failed attempt to write to socket of connection
-    char failFlags;
-    // 0   - do not replicate
-    // > 0 - replicate to socket types that match number
-    int doReplicate;
-    // Fixed part of packet prefix
-    ErlNifBinary packetPrefix;
-    // Variable part of packet prefix
-    ErlNifBinary packetVarPrefix;
 
-    sqlite3_stmt *staticPrepared[MAX_STATIC_SQLS];
-    sqlite3_stmt **prepared;
-    int *prepVersions;
-};
-
-struct conn_resource
-{
-    int thread;
-    int connindex;
-};
-
-/* backup object */
-struct db_backup
-{
-    sqlite3_backup *b;
-    int pages_for_step;
-    unsigned int thread;
-    sqlite3 *dst;
-    sqlite3 *src;
-};
-
-
-typedef enum 
-{
-    cmd_unknown,
-    cmd_open,
-    cmd_exec,
-    cmd_exec_script,
-    cmd_prepare,
-    cmd_bind,
-    cmd_step,
-    cmd_column_names,
-    cmd_close,
-    cmd_stop,
-    cmd_backup_init,
-    cmd_backup_step,
-    cmd_backup_finish,
-    cmd_interrupt,
-    cmd_tcp_connect,
-    cmd_set_socket,
-    cmd_tcp_reconnect,
-    cmd_bind_insert,
-    cmd_alltunnel_call,
-    cmd_store_prepared
-} command_type;
-
-typedef struct 
-{
-    command_type type;
-
-    ErlNifEnv *env;
-    ERL_NIF_TERM ref; 
-    ErlNifPid pid;
-    ERL_NIF_TERM arg;
-    ERL_NIF_TERM arg1;
-    ERL_NIF_TERM arg2;
-    ERL_NIF_TERM arg3;
-    ERL_NIF_TERM arg4;
-    sqlite3_stmt *stmt;
-    int connindex;
-    void *p;
-
-    db_connection *conn;
-} db_command;
-
-ERL_NIF_TERM atom_ok;
-ERL_NIF_TERM atom_false;
-ERL_NIF_TERM atom_error;
-ERL_NIF_TERM atom_rows;
-ERL_NIF_TERM atom_columns;
-ERL_NIF_TERM atom_undefined;
-ERL_NIF_TERM atom_rowid;
-ERL_NIF_TERM atom_changes;
-ERL_NIF_TERM atom_done;
-static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
-static ERL_NIF_TERM push_command(int thread, void *cmd);
-static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
-// int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
-void write32bit(char *p, int v);
-void write16bit(char *p, int v);
-void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
-void *command_create(int threadnum);
-static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos);
-static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
-void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
-void fail_send(int i);
 
 static ERL_NIF_TERM 
 make_atom(ErlNifEnv *env, const char *atom_name) 
@@ -690,11 +519,16 @@ do_open(db_command *cmd, db_thread *thread)
     int rc;
     ERL_NIF_TERM error;
     conn_resource *res;
-    int i = 0;
-    
+    int i, th_len = strlen(thread->path);
+
+    memset(filename,0,MAX_PATHNAME);
+    memcpy(filename, thread->path, th_len);
+    filename[th_len] = '/';
+
     // DB can actually already be opened in thread->conns
     // Check there with filename first.
-    size = enif_get_string(cmd->env, cmd->arg, filename, MAX_PATHNAME, ERL_NIF_LATIN1);
+    
+    size = enif_get_string(cmd->env, cmd->arg, filename+th_len+1, MAX_PATHNAME-th_len-1, ERL_NIF_LATIN1);
     if(size <= 0) 
         return make_error_tuple(cmd->env, "invalid_filename");
 
@@ -702,7 +536,7 @@ do_open(db_command *cmd, db_thread *thread)
     if(!res) 
         return make_error_tuple(cmd->env, "no_memory");
 
-    cmd->conn = sqlite3HashFind(&thread->walHash,filename);
+    cmd->conn = sqlite3HashFind(&thread->walHash,filename+th_len+1);
     if (cmd->conn == NULL)
     {
         for (i = 0; i < thread->nconns; i++)
@@ -713,8 +547,9 @@ do_open(db_command *cmd, db_thread *thread)
         // No free slots. Increase array size.
         if (i == thread->nconns)
         {
-            db_connection *newcons = malloc(sizeof(db_connection)*thread->nconns*1.5);
-            memset(newcons,0,sizeof(db_connection)*thread->nconns*1.5);
+            int newsize = sizeof(db_connection)*thread->nconns*1.5;
+            db_connection *newcons = malloc(newsize);
+            memset(newcons,0,newsize);
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
             thread->nconns *= 1.5;
         }
@@ -726,13 +561,13 @@ do_open(db_command *cmd, db_thread *thread)
         {
             error = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
             sqlite3_close(cmd->conn->db);
-            cmd->conn->db = NULL;
+            cmd->conn = NULL;
             return error;
         }
 
         cmd->conn->dbpath = malloc(size+1);
         memset(cmd->conn->dbpath,0,size+1);
-        strcpy(cmd->conn->dbpath,filename);
+        enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, cmd->conn);
 
@@ -1164,12 +999,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 
 
     if (!cmd->conn->wal_configured)
-        cmd->conn->wal_configured = SQLITE_OK == 
-                                    sqlite3_wal_page_hook(cmd->conn->db,
-                                                wal_page_hook,
-                                                thread,
-                                                (unsigned long long int*)&(cmd->conn->writeNumber),
-                                                (unsigned long long int*)&(cmd->conn->writeTermNumber));
+        cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
         return make_error_tuple(cmd->env, "not iolist");
@@ -1641,7 +1471,7 @@ evaluate_command(db_command *cmd,db_thread *thread)
         ERL_NIF_TERM connres = do_open(cmd,thread);
         if (cmd->conn != NULL && cmd->arg1 == 0)
             return enif_make_tuple2(cmd->env,atom_ok,connres);
-        if (cmd->conn == NULL)
+        else if (cmd->conn == NULL)
             return connres;
         else if (cmd->arg1 != 0)
         {
@@ -2574,6 +2404,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     ErlNifResourceType *rt;
     int i = 0;
     const ERL_NIF_TERM *param;
+    const ERL_NIF_TERM *param1;
 
 #ifdef _WIN32
     WSADATA wsd;
@@ -2598,17 +2429,16 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     
     // Paths will determine thread numbers. Every path has a thread.
     // {{Path1,Path2,Path3,...},{StaticSql1,StaticSql2,StaticSql3,...}}
-    enif_get_tuple(env,info,&i,&param);
+    if (!enif_get_tuple(env,info,&i,&param))
+        return -1;
     if (i != 2)
         return -1;
 
-    if (!enif_get_int(env,param[0],&g_nthreads))
+    if (!enif_get_tuple(env,param[0],&g_nthreads,&param1))
         return -1;
-
-    if (!enif_is_tuple(env,param[1]))
+    
+    if (!enif_get_tuple(env,param[1],&i,&param))
         return -1;
-
-    enif_get_tuple(env,param[1],&i,&param);
     if (i > MAX_STATIC_SQLS)
         return -1;
 
@@ -2645,6 +2475,8 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     
     for (i = 0; i < g_nthreads; i++)
     {
+        if (!(enif_get_string(env,param1[i],g_threads[i].path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-100)))
+            return -1;
         g_threads[i].index = i;
         g_threads[i].commands = queue_create(command_destroy);
         g_threads[i].conns = malloc(sizeof(db_connection)*1024);
@@ -2709,3 +2541,5 @@ static ErlNifFunc nif_funcs[] = {
 };
 
 ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);
+
+
