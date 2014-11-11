@@ -2230,6 +2230,7 @@ int sqlite3WalClose(
     int nBuf,
     u8 *zBuf /* Buffer of at least nBuf bytes */
 ){
+    walIndexClose(pWal, 0);
     return SQLITE_OK;
 }
 
