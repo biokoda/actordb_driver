@@ -65,6 +65,8 @@ ErlNifMutex *g_dbcount_mutex = NULL;
 struct db_connection
 {
     unsigned int thread;
+    // index in thread table of actors (thread->conns)
+    int connindex;
     sqlite3 *db;
     Hash walPages;
     char* dbpath;
@@ -182,7 +184,7 @@ struct Wal {
   i64 mxWalSize;             /* Truncate WAL to this size upon reset */
   int nWiData;               /* Size of array apWiData */
   int szFirstBlock;          /* Size of first block written to WAL file */
-  volatile u32 **apWiData;   /* Pointer to wal-index content in memory */
+  u32 **apWiData;  			 /* Pointer to wal-index content in memory (ActorDB change remove volatile, access is single threaded) */
   u32 szPage;                /* Database page size */
   i16 readLock;              /* Which read lock is being held.  -1 for none */
   u8 syncFlags;              /* Flags to use to sync header writes */

@@ -529,7 +529,8 @@ do_open(db_command *cmd, db_thread *thread)
     // Check there with filename first.
     
     size = enif_get_string(cmd->env, cmd->arg, filename+th_len+1, MAX_PATHNAME-th_len-1, ERL_NIF_LATIN1);
-    if(size <= 0) 
+    // Actor path name must be written to wal. Filename slot is 100bytes.
+    if(size <= 0 || size > 99) 
         return make_error_tuple(cmd->env, "invalid_filename");
 
     res = enif_alloc_resource(db_connection_type, sizeof(conn_resource*));
@@ -583,6 +584,7 @@ do_open(db_command *cmd, db_thread *thread)
     res->thread = thread->index;
     res->connindex = cmd->connindex;
     cmd->conn->nErlOpen++;
+    cmd->conn->connindex = cmd->connindex;
 
     return enif_make_resource(cmd->env, res);
 }
@@ -1464,6 +1466,8 @@ evaluate_command(db_command *cmd,db_thread *thread)
     if (cmd->connindex >= 0 && cmd->connindex < thread->nconns)
         cmd->conn = &thread->conns[cmd->connindex];
 
+    thread->curConn = cmd->conn;
+
     switch(cmd->type) 
     {
     case cmd_open:
@@ -1589,7 +1593,6 @@ thread_func(void *arg)
     {
         void *item = queue_pop(data->commands);
         cmd = queue_get_item_data(item);
-        data->curConn = cmd->conn;
 
         if (cmd->type == cmd_stop)
         {
