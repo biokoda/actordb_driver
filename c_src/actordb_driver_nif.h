@@ -11,6 +11,7 @@ typedef struct db_backup db_backup;
 typedef struct db_thread db_thread;
 typedef struct control_data control_data;
 typedef struct conn_resource conn_resource;
+typedef struct wal_file wal_file;
 
 struct control_data
 {
@@ -20,6 +21,15 @@ struct control_data
     // connection prefixes
     ErlNifBinary prefixes[MAX_CONNECTIONS];
     char isopen[MAX_CONNECTIONS];
+};
+
+struct wal_file
+{
+	u64 walIndex;
+	u32 mxFrame;
+	sqlite3_file *pWalFd;
+
+	wal_file *prev;
 };
 
 struct db_thread
@@ -52,6 +62,8 @@ struct db_thread
     int nconns;
     // Maps DBPath (relative path to db) to connections index.
     Hash walHash;
+
+    wal_file *walFile;
 };
 int g_nthreads;
 
@@ -199,14 +211,17 @@ struct Wal {
   const char *zWalName;      /* Name of WAL file */
   u32 nCkpt;                 /* Checkpoint sequence counter in the wal-header */
   db_thread *thread;
+  u64 walIndex;
+
+  Wal *prev;                 /* One instance per wal file. If new log file created, we create new wal structure for every actor
+  								that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded
+  								for new. Writes are always to new file, reads always start with new file and they move to previous files
+  								if not found. */
 };
 struct WalCkptInfo {
   u32 nBackfill;        /* Number of WAL frames backfilled into DB */
   u32 aReadMark[1];     /* Reader marks */
 };
-
-
-
 
 
 ERL_NIF_TERM atom_ok;
@@ -231,4 +246,6 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
+void writeUInt64(unsigned char* buf, unsigned long long num);
+
 #endif
