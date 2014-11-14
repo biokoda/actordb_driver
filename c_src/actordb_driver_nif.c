@@ -37,14 +37,6 @@
 #include "sqlite3.c" 
 
 
-#define MAX_ATOM_LENGTH 255
-#define MAX_PATHNAME 512
-#define PAGE_BUFF_SIZE 9000
-#define MAX_CONNECTIONS 8
-#define PACKET_ITEMS 9
-#define MAX_STATIC_SQLS 11
-#define MAX_PREP_SQLS 100
-
 #include "actordb_driver_nif.h"
 
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
@@ -1588,6 +1580,8 @@ thread_func(void *arg)
     memset(&clcmd,0,sizeof(db_command));
     data->alive = 1;
     sqlite3HashInit(&data->walHash);
+
+    read_thread_wal(data);
 
     while(1) 
     {

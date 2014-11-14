@@ -1,5 +1,15 @@
 #ifndef ACTORDB_DRIVER_NIF_H
 
+#include "dirent.h"
+
+#define MAX_ATOM_LENGTH 255
+#define MAX_PATHNAME 512
+#define PAGE_BUFF_SIZE 9000
+#define MAX_CONNECTIONS 8
+#define PACKET_ITEMS 9
+#define MAX_STATIC_SQLS 11
+#define MAX_PREP_SQLS 100
+
 static ErlNifResourceType *db_connection_type = NULL;
 static ErlNifResourceType *db_backup_type = NULL;
 
@@ -27,7 +37,11 @@ struct wal_file
 {
 	u64 walIndex;
 	u32 mxFrame;
+	int szPage;
+	u8 bigEndCksum;
 	sqlite3_file *pWalFd;
+	u32 aSalt[2];
+	u32 nPages;
 
 	wal_file *prev;
 };
@@ -64,6 +78,7 @@ struct db_thread
     Hash walHash;
 
     wal_file *walFile;
+    sqlite3_vfs *vfs;
 };
 int g_nthreads;
 
@@ -234,18 +249,21 @@ ERL_NIF_TERM atom_rowid;
 ERL_NIF_TERM atom_changes;
 ERL_NIF_TERM atom_done;
 
+int read_thread_wal(db_thread*);
+int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
 static ERL_NIF_TERM push_command(int thread, void *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 // int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
 void write32bit(char *p, int v);
 void write16bit(char *p, int v);
+u64 readUInt64(u8* buf);
 void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 void *command_create(int threadnum);
 static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
-void writeUInt64(unsigned char* buf, unsigned long long num);
+void writeUInt64(unsigned char* buf, u64 num);
 
 #endif
