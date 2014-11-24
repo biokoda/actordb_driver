@@ -346,7 +346,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 #define WALINDEX_HDR_SIZE      (WALINDEX_LOCK_OFFSET+WALINDEX_LOCK_RESERVED)
 
 /* Size of header before each frame in wal */
-#define WAL_FRAME_HDRSIZE 144
+#define WAL_FRAME_HDRSIZE 140
 
 /* Size of write ahead log header, including checksum. */
 /* #define WAL_HDRSIZE 24 */
@@ -603,12 +603,11 @@ static void walIndexWriteHdr(Wal *pWal){
 **        after the commit. For all other records, zero.
 **     8: writeNumber (custom)
 **    16: writeTermNumber (custom)
-**    24: actor index (actor index in thread)
-**    28: Actorname
-**    128: Salt-1 (copied from the wal-header)
-**    132: Salt-2 (copied from the wal-header)
-**    136: Checksum-1.
-**    140: Checksum-2.
+**    24: Actorname
+**    124: Salt-1 (copied from the wal-header)
+**    128: Salt-2 (copied from the wal-header)
+**    132: Checksum-1.
+**    136: Checksum-2.
 */
 static void walEncodeFrame(
   Wal *pWal,                      /* The write-ahead log */
@@ -630,19 +629,20 @@ static void walEncodeFrame(
   {
     writeUInt64(&aFrame[8], conn->writeNumber);
     writeUInt64(&aFrame[16], conn->writeTermNumber);
+    memcpy(&aFrame[24],conn->dbpath,100);
   }
   else
   {
-    memset((void *)&aFrame[8], 0, 120);
+    memset((void *)&aFrame[8], 0, 116);
   }
-  memcpy(&aFrame[128], pWal->hdr.aSalt, 8);
+  memcpy(&aFrame[124], pWal->hdr.aSalt, 8);
 
   nativeCksum = (pWal->hdr.bigEndCksum==SQLITE_BIGENDIAN);
-  walChecksumBytes(nativeCksum, aFrame, 136, aCksum, aCksum);
+  walChecksumBytes(nativeCksum, aFrame, 132, aCksum, aCksum);
   walChecksumBytes(nativeCksum, aData, pWal->szPage, aCksum, aCksum);
 
-  sqlite3Put4byte(&aFrame[136], aCksum[0]);
-  sqlite3Put4byte(&aFrame[140], aCksum[1]);
+  sqlite3Put4byte(&aFrame[132], aCksum[0]);
+  sqlite3Put4byte(&aFrame[136], aCksum[1]);
 }
 
 /*
@@ -651,7 +651,7 @@ static void walEncodeFrame(
 ** *pnTruncate and return true.  Return if the frame is not valid.
 */
 static int walDecodeFrame(
-  Wal *pWal,                      /* The write-ahead log */
+  wal_file *pWal,                      /* The write-ahead log */
   u32 *piPage,                    /* OUT: Database page number for frame */
   u32 *pnTruncate,                /* OUT: New db size (or 0 if not commit) */
   char *filename,                 /* OUT: to pre allocated buffer filename in wal */
@@ -667,7 +667,7 @@ static int walDecodeFrame(
   /* A frame is only valid if the salt values in the frame-header
   ** match the salt values in the wal-header. 
   */
-  if( memcmp(&pWal->hdr.aSalt, &aFrame[128], 8)!=0 ){
+  if( memcmp(&pWal->aSalt, &aFrame[124], 8)!=0 ){
     return 0;
   }
 
@@ -683,13 +683,13 @@ static int walDecodeFrame(
   ** and the frame-data matches the checksum in the last 8 
   ** bytes of this frame-header.
   */
-  nativeCksum = (pWal->hdr.bigEndCksum==SQLITE_BIGENDIAN);
+  nativeCksum = (pWal->bigEndCksum==SQLITE_BIGENDIAN);
   // walChecksumBytes(nativeCksum, aFrame, 24, aCksum, aCksum);
   // walChecksumBytes(nativeCksum, aData, pWal->szPage, aCksum, aCksum);
-  walChecksumBytes(nativeCksum, aFrame, 136, aCksum, aCksum);
+  walChecksumBytes(nativeCksum, aFrame, 132, aCksum, aCksum);
   walChecksumBytes(nativeCksum, aData, pWal->szPage, aCksum, aCksum);
-  if( aCksum[0]!=sqlite3Get4byte(&aFrame[136]) 
-   || aCksum[1]!=sqlite3Get4byte(&aFrame[140]) 
+  if( aCksum[0]!=sqlite3Get4byte(&aFrame[132]) 
+   || aCksum[1]!=sqlite3Get4byte(&aFrame[136]) 
   ){
     /* Checksum failed. */
     return 0;
@@ -697,6 +697,7 @@ static int walDecodeFrame(
 
   *writeNumber = readUInt64(&aFrame[8]);
   *writeTermNumber = readUInt64(&aFrame[16]);
+  if (filename != NULL)
   memcpy(filename,&aFrame[24],100);
 
   /* If we reach this point, the frame is valid.  Return the page number
@@ -1025,6 +1026,8 @@ int read_thread_wal(db_thread *thread)
   sqlite3_file *pWalFd = NULL;
   wal_file *prevWal = NULL;
   wal_file *curWal = NULL;
+  u64 writeNumber = 0, writeTermNumber = 0;
+
   thread->vfs = sqlite3_vfs_find(0);
 
   if ((dir = opendir(thread->path)) == NULL)
@@ -1102,7 +1105,11 @@ int read_thread_wal(db_thread *thread)
   memset(filename,0,MAX_PATHNAME);
   // Now go through wal files, read frames and open dbs.
   curWal = thread->walFile;
-  while (curWal != NULL)
+  // Go to oldest.
+  while (curWal->prev != NULL)
+    curWal = curWal->prev;
+  
+  while(1)
   {
     i64 nSize;
     u8 *aFrame = 0;               /* Malloc'd buffer to load entire frame */
@@ -1112,7 +1119,7 @@ int read_thread_wal(db_thread *thread)
     int iOffset;
     int isValid;
 
-    rc = sqlite3OsFileSize(pWalFd, &nSize);
+    rc = sqlite3OsFileSize(curWal->pWalFd, &nSize);
     if( rc!=SQLITE_OK )
       return rc;
 
@@ -1137,11 +1144,11 @@ int read_thread_wal(db_thread *thread)
 
         /* Read and decode the next log frame. */
         iFrame++;
-        rc = sqlite3OsRead(pWal->pWalFd, aFrame, szFrame, iOffset);
+        rc = sqlite3OsRead(curWal->pWalFd, aFrame, szFrame, iOffset);
         if( rc!=SQLITE_OK ) break;
-        isValid = walDecodeFrame(pWal, &pgno, &nTruncate, aData, aFrame);
+        isValid = walDecodeFrame(curWal, &pgno, &nTruncate,filename, &writeNumber,&writeTermNumber, aData, aFrame);
         if( !isValid ) break;
-        rc = walIndexAppend(pWal, iFrame, pgno);
+        rc = walIndexAppend(curWal, iFrame, pgno);
         if( rc!=SQLITE_OK ) break;
 
         /* If nTruncate is non-zero, this is a commit record. */
@@ -1158,7 +1165,16 @@ int read_thread_wal(db_thread *thread)
       }
       sqlite3_free(aFrame);
     }
-    curWal = curWal->prev;
+    
+    // Start with newwest file
+    prevWal = thread->walFile;
+    // Move back until reaching next wal from current
+    while (prevWal->prev != curWal && prevWal->prev != NULL)
+      prevWal = prevWal->prev;
+
+    if (prevWal->prev != curWal)
+      break;
+    curWal = prevWal;
   }
 
 
@@ -2575,7 +2591,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
     memcpy(&pWal->hdr, (void *)walIndexHdr(pWal), sizeof(WalIndexHdr));
 
     for(iFrame=pWal->hdr.mxFrame+1; 
-        rc==SQLITE_OK && iFrame<=iMax; 
+        ALWAYS(rc==SQLITE_OK) && iFrame<=iMax;
         iFrame++
     ){
       /* This call cannot fail. Unless the page for which the page number
