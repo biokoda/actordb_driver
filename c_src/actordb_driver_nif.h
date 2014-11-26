@@ -95,6 +95,7 @@ struct db_connection
     // index in thread table of actors (thread->conns)
     int connindex;
     sqlite3 *db;
+    Wal *pWal;
     Hash walPages;
     char* dbpath;
     // Is db open from erlang. It may just be open in driver.
