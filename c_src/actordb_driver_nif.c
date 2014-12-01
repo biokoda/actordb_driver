@@ -45,7 +45,6 @@
 
 
 
-
 static ERL_NIF_TERM 
 make_atom(ErlNifEnv *env, const char *atom_name) 
 {
@@ -511,25 +510,31 @@ do_open(db_command *cmd, db_thread *thread)
     int rc;
     ERL_NIF_TERM error;
     conn_resource *res;
-    int i, th_len = strlen(thread->path);
+    int i;
+
+    printf("thread %s\r\n",thread->path);fflush(stdout);
 
     memset(filename,0,MAX_PATHNAME);
-    memcpy(filename, thread->path, th_len);
-    filename[th_len] = '/';
+    memcpy(filename, thread->path, thread->pathlen);
+    filename[thread->pathlen] = '/';
+
+    printf("PATH %s\r\n",filename);fflush(stdout);
 
     // DB can actually already be opened in thread->conns
     // Check there with filename first.
     
-    size = enif_get_string(cmd->env, cmd->arg, filename+th_len+1, MAX_PATHNAME-th_len-1, ERL_NIF_LATIN1);
+    size = enif_get_string(cmd->env, cmd->arg, filename+thread->pathlen+1, MAX_PATHNAME-thread->pathlen-1, ERL_NIF_LATIN1);
     // Actor path name must be written to wal. Filename slot is 100bytes.
     if(size <= 0 || size > 99) 
         return make_error_tuple(cmd->env, "invalid_filename");
+
+    printf("PATH1 %s\r\n",filename);fflush(stdout);
 
     res = enif_alloc_resource(db_connection_type, sizeof(conn_resource*));
     if(!res) 
         return make_error_tuple(cmd->env, "no_memory");
 
-    cmd->conn = sqlite3HashFind(&thread->walHash,filename+th_len+1);
+    cmd->conn = sqlite3HashFind(&thread->walHash,filename+thread->pathlen+1);
     if (cmd->conn == NULL)
     {
         for (i = 0; i < thread->nconns; i++)
@@ -544,29 +549,31 @@ do_open(db_command *cmd, db_thread *thread)
             db_connection *newcons = malloc(newsize);
             memset(newcons,0,newsize);
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
+            thread->conns = newconns;
             thread->nconns *= 1.5;
         }
+        printf("INDEX %d\r\n",i);fflush(stdout);
         cmd->conn = &thread->conns[i];
         cmd->connindex = i;
 
+        printf("SQLITE OPEN\r\n");fflush(stdout);
         rc = sqlite3_open(filename,&(cmd->conn->db));
         if(rc != SQLITE_OK) 
         {
+            printf("CAN NOT OPEN %s\r\n",filename);fflush(stdout);
             error = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
             sqlite3_close(cmd->conn->db);
             cmd->conn = NULL;
             return error;
         }
 
-        cmd->conn->dbpath = malloc(size+1);
-        memset(cmd->conn->dbpath,0,size+1);
+        memset(cmd->conn->dbpath,0,100);
         enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, cmd->conn);
 
         cmd->conn->nPages = cmd->conn->nPrevPages = 0;
         cmd->conn->thread = thread->index;
-        sqlite3HashInit(&cmd->conn->walPages);
     }
     else
     {
@@ -1403,7 +1410,7 @@ do_close(db_command *cmd,db_thread *thread)
     int rc;
     db_connection *conn = cmd->conn;
     int i = 0;
-
+    printf("DOCLOSE\r\n");fflush(stdout);
     // DB no longer open in erlang code.
     conn->nErlOpen--;
 
@@ -1436,14 +1443,13 @@ do_close(db_command *cmd,db_thread *thread)
         }
 
         sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
-        free(conn->dbpath);
 
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
             ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
         }
-        sqlite3HashClear(&cmd->conn->walPages);
+        // sqlite3HashClear(&cmd->conn->walPages);
 
         memset(conn,0,sizeof(db_connection));
     }
@@ -2446,13 +2452,13 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 
     g_dbcount_mutex = enif_mutex_create("dbcountmutex");
      
-    rt = enif_open_resource_type(env, "esqlite3_nif", "db_connection_type", 
+    rt = enif_open_resource_type(env, "actordb_driver_nif", "db_connection_type", 
 				destruct_connection, ERL_NIF_RT_CREATE, NULL);
     if(!rt) 
 	    return -1;
     db_connection_type = rt;
 
-    rt =  enif_open_resource_type(env, "esqlite3_nif", "db_backup_type",
+    rt =  enif_open_resource_type(env, "actordb_driver_nif", "db_backup_type",
                    destruct_backup, ERL_NIF_RT_CREATE, NULL);
     if(!rt) 
         return -1;
@@ -2474,6 +2480,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     {
         if (!(enif_get_string(env,param1[i],g_threads[i].path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-100)))
             return -1;
+        g_threads[i].pathlen = strlen(g_threads[i].path);
         g_threads[i].index = i;
         g_threads[i].commands = queue_create(command_destroy);
         g_threads[i].conns = malloc(sizeof(db_connection)*1024);
@@ -2537,6 +2544,6 @@ static ErlNifFunc nif_funcs[] = {
     {"store_prepared_table",2,store_prepared_table}
 };
 
-ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);
+ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);
 
 

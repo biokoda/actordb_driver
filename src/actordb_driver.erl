@@ -14,7 +14,7 @@
          replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,
          tcp_connect_async/4,tcp_connect_async/5,make_wal_header/1,tcp_reconnect/0,wal_checksum/4,bind_insert/3]).
 
-
+% {{ThreadPath1,ThreadPath2,...},{StaticSql1,StaticSql2,...}}
 init(Threads) ->
     actordb_driver_nif:init(Threads).
 

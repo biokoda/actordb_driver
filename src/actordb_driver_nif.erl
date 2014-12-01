@@ -96,7 +96,7 @@ lz4_decompress(_,_,_) ->
 % backup_pages(_) ->
 %     exit(nif_library_not_loaded).
 
-init(Threads) when is_integer(Threads); is_integer(element(1,Threads)) ->
+init({_,_} =Threads) ->
     NifName = "actordb_driver_nif",
     NifFileName = case code:priv_dir(actordb_driver) of
         {error, bad_name} -> filename:join("priv", NifName);
