@@ -2834,6 +2834,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
         ** committed. As a result, the call to xUndo may not fail.
         */
         assert( walFramePgno(pWal, iFrame)!=1 );
+        DBG(("iframe %d, pgno %d\n",iFrame,walFramePgno(pWal, iFrame)));
         rc = xUndo(pUndoCtx, walFramePgno(pWal, iFrame));
       }
     }
