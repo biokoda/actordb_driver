@@ -68,6 +68,7 @@ struct Wal {
   db_thread *thread;
   u64 walIndex;
   u8 init;
+  u8 lockError;
 
   Wal *prev;                 /* One instance per wal file. If new log file created, we create new wal structure for every actor
                   that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded

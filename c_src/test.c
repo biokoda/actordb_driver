@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #define _TESTAPP_ 1
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -26,6 +26,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif
+
 
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
@@ -142,17 +143,17 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
 }
 
 
-void do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
+int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
 {
 	sqlite3_stmt *statement = NULL;
-	int rc;
+	int rc = SQLITE_OK;
 	int i;
     char buf[1024];
 
 	if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
-    // printf("Query start %s\r\n",txt);
+    printf("Query start %s\r\n",txt);
 	rc = sqlite3_prepare_v2(cmd->conn->db, txt, strlen(txt), &(statement), NULL);
 	assert(rc == SQLITE_OK);
 
@@ -186,22 +187,22 @@ void do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
 
             if (results != NULL)
             {
-                assert(strcmp(results[i],buf) != 0);
-                // printf("Select does not match shouldbe=%s is=%s\r\n",results[i],buf);
+                assert(strcmp(results[i],buf) == 0);
+                // printf("Select matches shouldbe=%s is=%s\r\n",results[i],buf);
             }
     	}
     	// printf("\r\n");
     }
-
-    if (rc != SQLITE_DONE)
-    {
-    	printf("Query error=%d\r\n",rc);
-    }
+    
     // else
     // 	printf("Query DONE OK\r\n");
 
     sqlite3_finalize(statement);
-
+    if (rc != SQLITE_DONE)
+    {
+        printf("Query error=%d\r\n",rc);
+    }
+    return rc;
 }
 
 void close_conns(db_thread *thread)
@@ -228,13 +229,15 @@ int main()
 	db_command clcmd;
     db_connection *conns;
 	int i = 0;
+    int rc;
     int ndbs = 3;
     char buf[1024];
 
     char* dbnames[] = {"my1.db","my2.db","my3.db"};
-    char* initvals[3][2] = {{"1","'db1 text'"},
+    char* initvals[4][2] = {{"1","'db1 text'"},
                             {"1","'db2 text'"},
-                            {"1","'db3 text'"}};
+                            {"1","'db3 text'"},
+                            {"2","'db1 second'"}};
 	
     for (i = 0; i < ndbs; i++)
         remove(dbnames[i]);
@@ -291,6 +294,21 @@ int main()
         thread.curConn = clcmd.conn = &thread.conns[i];
         do_exec("SELECT * from tab;",&clcmd,&thread,initvals[i]);
     }
+
+    thread.curConn = clcmd.conn = &thread.conns[0];
+    rc = do_exec("SAVEPOINT 'adb';",&clcmd,&thread,NULL);
+    assert(SQLITE_OK == rc);
+    rc = do_exec("insert into tab values (1,'aaa');",&clcmd,&thread,NULL);
+    assert(SQLITE_CONSTRAINT == rc);
+    rc = do_exec("ROLLBACK;",&clcmd,&thread,NULL);
+    assert(SQLITE_OK == rc);
+    rc = do_exec("ROLLBACK;",&clcmd,&thread,NULL);
+    assert(SQLITE_OK == rc);
+
+    sprintf(buf,"INSERT INTO tab VALUES (%s,%s);",initvals[3][0],initvals[3][1]);
+    do_exec(buf,&clcmd,&thread,initvals[3]);
+    sprintf(buf,"SELECT * from tab where id=%s;",initvals[3][0]);
+    do_exec(buf,&clcmd,&thread,initvals[3]);
 
     close_conns(&thread);
     free(thread.conns);

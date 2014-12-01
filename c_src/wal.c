@@ -1080,7 +1080,7 @@ int read_thread_wal(db_thread *thread)
     
     snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,ent->d_name);
     pWalFd = sqlite3MallocZero(thread->vfs->szOsFile);
-    rc = sqlite3OsOpen(thread->vfs, filename, pWalFd, (SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
+    rc = sqlite3OsOpen(thread->vfs, filename, pWalFd, (SQLITE_OPEN_TRANSIENT_DB|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
     if (rc != SQLITE_OK || flags&SQLITE_OPEN_READONLY || read_wal_hdr(thread->vfs,pWalFd,&walInfo) != SQLITE_OK)
     {
     	DBG(("Removing wal %d\r\n",rc));
@@ -1121,7 +1121,8 @@ int read_thread_wal(db_thread *thread)
   {
     snprintf(filename,MAX_PATHNAME,"%s/wal.0",thread->path);
     pWalFd = sqlite3MallocZero(thread->vfs->szOsFile);
-    rc = sqlite3OsOpen(thread->vfs, filename, pWalFd, (SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
+
+    rc = sqlite3OsOpen(thread->vfs, filename, pWalFd, (SQLITE_OPEN_TRANSIENT_DB|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
     if (rc != SQLITE_OK)
     {
       DBG(("CAN NOT OPEN?? %s\r\n",filename));fflush(stdout);
@@ -1226,6 +1227,12 @@ int read_thread_wal(db_thread *thread)
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
             thread->nconns = actorIndex*1.2;
           }
+          if (curConn != NULL)
+          {
+          	sqlite3WalEndReadTransaction(curConn->wal);
+          	curConn->wal->init = 0;
+          }
+          	
           curConn = &thread->conns[actorIndex];
           if (curConn->db == NULL)
           {
@@ -1251,7 +1258,9 @@ int read_thread_wal(db_thread *thread)
 		    curConn->wal->exclusiveMode = WAL_HEAPMEMORY_MODE;
 		    curConn->wal->padToSectorBoundary = 1;
 		    curConn->wal->syncHeader = 0;
+		    curConn->wal->readLock = -1;
 
+		    sqlite3WalBeginReadTransaction(curConn->wal,&rc);
             sqlite3HashInsert(&thread->walHash, curConn->dbpath, curConn);
             curConn->nPages = 1;
             curConn->nPrevPages = 0;
@@ -1271,12 +1280,15 @@ int read_thread_wal(db_thread *thread)
           curConn->wal->hdr.szPage = (u16)((curWal->szPage&0xff00) | (curWal->szPage>>16));
           testcase( curWal->szPage<=32768 );
           testcase( curWal->szPage>=65536 );
+
+          sqlite3WalBeginWriteTransaction(curConn->wal);
           walIndexWriteHdr(curConn->wal);
           pInfo = walCkptInfo(curConn->wal);
           pInfo->nBackfill = 0;
           pInfo->aReadMark[0] = 0;
           for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
           if( curConn->wal->hdr.mxFrame ) pInfo->aReadMark[1] = curConn->wal->hdr.mxFrame;
+      	  sqlite3WalEndWriteTransaction(curConn->wal);
 
           // aFrameCksum[0] = pWal->hdr.aFrameCksum[0];
           // aFrameCksum[1] = pWal->hdr.aFrameCksum[1];
@@ -1284,6 +1296,18 @@ int read_thread_wal(db_thread *thread)
         else
           prevDone = 0;
       }
+      // open new
+      if (!prevDone && curConn != NULL)
+      {
+        // previous transaction was not finished, we must undo index for it
+        sqlite3WalUndo(curConn->wal, NULL, NULL);
+      }
+      if (curConn != NULL)
+      {
+      	sqlite3WalEndReadTransaction(curConn->wal);
+      	curConn->wal->init = 0;
+      }
+      	
       sqlite3_free(aFrame);
     }
     
@@ -2778,6 +2802,7 @@ int sqlite3WalCheckpoint(
 int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 {
   int rc = SQLITE_OK;
+  DBG(("sqlite3WalUndo\r\n"));
   if( ALWAYS(pWal->writeLock) )
   {
     Pgno iMax = pWal->hdr.mxFrame;
@@ -2903,7 +2928,7 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   do{
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
-  DBG(("START READ TRANSACTION result=%d\r\n",rc));
+  DBG(("START READ TRANSACTION result=%d, changed %d\r\n",rc,*pChanged));
   testcase( (rc&0xff)==SQLITE_BUSY );
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );
@@ -2975,13 +3000,13 @@ int sqlite3WalBeginWriteTransaction(Wal *pWal){
   ** time the read transaction on this connection was started, then
   ** the write is disallowed.
   */
-  if( memcmp(&pWal->hdr, (void *)walIndexHdr(pWal), sizeof(WalIndexHdr))!=0 ){
-    walUnlockExclusive(pWal, WAL_WRITE_LOCK, 1);
-    pWal->writeLock = 0;
-    rc = SQLITE_BUSY_SNAPSHOT;
-  }
+  // if( memcmp(&pWal->hdr, (void *)walIndexHdr(pWal), sizeof(WalIndexHdr))!=0 ){
+  //   walUnlockExclusive(pWal, WAL_WRITE_LOCK, 1);
+  //   pWal->writeLock = 0;
+  //   rc = SQLITE_BUSY_SNAPSHOT;
+  // }
 
-  DBG(("BEGIN WRITE %d\r\n",rc));
+  // DBG(("BEGIN WRITE %d\r\n",rc));
 
   return rc;
 }
