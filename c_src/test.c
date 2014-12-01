@@ -153,7 +153,7 @@ int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
 	if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
-    printf("Query start %s\r\n",txt);
+    // printf("Query start %s\r\n",txt);
 	rc = sqlite3_prepare_v2(cmd->conn->db, txt, strlen(txt), &(statement), NULL);
 	assert(rc == SQLITE_OK);
 
@@ -201,8 +201,9 @@ int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
     if (rc != SQLITE_DONE)
     {
         printf("Query error=%d\r\n",rc);
+        return rc;
     }
-    return rc;
+    return SQLITE_OK;
 }
 
 void close_conns(db_thread *thread)
@@ -231,7 +232,10 @@ int main()
 	int i = 0;
     int rc;
     int ndbs = 3;
-    char buf[1024];
+    char buf[1024*10];
+    char buf1[1024*10];
+    memset(buf,0,sizeof(buf));
+    memset(buf1,0,sizeof(buf1));
 
     char* dbnames[] = {"my1.db","my2.db","my3.db"};
     char* initvals[4][2] = {{"1","'db1 text'"},
@@ -255,7 +259,7 @@ int main()
 	thread.nconns = 100;
 	read_thread_wal(&thread);
 
-	// OPEN DBS
+	// OPEN DBS and insert
     for (i = 0; i < ndbs; i++)
     {
         do_open(dbnames[i],&clcmd,&thread);
@@ -288,25 +292,43 @@ int main()
     // read wal
     read_thread_wal(&thread);
 
-    // read written data
+    // read written data, will assert if not correct
     for (i = 0; i < ndbs; i++)
     {
         thread.curConn = clcmd.conn = &thread.conns[i];
         do_exec("SELECT * from tab;",&clcmd,&thread,initvals[i]);
     }
 
+    printf("TRY FAILED SAVEPOINT\n");
+    // start savepoint
     thread.curConn = clcmd.conn = &thread.conns[0];
     rc = do_exec("SAVEPOINT 'adb';",&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
-    rc = do_exec("insert into tab values (1,'aaa');",&clcmd,&thread,NULL);
+    // write more than a pages worth of valid insert (which should force some data to disk)
+    memset(buf1,'a',4096*2);
+    for (i = 2; i < 1000; i++)
+    {
+        sprintf(buf,"insert into tab values (%d,'%s');",i,buf1);
+        rc = do_exec(buf,&clcmd,&thread,NULL); 
+        assert(SQLITE_OK == rc);
+    }
+    
+    // Now insert on an existing id which must fail
+    sprintf(buf,"insert into tab values (1,'asdsf');");
+    rc = do_exec(buf,&clcmd,&thread,NULL);
+    // we have error
     assert(SQLITE_CONSTRAINT == rc);
+    // rollback transaction
     rc = do_exec("ROLLBACK;",&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
+    // just for kicks do another rollback which must fail
     rc = do_exec("ROLLBACK;",&clcmd,&thread,NULL);
-    assert(SQLITE_OK == rc);
+    assert(SQLITE_OK != rc);
 
+    // write to id 2, which must succeed
     sprintf(buf,"INSERT INTO tab VALUES (%s,%s);",initvals[3][0],initvals[3][1]);
-    do_exec(buf,&clcmd,&thread,initvals[3]);
+    rc = do_exec(buf,&clcmd,&thread,initvals[3]);
+    assert(SQLITE_OK == rc);
     sprintf(buf,"SELECT * from tab where id=%s;",initvals[3][0]);
     do_exec(buf,&clcmd,&thread,initvals[3]);
 

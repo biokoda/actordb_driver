@@ -1275,6 +1275,7 @@ int read_thread_wal(db_thread *thread)
         {
           WalCkptInfo *pInfo;
           prevDone = 1;
+          thread->walFile->mxFrame = iFrame;
           curConn->wal->hdr.mxFrame = iFrame;
           curConn->wal->hdr.nPage = nTruncate;
           curConn->wal->hdr.szPage = (u16)((curWal->szPage&0xff00) | (curWal->szPage>>16));
@@ -2802,7 +2803,7 @@ int sqlite3WalCheckpoint(
 int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 {
   int rc = SQLITE_OK;
-  DBG(("sqlite3WalUndo\r\n"));
+  DBG(("sqlite3WalUndo, mxframe %d, threadmax %d\r\n",pWal->hdr.mxFrame, pWal->thread->walFile->mxFrame));
   if( ALWAYS(pWal->writeLock) )
   {
     Pgno iMax = pWal->hdr.mxFrame;
@@ -2812,6 +2813,8 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
     ** was in before the client began writing to the database. 
     */
     memcpy(&pWal->hdr, (void *)walIndexHdr(pWal), sizeof(WalIndexHdr));
+
+    DBG(("walhdr max now %d\r\n",pWal->hdr.mxFrame));
 
     if (xUndo != NULL)
     {
@@ -2839,9 +2842,12 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
     if (pWal->walIndex == pWal->thread->walFile->walIndex &&
         iMax == pWal->thread->walFile->mxFrame)
     {
+      DBG(("MOVING mxframe back!\r\n"));
       pWal->thread->walFile->mxFrame = pWal->hdr.mxFrame;
       assert(iMax > pWal->hdr.mxFrame);
     }
+    else
+    	DBG(("Not last actor %d, %d, mymax %d\r\n",pWal->thread->walFile->mxFrame, pWal->hdr.mxFrame,iMax));
     pWal->thread->curConn->nPages -= (iMax - pWal->hdr.mxFrame);
   }
   return rc;
