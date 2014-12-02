@@ -281,6 +281,7 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
 #endif
 
+wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs);
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);
 int read_thread_wal(db_thread*);
 u64 readUInt64(u8* buf);

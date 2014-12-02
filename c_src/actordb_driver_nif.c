@@ -1582,6 +1582,7 @@ thread_func(void *arg)
     db_thread* data = (db_thread*)arg;
     db_command *cmd;
     db_command clcmd;
+    wal_file *wFile;
     
     memset(&clcmd,0,sizeof(db_command));
     data->alive = 1;
@@ -1642,6 +1643,15 @@ thread_func(void *arg)
         }
     }
 
+    while (data->walFile != NULL)
+    {
+        wFile = data->walFile;
+        data->walFile = data->walFile->prev;
+        sqlite3OsCloseFree(wFile->pWalFd);
+        free(wFile->filename);
+        free(wFile);
+    }
+    
     sqlite3HashClear(&data->walHash);
     free(data->conns);
     data->nconns = 0;

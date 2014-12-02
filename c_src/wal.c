@@ -1149,6 +1149,10 @@ int read_thread_wal(db_thread *thread)
     memset(walInfo->filename,0,sizeof(strlen(filename)+1));
     strcpy(walInfo->filename,filename);
     walInfo->pWalFd = pWalFd;
+    walInfo->szPage = SQLITE_DEFAULT_PAGE_SIZE;
+    walInfo->bigEndCksum = SQLITE_BIGENDIAN;
+    walInfo->aSalt[0] = 123456789;
+    walInfo->aSalt[1] = 987654321;
     pWalFd = NULL;
 
     // We have a valid wal file structure.
@@ -1178,25 +1182,7 @@ int read_thread_wal(db_thread *thread)
   if (!thread->walFile)
   {
     snprintf(filename,MAX_PATHNAME,"%s/wal.0",thread->path);
-    pWalFd = sqlite3MallocZero(thread->vfs->szOsFile);
-
-    rc = sqlite3OsOpen(thread->vfs, filename, pWalFd, (SQLITE_OPEN_TRANSIENT_DB|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
-    if (rc != SQLITE_OK)
-    {
-      DBG(("CAN NOT OPEN?? %s\r\n",filename));fflush(stdout);
-      sqlite3_free(pWalFd);
-      return SQLITE_CANTOPEN_BKPT;
-    }
-	
-    thread->walFile = sqlite3MallocZero(sizeof(wal_file));
-    thread->walFile->filename = malloc(strlen(filename)+1);
-    memset(thread->walFile->filename,0,sizeof(strlen(filename)+1));
-    strcpy(thread->walFile->filename,filename);
-    thread->walFile->pWalFd = pWalFd;
-    thread->walFile->szPage = SQLITE_DEFAULT_PAGE_SIZE;
-    thread->walFile->bigEndCksum = SQLITE_BIGENDIAN;
-    thread->walFile->aSalt[0] = 123456789;
-    thread->walFile->aSalt[1] = 987654321;
+    thread->walFile = new_wal_file(filename,thread->vfs);
   }
 
   memset(filename,0,MAX_PATHNAME);
@@ -1247,7 +1233,7 @@ int read_thread_wal(db_thread *thread)
       {
         u32 pgno;                   /* Database page number for frame */
         u32 nTruncate;              /* dbsize field from frame header */
-        DBG(("Reading wal %llu, frame %d\r\n",curWal->walIndex,iFrame));
+        // DBG(("Reading wal %llu, frame %d\r\n",curWal->walIndex,iFrame));
 
         /* Read and decode the next log frame. */
         iFrame++;
@@ -1264,7 +1250,7 @@ int read_thread_wal(db_thread *thread)
         	break;
         }
 
-        DBG(("Frame belongs to %s, truncate %d, pgno %d\r\n",filename,nTruncate,pgno));
+        // DBG(("Frame belongs to %s, truncate %d, pgno %d\r\n",filename,nTruncate,pgno));
 
         if (curConn != NULL && strncmp(filename+thread->pathlen+1,curConn->dbpath,100) == 0)
         {
@@ -1306,7 +1292,6 @@ int read_thread_wal(db_thread *thread)
             memset(curConn->dbpath,0,100);
             strcpy(curConn->dbpath,filename+thread->pathlen+1);
 
-            DBG(("Opening db %s\r\n",filename));
             rc = sqlite3_open(filename,&(curConn->db));
             if (rc != SQLITE_OK)
             {
@@ -1314,6 +1299,7 @@ int read_thread_wal(db_thread *thread)
             }
             curConn->wal = malloc(sizeof(struct Wal));
             memset(curConn->wal,0,sizeof(struct Wal));
+            curConn->connindex = actorIndex;
             curConn->wal->thread = thread;
 		    curConn->wal->pWalFd = curWal->pWalFd;
 		    curConn->wal->exclusiveMode = WAL_HEAPMEMORY_MODE;
@@ -1387,6 +1373,33 @@ int read_thread_wal(db_thread *thread)
 
 
   return SQLITE_OK;
+}
+
+wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs)
+{
+	sqlite3_file *pWalFd = sqlite3MallocZero(vfs->szOsFile);
+	wal_file *walFile = NULL;
+	int flags;
+	int rc;
+
+    rc = sqlite3OsOpen(vfs, filename, pWalFd, (SQLITE_OPEN_TRANSIENT_DB|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
+    if (rc != SQLITE_OK)
+    {
+      DBG(("Can not open wal file %s\r\n",filename));fflush(stdout);
+      sqlite3_free(pWalFd);
+      return NULL;
+    }
+	
+    walFile = sqlite3MallocZero(sizeof(wal_file));
+    walFile->filename = malloc(strlen(filename)+1);
+    memset(walFile->filename,0,sizeof(strlen(filename)+1));
+    strcpy(walFile->filename,filename);
+    walFile->pWalFd = pWalFd;
+    walFile->szPage = SQLITE_DEFAULT_PAGE_SIZE;
+    walFile->bigEndCksum = SQLITE_BIGENDIAN;
+    walFile->aSalt[0] = 123456789;
+    walFile->aSalt[1] = 987654321;
+    return walFile;
 }
 
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile)
@@ -2438,9 +2451,10 @@ int sqlite3WalOpen(
     void *walData
 ){
     int iDC;
-    Wal *pRet;
+    Wal *pRet = NULL;
 
-	pRet = ((db_thread*)walData)->curConn->wal;
+    if (zWalName != NULL)
+		pRet = ((db_thread*)walData)->curConn->wal;
 	if (!pRet)
 	{
 		pRet = malloc(sizeof(Wal));
@@ -2462,9 +2476,6 @@ int sqlite3WalOpen(
     pRet->padToSectorBoundary = 1;
     pRet->syncHeader = 0;
     pRet->readLock = -1;
-
-    // pRet->hdr.aSalt[0] = 123456789;
-    // pRet->hdr.aSalt[1] = 987654321;
 
     iDC = sqlite3OsDeviceCharacteristics(pDbFd);
     if( iDC & SQLITE_IOCAP_SEQUENTIAL ){ pRet->syncHeader = 0; }
@@ -2516,19 +2527,41 @@ int sqlite3WalFrames(
   ** nTruncate==0 then this frame set does not complete the transaction. */
   assert( (isCommit!=0)==(nTruncate!=0) );
 
-  // Do we need to create a new wal structure for new file?
+  // Do we need to create new wal file?
+  if ((*pWal)->thread->walFile->mxFrame > 1024*3)
+  {
+  	char filename[MAX_PATHNAME];
+  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,(*pWal)->thread->walFile->walIndex+1);
+  	DBG(("Creating new wal!\r\n"));
+  	wal_file *nw = new_wal_file(filename,(*pWal)->thread->vfs);
+  	nw->walIndex = (*pWal)->thread->walFile->walIndex+1;
+  	nw->prev = (*pWal)->thread->walFile;
+  	(*pWal)->thread->walFile = nw;
+  }
+
+  // Do we need to create a new wal structure for newer file?
   if ((*pWal)->thread->walFile->walIndex > (*pWal)->walIndex)
   {
-    Wal *newVal;
-    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newVal,(void*)(*pWal)->thread);
-    newVal->prev = *pWal;
-    newVal->pWalFd = newVal->thread->walFile->pWalFd;
+  	DBG(("OPENING INTO NEW WAL FILE %d\r\n",(*pWal)->thread->curConn->connindex));
+    Wal *newWal;
+    int changed;
+    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)(*pWal)->thread);
+    sqlite3WalEndReadTransaction(*pWal);
+    sqlite3WalEndWriteTransaction(*pWal);
+    newWal->prev = *pWal;
+    newWal->pWalFd = (*pWal)->thread->walFile->pWalFd;
+    newWal->walIndex = (*pWal)->thread->walFile->walIndex;
+    
+    (*pWal)->thread->curConn->wal = newWal;
+    *pWal = newWal;
 
-    *pWal = newVal;
+    sqlite3WalBeginReadTransaction(*pWal,&changed);
+    sqlite3WalBeginWriteTransaction(*pWal);
   }
 
   iFrame = (*pWal)->thread->walFile->mxFrame;
 
+  (*pWal)->szPage = szPage;
   if( iFrame==0 ){
     u8 aWalHdr[WAL_HDRSIZE];      /* Buffer to assemble wal-header in */
     u32 aCksum[2];                /* Checksum for wal-header */
@@ -2550,7 +2583,6 @@ int sqlite3WalFrames(
     sqlite3Put4byte(&aWalHdr[32], aCksum[0]);
     sqlite3Put4byte(&aWalHdr[36], aCksum[1]);
     
-    (*pWal)->szPage = szPage;
     (*pWal)->hdr.bigEndCksum = SQLITE_BIGENDIAN;
     (*pWal)->hdr.aFrameCksum[0] = aCksum[0];
     (*pWal)->hdr.aFrameCksum[1] = aCksum[1];
@@ -2574,11 +2606,13 @@ int sqlite3WalFrames(
       if( rc ) return rc;
     }
   }
-  (*pWal)->szPage = szPage;
-  (*pWal)->hdr.bigEndCksum = SQLITE_BIGENDIAN;
-  (*pWal)->truncateOnCommit = 1;
-  (*pWal)->hdr.aSalt[0] = 123456789;
-  (*pWal)->hdr.aSalt[1] = 987654321;
+  else if ((*pWal)->hdr.aSalt[0] != 123456789)
+  {
+  	(*pWal)->hdr.bigEndCksum = SQLITE_BIGENDIAN;
+	(*pWal)->truncateOnCommit = 1;
+	(*pWal)->hdr.aSalt[0] = 123456789;
+	(*pWal)->hdr.aSalt[1] = 987654321;
+  }
 
   /* Setup information needed to write frames into the WAL */
   w.pWal = *pWal;
@@ -2906,7 +2940,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
     if (pWal->walIndex == pWal->thread->walFile->walIndex &&
         iMax == pWal->thread->walFile->mxFrame)
     {
-      pWal->thread->walFile->mxFrame = pWal->hdr.mxFrame;
+      pWal->thread->walFile->mxFrame = pWal->thread->walFile->lastCommit;
       assert(iMax > pWal->hdr.mxFrame);
     }
     pWal->thread->curConn->nPages -= (iMax - pWal->hdr.mxFrame);
@@ -2995,7 +3029,7 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   do{
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
-  DBG(("START READ TRANSACTION result=%d, changed %d\r\n",rc,*pChanged));
+  // DBG(("START READ TRANSACTION result=%d, changed %d\r\n",rc,*pChanged));
   testcase( (rc&0xff)==SQLITE_BUSY );
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );

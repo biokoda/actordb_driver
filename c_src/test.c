@@ -110,7 +110,7 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
                 break;
         }
         
-        printf("INDEX %d\r\n",i);fflush(stdout);
+        printf("OPEN DB INDEX %d\r\n",i);fflush(stdout);
         cmd->conn = &thread->conns[i];
         cmd->connindex = i;
 
@@ -229,7 +229,7 @@ int main()
 	db_thread thread;
 	db_command clcmd;
     db_connection *conns;
-	int i = 0;
+	int i = 0,j = 0;
     int rc;
     int ndbs = 3;
     char buf[1024*10];
@@ -296,7 +296,8 @@ int main()
     for (i = 0; i < ndbs; i++)
     {
         thread.curConn = clcmd.conn = &thread.conns[i];
-        do_exec("SELECT * from tab;",&clcmd,&thread,initvals[i]);
+        rc = do_exec("SELECT * from tab;",&clcmd,&thread,initvals[i]);
+        assert(rc == SQLITE_OK);
     }
 
     printf("TRY FAILED SAVEPOINT\n");
@@ -328,7 +329,33 @@ int main()
     rc = do_exec(buf,&clcmd,&thread,initvals[3]);
     assert(SQLITE_OK == rc);
     sprintf(buf,"SELECT * from tab where id=%s;",initvals[3][0]);
-    do_exec(buf,&clcmd,&thread,initvals[3]);
+    rc = do_exec(buf,&clcmd,&thread,initvals[3]);
+    assert(SQLITE_OK == rc);
+
+    // read written data, will assert if not correct
+    for (i = 0; i < ndbs; i++)
+    {
+        printf("REad index %d %d\r\n",i,thread.conns[i].connindex);
+        thread.curConn = clcmd.conn = &thread.conns[i];
+        rc = do_exec("SELECT * from tab where id=1;",&clcmd,&thread,initvals[i]);
+        assert(SQLITE_OK == rc);
+    }
+
+    // Test checkpoints
+    printf("TEST CHECKPOINT\r\n");
+    // insert a lot of data
+    for (i = 0; i < 1024*3*3; i++)
+    {
+        if (i % 1000 == 0)
+            printf("At %d\r\n",i);
+        for (j = 0; j < ndbs; j++)
+        {
+            thread.curConn = clcmd.conn = &thread.conns[j];
+            sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
+            rc = do_exec(buf,&clcmd,&thread,NULL); 
+            assert(SQLITE_OK == rc);
+        }
+    }
 
     close_conns(&thread);
     free(thread.conns);
