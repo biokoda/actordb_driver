@@ -1,4 +1,4 @@
-/************* Begin file wal.c *********************************************/
+/************ Begin file wal.c *********************************************/
 /*
 ** 2010 February 1
 **
@@ -1030,10 +1030,65 @@ static int walIndexAppend(Wal *pWal, u32 iFrame, u32 iPage){
 */
 static int walIndexRecover(Wal *pWal)
 {
+	// Replaced by read_thread_wal (and the code moved there)
   return SQLITE_OK;
 }
 
+// Returns: 0 nothing to do
+// 			1 still have work to do
+int checkpoint_continue(db_thread *thread)
+{
+	int i,rc;
+	wal_file *wFile = thread->walFile;
+	wal_file *nextToLast = thread->walFile;
+	Wal *conWal;
 
+	// No prev wal files, we don't have anything to do.
+	if (thread->walFile->prev == NULL)
+		return 0;
+
+	// Move to last.
+	while (wFile->prev != NULL)
+	{
+		nextToLast = wFile;
+		wFile = wFile->prev;
+	}
+		
+
+	for (i = 0; i < thread->nconns; i++)
+	{
+		if (!thread->conns[i].db)
+			continue;
+
+		conWal = thread->conns[i].wal;
+		while (conWal != NULL && conWal->walIndex > wFile->walIndex)
+			conWal = conWal->prev;
+
+		if (conWal == NULL)
+			continue;
+		if (conWal->walIndex == wFile->walIndex)
+		{
+			assert(conWal->prev == NULL);
+			// just call api function. It will call sqlite3WalCheckpoint, which will move to last
+			// wal file in linked list and checkpoint that.
+			rc = sqlite3_wal_checkpoint_v2(thread->conns[i].db,NULL,SQLITE_CHECKPOINT_FULL,NULL,NULL);
+			assert(rc == SQLITE_OK);
+		}
+	}
+	if (i == thread->nconns)
+	{
+		sqlite3OsCloseFree(wFile->pWalFd);
+		sqlite3OsDelete(thread->vfs,wFile->filename,0);
+		free(wFile->filename);
+		free(wFile);
+		nextToLast->prev = NULL;
+		// If there were more than 2 wal files, we still have work to do.
+		if (thread->walFile->prev != NULL)
+			return 1;
+		return 0;
+	}
+	return 1;
+}
 
 // ActorDB combines wal files for multiple actors (i.e. multiple sqlite dbs).
 // Thus an individual actor should not be recovering index. This is a job for thread
@@ -1083,13 +1138,16 @@ int read_thread_wal(db_thread *thread)
     rc = sqlite3OsOpen(thread->vfs, filename, pWalFd, (SQLITE_OPEN_TRANSIENT_DB|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
     if (rc != SQLITE_OK || flags&SQLITE_OPEN_READONLY || read_wal_hdr(thread->vfs,pWalFd,&walInfo) != SQLITE_OK)
     {
-    	DBG(("Removing wal %d\r\n",rc));
+      DBG(("Removing wal %d\r\n",rc));
       sqlite3OsClose(pWalFd);
       sqlite3_free(pWalFd);
       remove(filename);
       continue;
     }
 
+    walInfo->filename = malloc(strlen(filename)+1);
+    memset(walInfo->filename,0,sizeof(strlen(filename)+1));
+    strcpy(walInfo->filename,filename);
     walInfo->pWalFd = pWalFd;
     pWalFd = NULL;
 
@@ -1129,8 +1187,11 @@ int read_thread_wal(db_thread *thread)
       sqlite3_free(pWalFd);
       return SQLITE_CANTOPEN_BKPT;
     }
-
+	
     thread->walFile = sqlite3MallocZero(sizeof(wal_file));
+    thread->walFile->filename = malloc(strlen(filename)+1);
+    memset(thread->walFile->filename,0,sizeof(strlen(filename)+1));
+    strcpy(thread->walFile->filename,filename);
     thread->walFile->pWalFd = pWalFd;
     thread->walFile->szPage = SQLITE_DEFAULT_PAGE_SIZE;
     thread->walFile->bigEndCksum = SQLITE_BIGENDIAN;
@@ -1276,6 +1337,7 @@ int read_thread_wal(db_thread *thread)
           WalCkptInfo *pInfo;
           prevDone = 1;
           thread->walFile->mxFrame = iFrame;
+          thread->walFile->lastCommit = iFrame;
           curConn->wal->hdr.mxFrame = iFrame;
           curConn->wal->hdr.nPage = nTruncate;
           curConn->wal->hdr.szPage = (u16)((curWal->szPage&0xff00) | (curWal->szPage>>16));
@@ -2399,6 +2461,7 @@ int sqlite3WalOpen(
     pRet->exclusiveMode = WAL_HEAPMEMORY_MODE;
     pRet->padToSectorBoundary = 1;
     pRet->syncHeader = 0;
+    pRet->readLock = -1;
 
     // pRet->hdr.aSalt[0] = 123456789;
     // pRet->hdr.aSalt[1] = 987654321;
@@ -2452,7 +2515,6 @@ int sqlite3WalFrames(
   /* If this frame set completes a transaction, then nTruncate>0.  If
   ** nTruncate==0 then this frame set does not complete the transaction. */
   assert( (isCommit!=0)==(nTruncate!=0) );
-  DBG(("WAL write frames\r\n"));
 
   // Do we need to create a new wal structure for new file?
   if ((*pWal)->thread->walFile->walIndex > (*pWal)->walIndex)
@@ -2609,6 +2671,7 @@ int sqlite3WalFrames(
     if( isCommit ){
       (*pWal)->hdr.iChange++;
       (*pWal)->hdr.nPage = nTruncate;
+      (*pWal)->thread->walFile->lastCommit = iFrame;
     }
     /* If this is a commit, update the wal-index header too. */
     if( isCommit ){
@@ -2631,7 +2694,7 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    DBG(("Wal find frame %d, last %d\r\n",pgno, iLast));
+    // DBG(("Wal find frame %d, last %d\r\n",pgno, iLast));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -2803,7 +2866,7 @@ int sqlite3WalCheckpoint(
 int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 {
   int rc = SQLITE_OK;
-  DBG(("sqlite3WalUndo, mxframe %d, threadmax %d\r\n",pWal->hdr.mxFrame, pWal->thread->walFile->mxFrame));
+  // DBG(("sqlite3WalUndo, mxframe %d, threadmax %d\r\n",pWal->hdr.mxFrame, pWal->thread->walFile->mxFrame));
   if( ALWAYS(pWal->writeLock) )
   {
     Pgno iMax = pWal->hdr.mxFrame;
@@ -2814,11 +2877,12 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
     */
     memcpy(&pWal->hdr, (void *)walIndexHdr(pWal), sizeof(WalIndexHdr));
 
-    DBG(("walhdr max now %d\r\n",pWal->hdr.mxFrame));
-
     if (xUndo != NULL)
     {
-      for(iFrame=pWal->hdr.mxFrame+1; 
+      // We now have multiple dbs in wal. We cant rely on mxFrame+1 because it might belong to another db.
+      // Use last commit number.
+      // This means that when a write fails, it must be rollbacked immediately. Before another db might write to wal.
+      for(iFrame=pWal->thread->walFile->lastCommit+1;  // pWal->hdr.mxFrame+1
         ALWAYS(rc==SQLITE_OK) && iFrame<=iMax;
         iFrame++
       ){
@@ -2834,7 +2898,6 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
         ** committed. As a result, the call to xUndo may not fail.
         */
         assert( walFramePgno(pWal, iFrame)!=1 );
-        DBG(("iframe %d, pgno %d\n",iFrame,walFramePgno(pWal, iFrame)));
         rc = xUndo(pUndoCtx, walFramePgno(pWal, iFrame));
       }
     }
@@ -2843,12 +2906,9 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
     if (pWal->walIndex == pWal->thread->walFile->walIndex &&
         iMax == pWal->thread->walFile->mxFrame)
     {
-      DBG(("MOVING mxframe back!\r\n"));
       pWal->thread->walFile->mxFrame = pWal->hdr.mxFrame;
       assert(iMax > pWal->hdr.mxFrame);
     }
-    else
-    	DBG(("Not last actor %d, %d, mymax %d\r\n",pWal->thread->walFile->mxFrame, pWal->hdr.mxFrame,iMax));
     pWal->thread->curConn->nPages -= (iMax - pWal->hdr.mxFrame);
   }
   return rc;
@@ -3080,4 +3140,4 @@ u64 readUInt64(u8* buf)
 
 #endif /* #ifndef SQLITE_OMIT_WAL */
 
-/************** End of wal.c ************************************************/
+/************** End of wal.c ***********************************************/

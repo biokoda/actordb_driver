@@ -70,7 +70,7 @@ struct Wal {
   u8 init;
   u8 lockError;
 
-  Wal *prev;                 /* One instance per wal file. If new log file created, we create new wal structure for every actor
+  Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
                   that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded
                   for new. Writes are always to new file, reads always start with new file and they move to previous files
                   if not found. */
@@ -102,7 +102,10 @@ struct wal_file
 	sqlite3_file *pWalFd;
 	u32 aSalt[2];
 	u32 nPages;
-
+  u32 lastCommit; // frame number of last commit. Used in sqlite3WalUndo
+  u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
+                     // once we reach the end of actor table, we are done.
+  char* filename;
 	wal_file *prev;
 };
 

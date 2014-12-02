@@ -318,12 +318,10 @@ int main()
     rc = do_exec(buf,&clcmd,&thread,NULL);
     // we have error
     assert(SQLITE_CONSTRAINT == rc);
+    printf("Calling rollback\r\n");
     // rollback transaction
     rc = do_exec("ROLLBACK;",&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
-    // just for kicks do another rollback which must fail
-    rc = do_exec("ROLLBACK;",&clcmd,&thread,NULL);
-    assert(SQLITE_OK != rc);
 
     // write to id 2, which must succeed
     sprintf(buf,"INSERT INTO tab VALUES (%s,%s);",initvals[3][0],initvals[3][1]);
