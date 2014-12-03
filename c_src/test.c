@@ -302,6 +302,7 @@ int main()
 
 	sqlite3HashInit(&thread.walHash);
 	conns = thread.conns = malloc(100*sizeof(db_connection));
+    memset(conns,0,sizeof(db_connection)*100);
 	thread.nconns = 100;
 	read_thread_wal(&thread);
 
