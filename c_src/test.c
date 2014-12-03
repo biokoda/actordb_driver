@@ -45,10 +45,12 @@
 
 int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[]);
 int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char print);
+void cleanup(db_thread *thread);
 
 void do_close(db_command *cmd,db_thread *thread)
 {
     int rc;
+    int *pActorPos;
     db_connection *conn = cmd->conn;
     int i = 0;
     // DB no longer open in erlang code.
@@ -79,7 +81,9 @@ void do_close(db_command *cmd,db_thread *thread)
             conn->staticPrepared[i] = NULL;
         }
 
+        pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
         sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
+        free(pActorPos);
 
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
@@ -98,6 +102,7 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
     unsigned int size;
     int rc;
     int i;
+    int *pActorPos;
 
 	memset(filename,0,MAX_PATHNAME);
     memcpy(filename, thread->path, thread->pathlen);
@@ -132,7 +137,9 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
         memset(cmd->conn->dbpath,0,100);
         sprintf(cmd->conn->dbpath,"%s",name);
 
-        sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, cmd->conn);
+        pActorPos = malloc(sizeof(int));
+        *pActorPos = i;
+        sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorPos);
 
         cmd->conn->nPages = cmd->conn->nPrevPages = 0;
         cmd->conn->thread = thread->index;
@@ -237,6 +244,7 @@ void reset(db_thread *thread, db_connection *conns)
     // close everything
     close_conns(thread);
     sqlite3HashClear(&thread->walHash);
+    cleanup(thread);
     memset(thread,0,sizeof(db_thread));
     // init again
     sprintf(thread->path,".");
@@ -246,6 +254,19 @@ void reset(db_thread *thread, db_connection *conns)
 
     // read wal
     read_thread_wal(thread);
+}
+
+void cleanup(db_thread *thread)
+{
+    wal_file *wFile;
+    while (thread->walFile != NULL)
+    {
+        wFile = thread->walFile;
+        thread->walFile = thread->walFile->prev;
+        sqlite3OsCloseFree(wFile->pWalFd);
+        free(wFile->filename);
+        free(wFile);
+    }
 }
 
 int main()
@@ -393,9 +414,11 @@ int main()
             assert(SQLITE_OK == rc);
         }
     }
+    printf("Tests succeeded\r\n");
 
     close_conns(&thread);
     free(thread.conns);
+    cleanup(&thread);
 
 	return 1;
 }

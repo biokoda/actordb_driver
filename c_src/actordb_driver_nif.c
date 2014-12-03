@@ -511,6 +511,7 @@ do_open(db_command *cmd, db_thread *thread)
     ERL_NIF_TERM error;
     conn_resource *res;
     int i;
+    int *pActorIndex;
 
     printf("thread %s\r\n",thread->path);fflush(stdout);
 
@@ -552,15 +553,12 @@ do_open(db_command *cmd, db_thread *thread)
             thread->conns = newconns;
             thread->nconns *= 1.5;
         }
-        printf("INDEX %d\r\n",i);fflush(stdout);
         cmd->conn = &thread->conns[i];
         cmd->connindex = i;
 
-        printf("SQLITE OPEN\r\n");fflush(stdout);
         rc = sqlite3_open(filename,&(cmd->conn->db));
         if(rc != SQLITE_OK) 
         {
-            printf("CAN NOT OPEN %s\r\n",filename);fflush(stdout);
             error = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
             sqlite3_close(cmd->conn->db);
             cmd->conn = NULL;
@@ -570,7 +568,9 @@ do_open(db_command *cmd, db_thread *thread)
         memset(cmd->conn->dbpath,0,100);
         enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
-        sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, cmd->conn);
+        pActorIndex = malloc(sizeof(int));
+        *pActorIndex = i;
+        sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorIndex);
 
         cmd->conn->nPages = cmd->conn->nPrevPages = 0;
         cmd->conn->thread = thread->index;
@@ -1410,6 +1410,7 @@ do_close(db_command *cmd,db_thread *thread)
     int rc;
     db_connection *conn = cmd->conn;
     int i = 0;
+    int *pActorPos;
     printf("DOCLOSE\r\n");fflush(stdout);
     // DB no longer open in erlang code.
     conn->nErlOpen--;
@@ -1442,14 +1443,15 @@ do_close(db_command *cmd,db_thread *thread)
             conn->staticPrepared[i] = NULL;
         }
 
+        pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
         sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
+        free(pActorPos);
 
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
             ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
         }
-        // sqlite3HashClear(&cmd->conn->walPages);
 
         memset(conn,0,sizeof(db_connection));
     }

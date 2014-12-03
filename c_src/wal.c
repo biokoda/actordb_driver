@@ -1215,6 +1215,7 @@ int read_thread_wal(db_thread *thread)
     u32 actorIndex;
     short curPathLen;
     int i;
+    int *pActorIndex;
 
     rc = sqlite3OsFileSize(curWal->pWalFd, &nSize);
     if( rc!=SQLITE_OK )
@@ -1313,7 +1314,9 @@ int read_thread_wal(db_thread *thread)
 		    curConn->wal->readLock = -1;
 
 		    sqlite3WalBeginReadTransaction(curConn->wal,&rc);
-            sqlite3HashInsert(&thread->walHash, curConn->dbpath, curConn);
+		    pActorIndex = malloc(sizeof(int));
+		    *pActorIndex = actorIndex;
+            sqlite3HashInsert(&thread->walHash, curConn->dbpath, pActorIndex);
             curConn->nPages = 1;
             curConn->nPrevPages = 0;
           }
@@ -2548,7 +2551,7 @@ int sqlite3WalFrames(
   // Do we need to create a new wal structure for newer file?
   if ((*pWal)->thread->walFile->walIndex > (*pWal)->walIndex)
   {
-  	DBG(("OPENING INTO NEW WAL FILE %d\r\n",(*pWal)->thread->curConn->connindex));
+  	// DBG(("OPENING INTO NEW WAL FILE %d\r\n",(*pWal)->thread->curConn->connindex));
     Wal *newWal;
     int changed;
     sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)(*pWal)->thread);
