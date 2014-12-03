@@ -1060,9 +1060,13 @@ int checkpoint_continue(db_thread *thread)
 		if (!thread->conns[i].db)
 			continue;
 
+		DBG(("Checkpoint actor %d for wal %llu\r\n",i, wFile->walIndex));
+
 		conWal = thread->conns[i].wal;
 		while (conWal != NULL && conWal->walIndex > wFile->walIndex)
+		{
 			conWal = conWal->prev;
+		}	
 
 		if (conWal == NULL)
 			continue;
@@ -1073,6 +1077,7 @@ int checkpoint_continue(db_thread *thread)
 			// wal file in linked list and checkpoint that.
 			rc = sqlite3_wal_checkpoint_v2(thread->conns[i].db,NULL,SQLITE_CHECKPOINT_FULL,NULL,NULL);
 			assert(rc == SQLITE_OK);
+			break;
 		}
 	}
 	if (i == thread->nconns)
@@ -1312,6 +1317,8 @@ int read_thread_wal(db_thread *thread)
             curConn->nPages = 1;
             curConn->nPrevPages = 0;
           }
+          else
+          	sqlite3WalBeginReadTransaction(curConn->wal,&rc);
         }
 
         rc = walIndexAppend(curConn->wal, iFrame, pgno);
@@ -1904,7 +1911,6 @@ static int walCheckpoint(
         sqlite3OsFileControlHint(pWal->pDbFd, SQLITE_FCNTL_SIZE_HINT, &nReq);
       }
     }
-
 
     /* Iterate through the contents of the WAL, copying data to the db file. */
     while( rc==SQLITE_OK && 0==walIteratorNext(pIter, &iDbpage, &iFrame) ){
@@ -2826,19 +2832,27 @@ int sqlite3WalCheckpoint(
   int eMode2 = eMode;             /* Mode to pass to walCheckpoint() */
 
   // Only checkpoint prev wals (if they are prev they are finished)
-  if (!pWalTop->prev)
+  if (pWalTop->prev)
   {
     // If more than 1 wal behind, move back
     // Only checkpoint the first file even if more than 1 behind.
     if (pWalTop->prev->prev)
-      return sqlite3WalCheckpoint(pWalTop->prev,eMode,xBusy,pBusyArg,sync_flags,nBuf,zBuf,pnLog,pnCkpt);
+    {
+    	return sqlite3WalCheckpoint(pWalTop->prev,eMode,xBusy,pBusyArg,sync_flags,nBuf,zBuf,pnLog,pnCkpt);	
+    }
     else
     {
+      int rch;
       pWal = pWalTop->prev;
+      sqlite3WalBeginReadTransaction(pWal,&rch);
+      sqlite3WalBeginWriteTransaction(pWal);
     }
   }
   else
-    return SQLITE_OK;
+  {
+  	return SQLITE_OK;
+  }
+    
 
 
 //  rc = walLockExclusive(pWal, WAL_CKPT_LOCK, 1);
@@ -2884,15 +2898,15 @@ int sqlite3WalCheckpoint(
   }
 
 
+  sqlite3WalEndWriteTransaction(pWal);
+  walUnlockExclusive(pWal, WAL_CKPT_LOCK, 1);
+  pWal->ckptLock = 0;
+
   if (rc == SQLITE_OK)
   {
     sqlite3WalClose(pWal, sync_flags, nBuf,zBuf);
     pWalTop->prev = NULL;
   }
-
-  sqlite3WalEndWriteTransaction(pWal);
-  walUnlockExclusive(pWal, WAL_CKPT_LOCK, 1);
-  pWal->ckptLock = 0;
   return (rc==SQLITE_OK && eMode!=eMode2 ? SQLITE_BUSY : rc);
 }
 

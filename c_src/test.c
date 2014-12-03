@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <fcntl.h>
+#include <stdlib.h>
 
 #ifndef  _WIN32
 #include <sys/time.h>
@@ -41,6 +42,9 @@
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
 // Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
+
+int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[]);
+int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char print);
 
 void do_close(db_command *cmd,db_thread *thread)
 {
@@ -142,13 +146,16 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
     cmd->conn->connindex = cmd->connindex;
 }
 
-
 int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
+{
+    return do_exec1(txt,cmd, thread, results,0);
+}
+int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char print)
 {
 	sqlite3_stmt *statement = NULL;
 	int rc = SQLITE_OK;
 	int i;
-    char buf[1024];
+    char buf[1024*10];
 
 	if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
@@ -162,11 +169,11 @@ int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
     	for (i = 0; i < sqlite3_column_count(statement); i++)
     	{
             int type = sqlite3_column_type(statement, i);
-    		// if (i == 0)
-    		// 	printf("Row: ");
+    		if (print && i == 0)
+    			printf("Row: ");
     		switch(type) {
 		    case SQLITE_INTEGER:
-			    // printf(" %d ",sqlite3_column_int(statement, i));
+			    print ? printf(" %d ",sqlite3_column_int(statement, i)) : 0;
                 sprintf(buf,"%d",sqlite3_column_int(statement, i));
 			    break;
 		    // case SQLITE_FLOAT:
@@ -176,22 +183,22 @@ int do_exec(char *txt,db_command *cmd, db_thread *thread, char *results[])
 		    //     printf(" blob ");
 		    //     break;
 		    case SQLITE_NULL:
-			    // printf(" null ");
+			    print ? printf(" null ") : 0;
                 sprintf(buf,"null");
 			    break;
 		    case SQLITE_TEXT:
-			    // printf(" \"%s\" ", sqlite3_column_text(statement, i));
-                sprintf(buf,"'%s'",sqlite3_column_text(statement, i));
+			    print ? printf(" \"%s\" ", sqlite3_column_text(statement, i)) : 0;
+                snprintf(buf,1024*10-1,"'%s'",sqlite3_column_text(statement, i));
 			    break;
 		    }
 
             if (results != NULL)
             {
-                assert(strcmp(results[i],buf) == 0);
                 // printf("Select matches shouldbe=%s is=%s\r\n",results[i],buf);
+                assert(strcmp(results[i],buf) == 0);
             }
     	}
-    	// printf("\r\n");
+    	print ? printf("\r\n") : 0;
     }
     
     // else
@@ -224,6 +231,23 @@ void close_conns(db_thread *thread)
     }
 }
 
+// close all dbs, read whatever wal files are available (thus reopening dbs)
+void reset(db_thread *thread, db_connection *conns)
+{
+    // close everything
+    close_conns(thread);
+    sqlite3HashClear(&thread->walHash);
+    memset(thread,0,sizeof(db_thread));
+    // init again
+    sprintf(thread->path,".");
+    thread->pathlen = strlen(thread->path);
+    thread->nconns = 100;
+    thread->conns = conns;
+
+    // read wal
+    read_thread_wal(thread);
+}
+
 int main()
 {
 	db_thread thread;
@@ -237,16 +261,17 @@ int main()
     memset(buf,0,sizeof(buf));
     memset(buf1,0,sizeof(buf1));
 
+    memset(buf1,'a',4096*2);
+    sprintf(buf,"'%s'",buf1);
+    memcpy(buf1,buf,sizeof(buf));
+    memset(buf,0,sizeof(buf));
+
     char* dbnames[] = {"my1.db","my2.db","my3.db"};
     char* initvals[4][2] = {{"1","'db1 text'"},
                             {"1","'db2 text'"},
                             {"1","'db3 text'"},
                             {"2","'db1 second'"}};
 	
-    for (i = 0; i < ndbs; i++)
-        remove(dbnames[i]);
-	
-    remove("wal.0");remove("wal.1");remove("wal.2");
 	memset(&thread,0,sizeof(db_thread));
 	memset(&clcmd,0,sizeof(db_command));
 
@@ -277,20 +302,9 @@ int main()
         do_exec("SELECT * from tab;",&clcmd,&thread,initvals[i]);
     }
 
-	// close everything
-	close_conns(&thread);
-    sqlite3HashClear(&thread.walHash);
-    memset(&thread,0,sizeof(db_thread));
-    // init again
-    sprintf(thread.path,".");
-    thread.pathlen = strlen(thread.path);
-    thread.nconns = 100;
-    thread.conns = conns;
+	reset(&thread,conns);
 
     printf("STARTING READ\n");
-
-    // read wal
-    read_thread_wal(&thread);
 
     // read written data, will assert if not correct
     for (i = 0; i < ndbs; i++)
@@ -305,11 +319,11 @@ int main()
     thread.curConn = clcmd.conn = &thread.conns[0];
     rc = do_exec("SAVEPOINT 'adb';",&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
+    
     // write more than a pages worth of valid insert (which should force some data to disk)
-    memset(buf1,'a',4096*2);
     for (i = 2; i < 1000; i++)
     {
-        sprintf(buf,"insert into tab values (%d,'%s');",i,buf1);
+        sprintf(buf,"insert into tab values (%d,%s);",i,buf1);
         rc = do_exec(buf,&clcmd,&thread,NULL); 
         assert(SQLITE_OK == rc);
     }
@@ -342,17 +356,40 @@ int main()
     }
 
     // Test checkpoints
-    printf("TEST CHECKPOINT\r\n");
+    printf("Insert multiple wal file amount of data\r\n");
     // insert a lot of data
-    for (i = 0; i < 1024*3*3; i++)
+    for (i = 0; i < 1000; i++)
     {
-        if (i % 1000 == 0)
-            printf("At %d\r\n",i);
         for (j = 0; j < ndbs; j++)
         {
             thread.curConn = clcmd.conn = &thread.conns[j];
-            sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
+            sprintf(buf,"insert into tab values (%d,%s);",i+10,buf1);
             rc = do_exec(buf,&clcmd,&thread,NULL); 
+            assert(SQLITE_OK == rc);
+        }
+    }
+
+    while (checkpoint_continue(&thread))
+    {
+    }
+
+    // we are now left with the last wal file. Close everything and reopen.
+    // All the data must still be there
+    reset(&thread,conns);
+
+    printf("Verifying data\r\n");
+    // Check for all data.
+    for (i = 0; i < ndbs; i++)
+    {
+        thread.curConn = clcmd.conn = &thread.conns[i];
+        for (j = 0; j < 1000; j++)
+        {
+            char str[10];
+            char *res[] = {str,buf1};
+            
+            sprintf(str,"%d",j+10);
+            sprintf(buf,"select * from tab where id=%d;",j+10);
+            rc = do_exec(buf,&clcmd,&thread,res); 
             assert(SQLITE_OK == rc);
         }
     }
