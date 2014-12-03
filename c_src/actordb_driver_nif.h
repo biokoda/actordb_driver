@@ -167,6 +167,7 @@ struct db_connection
     char dbpath[100];
     // Is db open from erlang. It may just be open in driver.
     char nErlOpen;
+    char checkpointLock;
     
     // How many pages in wal. Decremented on checkpoints.
     int nPages;
@@ -199,6 +200,7 @@ struct conn_resource
 {
     int thread;
     int connindex;
+    char checkpointLock;
 };
 
 /* backup object */
@@ -233,7 +235,8 @@ typedef enum
     cmd_tcp_reconnect,
     cmd_bind_insert,
     cmd_alltunnel_call,
-    cmd_store_prepared
+    cmd_store_prepared,
+    cmd_checkpoint_lock
 } command_type;
 
 typedef struct 
@@ -281,6 +284,7 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
 #endif
 
+int checkpoint_continue(db_thread *thread);
 wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs);
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);
 int read_thread_wal(db_thread*);

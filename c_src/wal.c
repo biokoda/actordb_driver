@@ -1055,7 +1055,7 @@ int checkpoint_continue(db_thread *thread)
 	}
 		
 
-	for (i = 0; i < thread->nconns; i++)
+	for (i = wFile->checkpointPos; i < thread->nconns; i++, wFile->checkpointPos++)
 	{
 		if (!thread->conns[i].db)
 			continue;
@@ -1070,6 +1070,8 @@ int checkpoint_continue(db_thread *thread)
 
 		if (conWal == NULL)
 			continue;
+		if (thread->conns[i].checkpointLock)
+			return 0;
 		if (conWal->walIndex == wFile->walIndex)
 		{
 			assert(conWal->prev == NULL);

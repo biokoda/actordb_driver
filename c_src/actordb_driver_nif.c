@@ -1,6 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -470,9 +471,23 @@ command_create(int threadnum)
 static void 
 destruct_connection(ErlNifEnv *env, void *arg)
 {
-    conn_resource *res = (conn_resource*)arg;
     void *item;
     db_command *cmd;
+    conn_resource *res = (conn_resource*)arg;
+    
+    // Send unlock first if it exists
+    if (res->checkpointLock > 0)
+    {
+        item = command_create(res->thread);
+        cmd = queue_get_item_data(item);
+         
+        cmd->type = cmd_checkpoint_lock;
+        cmd->arg = enif_make_int(cmd->env, res->checkpointLock); 
+        cmd->connindex = res->connindex;
+        cmd->ref = 0;
+
+        push_command(res->thread, item);
+    }
     
     item = command_create(res->thread);
     cmd = queue_get_item_data(item);
@@ -513,23 +528,22 @@ do_open(db_command *cmd, db_thread *thread)
     int i;
     int *pActorIndex;
 
-    printf("thread %s\r\n",thread->path);fflush(stdout);
+    DBG(("thread %s\r\n",thread->path));fflush(stdout);
 
     memset(filename,0,MAX_PATHNAME);
     memcpy(filename, thread->path, thread->pathlen);
     filename[thread->pathlen] = '/';
 
-    printf("PATH %s\r\n",filename);fflush(stdout);
+    DBG(("PATH %s\r\n",filename));fflush(stdout);
 
     // DB can actually already be opened in thread->conns
     // Check there with filename first.
-    
     size = enif_get_string(cmd->env, cmd->arg, filename+thread->pathlen+1, MAX_PATHNAME-thread->pathlen-1, ERL_NIF_LATIN1);
     // Actor path name must be written to wal. Filename slot is 100bytes.
     if(size <= 0 || size > 99) 
         return make_error_tuple(cmd->env, "invalid_filename");
 
-    printf("PATH1 %s\r\n",filename);fflush(stdout);
+    DBG(("PATH1 %s\r\n",filename));fflush(stdout);
 
     res = enif_alloc_resource(db_connection_type, sizeof(conn_resource*));
     if(!res) 
@@ -550,7 +564,7 @@ do_open(db_command *cmd, db_thread *thread)
             db_connection *newcons = malloc(newsize);
             memset(newcons,0,newsize);
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
-            thread->conns = newconns;
+            thread->conns = newcons;
             thread->nconns *= 1.5;
         }
         cmd->conn = &thread->conns[i];
@@ -1007,8 +1021,8 @@ do_exec_script(db_command *cmd, db_thread *thread)
 
     if (cmd->arg1)
     {
-        enif_get_uint64(cmd->env,cmd->arg1,&(cmd->conn->writeTermNumber));
-        enif_get_uint64(cmd->env,cmd->arg2,&(cmd->conn->writeNumber));
+        enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->writeTermNumber));
+        enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->writeNumber));
         enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
     }
 
@@ -1402,6 +1416,17 @@ make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i)
     }
 }
 
+static ERL_NIF_TERM
+do_checkpoint_lock(db_command *cmd,db_thread *thread)
+{
+    int lock;
+    enif_get_int(cmd->env,cmd->arg,&lock);
+    if (lock > 0)
+        cmd->conn->checkpointLock++;
+    else
+        cmd->conn->checkpointLock--;
+    return atom_ok;
+}
 
 static ERL_NIF_TERM
 do_close(db_command *cmd,db_thread *thread)
@@ -1411,7 +1436,7 @@ do_close(db_command *cmd,db_thread *thread)
     db_connection *conn = cmd->conn;
     int i = 0;
     int *pActorPos;
-    printf("DOCLOSE\r\n");fflush(stdout);
+    DBG(("DOCLOSE\r\n"));fflush(stdout);
     // DB no longer open in erlang code.
     conn->nErlOpen--;
 
@@ -1455,6 +1480,7 @@ do_close(db_command *cmd,db_thread *thread)
 
         memset(conn,0,sizeof(db_connection));
     }
+
 
     return ret;
 }
@@ -1508,6 +1534,8 @@ evaluate_command(db_command *cmd,db_thread *thread)
         return do_bind_insert(cmd,thread);
     case cmd_alltunnel_call:
         return do_all_tunnel_call(cmd,thread);
+    case cmd_checkpoint_lock:
+        return do_checkpoint_lock(cmd,thread);
     case cmd_set_socket:
     {
         int fd = 0;
@@ -2303,6 +2331,53 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return push_command(res->thread, item);
 }
 
+static ERL_NIF_TERM 
+checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    conn_resource *res;
+    db_command *cmd = NULL;
+    ErlNifPid pid;
+    void *item;
+    int lock;
+     
+    if(argc != 4) 
+        return enif_make_badarg(env);  
+    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+        return enif_make_badarg(env);
+        
+    if(!enif_is_ref(env, argv[1])) 
+        return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[2], &pid)) 
+        return make_error_tuple(env, "invalid_pid"); 
+    if (!enif_is_number(env,argv[3]))
+        return make_error_tuple(env, "term not number");    
+    
+    item = command_create(res->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+    {
+        return make_error_tuple(env, "command_create_failed");
+    }
+     
+    enif_get_int(env,argv[3],&lock);
+    if (lock == res->checkpointLock)
+    {
+        enif_send(NULL, &pid, env, atom_ok);
+        return atom_ok;
+    }
+        
+    res->checkpointLock = (char)lock;
+    /* command */
+    cmd->type = cmd_checkpoint_lock;
+    cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    cmd->pid = pid;
+    cmd->arg = enif_make_copy(cmd->env, argv[3]);  // 1 - lock, 0 - unlock
+    cmd->connindex = res->connindex;
+
+    enif_consume_timeslice(env,500);
+
+    return push_command(res->thread, item);
+}
 
 static ERL_NIF_TERM 
 bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -2554,7 +2629,9 @@ static ErlNifFunc nif_funcs[] = {
     {"wal_header",1,wal_header},
     {"wal_checksum",4,wal_checksum},
     {"all_tunnel_call",3,all_tunnel_call},
-    {"store_prepared_table",2,store_prepared_table}
+    {"store_prepared_table",2,store_prepared_table},
+    {"checkpoint_lock",4,checkpoint_lock}
+    // {"checkpoint_actor",3,checkpoint_actor}
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

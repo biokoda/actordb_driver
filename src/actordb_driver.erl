@@ -11,7 +11,7 @@
          parse_helper/1,parse_helper/2,wal_pages/1,
          % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
-         replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,
+         replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
          tcp_connect_async/4,tcp_connect_async/5,make_wal_header/1,tcp_reconnect/0,wal_checksum/4,bind_insert/3]).
 
 % {{ThreadPath1,ThreadPath2,...},{StaticSql1,StaticSql2,...}}
@@ -124,6 +124,20 @@ exec_script(Sql, [_|_] = Recs, {actordb_driver, _Ref, Connection},Timeout,Term,I
     Ref = make_ref(),
     ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
     receive_answer(Ref,Connection,Timeout).
+
+checkpoint_lock({actordb_driver, _Ref, Connection},Lock) ->
+    case Lock of
+        true ->
+            L = 1;
+        false ->
+            L = 0;
+        0 = L ->
+            ok;
+        1 = L ->
+            ok
+    end,
+    Ref = make_ref(),
+    ok = actordb_driver_nif:checkpoint_lock(Connection,Ref,self(),L).
 
 % backup_init({actordb_driver, _, Dest},{actordb_driver, _, Src}) ->
 %     Ref = make_ref(),
