@@ -29,6 +29,20 @@ typedef struct WalIndexHdr WalIndexHdr;
 typedef struct WalIterator WalIterator;
 typedef struct WalCkptInfo WalCkptInfo;
 
+typedef u16 ht_slot;
+
+struct WalIterator {
+  int iPrior;                     /* Last result returned from the iterator */
+  int nSegment;                   /* Number of entries in aSegment[] */
+  struct WalSegment {
+    int iNext;                    /* Next slot in aIndex[] not yet returned */
+    ht_slot *aIndex;              /* i0, i1, i2... such that aPgno[iN] ascend */
+    u32 *aPgno;                   /* Array of page numbers. */
+    int nEntry;                   /* Nr. of entries in aPgno[] and aIndex[] */
+    int iZero;                    /* Frame number associated with aPgno[0] */
+  } aSegment[1];                  /* One for every 32KB page in the wal-index */
+};
+
 struct WalIndexHdr {
   u32 iVersion;                   /* Wal-index version */
   u32 unused;                     /* Unused (padding) field */
@@ -169,10 +183,10 @@ struct db_connection
     char nErlOpen;
     char checkpointLock;
     
-    // How many pages in wal. Decremented on checkpoints.
-    int nPages;
-    // Before a new write, remember old npages.
-    int nPrevPages;
+    // // How many pages in wal. Decremented on checkpoints.
+    // int nPages;
+    // // Before a new write, remember old npages.
+    // int nPrevPages;
     u64 writeNumber;
     u64 writeTermNumber;
     char wal_configured;
@@ -194,6 +208,12 @@ struct db_connection
     sqlite3_stmt *staticPrepared[MAX_STATIC_SQLS];
     sqlite3_stmt **prepared;
     int *prepVersions;
+
+    // When actor is requesting pages from wal for replication use this iterator.
+    WalIterator *walIter;
+    // Pointer to wal structure that iterator belongs to.
+    // Iterators move from oldest wal to youngest
+    Wal* iterWal;
 };
 
 struct conn_resource
@@ -284,6 +304,7 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
 #endif
 
+int iterate_wal(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal);
 int checkpoint_continue(db_thread *thread);
 wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs);
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);

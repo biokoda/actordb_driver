@@ -12,7 +12,7 @@
          close/3,
          noop/3,
          parse_helper/2,
-         wal_pages/1,
+         % wal_pages/1,
          % backup_init/4,
          % backup_finish/3,
          % backup_step/4,
@@ -115,8 +115,8 @@ init({_,_} =Threads) ->
             ok
     end.
 
-wal_pages(_) ->
-    exit(nif_library_not_loaded).
+% wal_pages(_) ->
+%     exit(nif_library_not_loaded).
 
 open(_Ref, _Dest, _Filename,_ThreadNumber) ->
     exit(nif_library_not_loaded).

@@ -1,4 +1,4 @@
-/************ Begin file wal.c *********************************************/
+/********** Begin file wal.c *********************************************/
 /*
 ** 2010 February 1
 **
@@ -398,7 +398,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 ** Each page of the wal-index mapping contains a hash-table made up of
 ** an array of HASHTABLE_NSLOT elements of the following type.
 */
-typedef u16 ht_slot;
+// typedef u16 ht_slot;
 
 /*
 ** This structure is used to implement an iterator that loops through
@@ -415,17 +415,18 @@ typedef u16 ht_slot;
 **
 ** This functionality is used by the checkpoint code (see walCheckpoint()).
 */
-struct WalIterator {
-  int iPrior;                     /* Last result returned from the iterator */
-  int nSegment;                   /* Number of entries in aSegment[] */
-  struct WalSegment {
-    int iNext;                    /* Next slot in aIndex[] not yet returned */
-    ht_slot *aIndex;              /* i0, i1, i2... such that aPgno[iN] ascend */
-    u32 *aPgno;                   /* Array of page numbers. */
-    int nEntry;                   /* Nr. of entries in aPgno[] and aIndex[] */
-    int iZero;                    /* Frame number associated with aPgno[0] */
-  } aSegment[1];                  /* One for every 32KB page in the wal-index */
-};
+//struct WalIterator {
+//  int iPrior;                     /* Last result returned from the iterator */
+//  int nSegment;                   /* Number of entries in aSegment[] */
+//  struct WalSegment {
+//    int iNext;                    /* Next slot in aIndex[] not yet returned */
+//    ht_slot *aIndex;              /* i0, i1, i2... such that aPgno[iN] ascend */
+//    u32 *aPgno;                   /* Array of page numbers. */
+//    int nEntry;                   /* Nr. of entries in aPgno[] and aIndex[] */
+//    int iZero;                    /* Frame number associated with aPgno[0] */
+//  } aSegment[1];                  /* One for every 32KB page in the wal-index */
+//};
+// -> defined in actordb_driver_nif.h
 
 /*
 ** Define the parameters of the hash tables in the wal-index file. There
@@ -1034,14 +1035,18 @@ static int walIndexRecover(Wal *pWal)
   return SQLITE_OK;
 }
 
+
 // Returns: 0 nothing to do
 // 			1 still have work to do
+// 			-1 error
 int checkpoint_continue(db_thread *thread)
 {
 	int i,rc;
 	wal_file *wFile = thread->walFile;
 	wal_file *nextToLast = thread->walFile;
 	Wal *conWal;
+	db_connection *curConn;
+	int *pActorPos;
 
 	// No prev wal files, we don't have anything to do.
 	if (thread->walFile->prev == NULL)
@@ -1062,7 +1067,8 @@ int checkpoint_continue(db_thread *thread)
 
 		DBG(("Checkpoint actor %d for wal %llu\r\n",i, wFile->walIndex));
 
-		conWal = thread->conns[i].wal;
+		curConn = &thread->conns[i];
+		conWal = curConn->wal;
 		while (conWal != NULL && conWal->walIndex > wFile->walIndex)
 		{
 			conWal = conWal->prev;
@@ -1080,6 +1086,23 @@ int checkpoint_continue(db_thread *thread)
 			rc = sqlite3_wal_checkpoint_v2(thread->conns[i].db,NULL,SQLITE_CHECKPOINT_FULL,NULL,NULL);
 			assert(rc == SQLITE_OK);
 			break;
+		}
+		// db no longer open in erlang and has no frames in wal. It can be closed.
+		else if (curConn->nErlOpen == 0 && curConn->wal->prev == NULL && curConn->wal->hdr.mxFrame == 0)
+		{
+	        rc = sqlite3_close(curConn->db);
+	        if(rc != SQLITE_OK)
+	        {
+	            DBG(("Unable to close DB from checkpoint\r\n"));
+	            return -1;
+	        }
+	        else
+	        {
+	        	pActorPos = sqlite3HashFind(&thread->walHash,curConn->dbpath);
+		        sqlite3HashInsert(&thread->walHash, curConn->dbpath, NULL);
+		        free(pActorPos);
+		        memset(curConn,0,sizeof(db_connection));
+	        }
 		}
 	}
 	if (i == thread->nconns)
@@ -1263,7 +1286,7 @@ int read_thread_wal(db_thread *thread)
         if (curConn != NULL && strncmp(filename+thread->pathlen+1,curConn->dbpath,100) == 0)
         {
           // continue
-          curConn->nPages++;
+          // curConn->nPages++;
         }
         else
         {
@@ -1319,8 +1342,8 @@ int read_thread_wal(db_thread *thread)
 		    pActorIndex = malloc(sizeof(int));
 		    *pActorIndex = actorIndex;
             sqlite3HashInsert(&thread->walHash, curConn->dbpath, pActorIndex);
-            curConn->nPages = 1;
-            curConn->nPrevPages = 0;
+            // curConn->nPages = 1;
+            // curConn->nPrevPages = 0;
           }
           else
           	sqlite3WalBeginReadTransaction(curConn->wal,&rc);
@@ -1854,7 +1877,7 @@ static int walCheckpoint(
   int i;                          /* Loop counter */
   WalCkptInfo *pInfo;    /* The checkpoint status information */
   int (*xBusy)(void*) = 0;        /* Function to call when waiting for locks */
-  db_connection *con = pWal->thread->curConn;
+  // db_connection *con = pWal->thread->curConn;
 
   szPage = walPagesize(pWal);
   testcase( szPage<=32768 );
@@ -1923,7 +1946,7 @@ static int walCheckpoint(
       assert( walFramePgno(pWal, iFrame)==iDbpage );
       if( iFrame<=nBackfill || iFrame>mxSafeFrame || iDbpage>mxPage ) continue;
       iOffset = walFrameOffset(iFrame, szPage) + WAL_FRAME_HDRSIZE;
-      con->nPages--;
+      // con->nPages--;
       /* testcase( IS_BIG_INT(iOffset) ); // requires a 4GiB WAL file */
       rc = sqlite3OsRead(pWal->pWalFd, zBuf, szPage, iOffset);
       if( rc!=SQLITE_OK ) break;
@@ -1979,6 +2002,90 @@ static int walCheckpoint(
  walcheckpoint_out:
   walIteratorFree(pIter);
   return rc;
+}
+
+// conn      -> connection to iterate wal from
+// bufSize   -> size of input buffer
+// buffer    -> OUT: buffer to copy wal to
+// done      -> OUT: 1 if no more pages are available
+// activeWal -> OUT: 1 if pages are from an active wal file
+int iterate_wal(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal)
+{
+	int nFilled = 0;
+	int rc = SQLITE_OK;
+	u32 iDbpage;
+	u32 iFrame;
+	int iOffset;
+	int szPage = walPagesize(conn->wal);
+	struct Wal *wal = conn->wal;
+
+	*done = 0;
+
+	if (!conn->checkpointLock)
+		conn->checkpointLock++;
+
+	do
+	{
+		// start at top and move down
+		if (conn->walIter == NULL || conn->iterWal == NULL)
+		{
+			wal = conn->wal;
+			while (wal->prev != NULL && wal != conn->iterWal)
+				wal = wal->prev;
+
+			if (conn->walIter == NULL)
+			{
+				conn->iterWal = wal;
+				wal->ckptLock = 1;
+				rc = walIteratorInit(wal,&conn->walIter);
+				if (rc != SQLITE_OK)
+					return rc;
+			}
+		}
+		else
+			wal = conn->iterWal;
+
+		while ((nFilled+szPage+WAL_FRAME_HDRSIZE) <= bufSize)
+		{
+			if (walIteratorNext(conn->walIter, &iDbpage, &iFrame) == 0)
+			{
+				iOffset = walFrameOffset(iFrame, szPage);
+				rc = sqlite3OsRead(wal->pWalFd, buffer+nFilled, szPage+WAL_FRAME_HDRSIZE, iOffset);
+	      		if( rc!=SQLITE_OK ) break;
+	      		nFilled += szPage+WAL_FRAME_HDRSIZE;
+			}
+			else
+			{
+				walIteratorFree(conn->walIter);
+				wal->ckptLock = 0;
+				if (wal == conn->wal)
+				{
+					conn->walIter = NULL;
+					conn->iterWal = NULL;
+					*done = 1;
+					break;
+				}
+				// Move to next wal from current.
+				wal = conn->wal;
+				while (wal->prev != NULL && wal->prev != conn->iterWal)
+					wal = wal->prev;
+
+				if (wal->prev == conn->iterWal)
+				{
+					// if still space in buffer, start all over
+					conn->iterWal = wal;
+					conn->walIter = NULL;
+				}
+				break;
+			}
+		}
+	} while (!(*done) && (nFilled+szPage+WAL_FRAME_HDRSIZE) <= bufSize);
+
+	*activeWal = conn->iterWal == conn->wal;
+	if (*done)
+		conn->checkpointLock--;
+
+	return nFilled;
 }
 
 /*
@@ -2531,7 +2638,7 @@ int sqlite3WalFrames(
   int szFrame;                    /* The size of a single frame */
   i64 iOffset;                    /* Next byte to write in WAL file */
   WalWriter w;                    /* The writer */
-  db_connection *con = (*pWal)->thread->curConn;
+  // db_connection *con = (*pWal)->thread->curConn;
   
   assert( pList );
   /* If this frame set completes a transaction, then nTruncate>0.  If
@@ -2638,7 +2745,7 @@ int sqlite3WalFrames(
   for(p=pList; p; p=p->pDirty){
     int nDbSize;   /* 0 normally.  Positive == commit flag */
     iFrame++;
-    con->nPages++;
+    // con->nPages++;
     assert( iOffset==walFrameOffset(iFrame, szPage) );
     nDbSize = (isCommit && p->pDirty==0) ? nTruncate : 0;
     rc = walWriteOneFrame(&w, p, nDbSize, iOffset);
@@ -2962,7 +3069,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
       pWal->thread->walFile->mxFrame = pWal->thread->walFile->lastCommit;
       assert(iMax > pWal->hdr.mxFrame);
     }
-    pWal->thread->curConn->nPages -= (iMax - pWal->hdr.mxFrame);
+    // pWal->thread->curConn->nPages -= (iMax - pWal->hdr.mxFrame);
   }
   return rc;
 }
@@ -3193,4 +3300,4 @@ u64 readUInt64(u8* buf)
 
 #endif /* #ifndef SQLITE_OMIT_WAL */
 
-/************** End of wal.c ***********************************************/
+/************** End of wal.c *********************************************/

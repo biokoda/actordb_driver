@@ -528,13 +528,13 @@ do_open(db_command *cmd, db_thread *thread)
     int i;
     int *pActorIndex;
 
-    DBG(("thread %s\r\n",thread->path));fflush(stdout);
+    DBG(("thread %s\r\n",thread->path));
 
     memset(filename,0,MAX_PATHNAME);
     memcpy(filename, thread->path, thread->pathlen);
     filename[thread->pathlen] = '/';
 
-    DBG(("PATH %s\r\n",filename));fflush(stdout);
+    DBG(("PATH %s\r\n",filename));
 
     // DB can actually already be opened in thread->conns
     // Check there with filename first.
@@ -543,7 +543,7 @@ do_open(db_command *cmd, db_thread *thread)
     if(size <= 0 || size > 99) 
         return make_error_tuple(cmd->env, "invalid_filename");
 
-    DBG(("PATH1 %s\r\n",filename));fflush(stdout);
+    DBG(("PATH1 %s\r\n",filename));
 
     res = enif_alloc_resource(db_connection_type, sizeof(conn_resource*));
     if(!res) 
@@ -586,8 +586,8 @@ do_open(db_command *cmd, db_thread *thread)
         *pActorIndex = i;
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorIndex);
 
-        cmd->conn->nPages = cmd->conn->nPrevPages = 0;
-        cmd->conn->thread = thread->index;
+        // cmd->conn->nPages = cmd->conn->nPrevPages = 0;
+        // cmd->conn->thread = thread->index;
     }
     else
     {
@@ -1436,12 +1436,12 @@ do_close(db_command *cmd,db_thread *thread)
     db_connection *conn = cmd->conn;
     int i = 0;
     int *pActorPos;
-    DBG(("DOCLOSE\r\n"));fflush(stdout);
-    // DB no longer open in erlang code.
+    DBG(("DOCLOSE\r\n"));
+    
     conn->nErlOpen--;
-
-    // Only close if no pages in wal.
-    if (!conn->nPages && conn->nErlOpen <= 0)
+    
+    // DB no longer open in erlang code.
+    if (conn->nErlOpen <= 0) //!conn->nPages
     {
         if (!conn->packetPrefix.size)
             enif_release_binary(&conn->packetPrefix);
@@ -1467,7 +1467,10 @@ do_close(db_command *cmd,db_thread *thread)
             sqlite3_finalize(conn->staticPrepared[i]);
             conn->staticPrepared[i] = NULL;
         }
-
+    }
+    // if it no longer has any frames in wal, it can actually be closed
+    if (conn->wal->prev == NULL && conn->wal->hdr.mxFrame == 0)
+    {
         pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
         sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
         free(pActorPos);
@@ -1652,8 +1655,7 @@ thread_func(void *arg)
         if (data->conns[i].db != NULL)
         {
             clcmd.conn = &data->conns[i];
-            // If no pages in wall, db will be closed
-            data->conns[i].nPages = 0;
+            // data->conns[i].nPages = 0;
             do_close(&clcmd,data);
         }
     }
@@ -2190,22 +2192,22 @@ lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     }
 }
 
-static ERL_NIF_TERM 
-wal_pages(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    conn_resource *res;
+// static ERL_NIF_TERM 
+// wal_pages(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+//     conn_resource *res;
 
-    if (argc != 1)
-        return enif_make_badarg(env);
+//     if (argc != 1)
+//         return enif_make_badarg(env);
 
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
-    {
-        return enif_make_badarg(env);
-    }
-    return enif_make_tuple2(env, enif_make_int(env,g_threads[res->thread].conns[res->connindex].nPrevPages),
-                                 enif_make_int(env,g_threads[res->thread].conns[res->connindex].nPages)
-                                 );
-}
+//     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+//     {
+//         return enif_make_badarg(env);
+//     }
+//     return enif_make_tuple2(env, enif_make_int(env,g_threads[res->thread].conns[res->connindex].nPrevPages),
+//                                  enif_make_int(env,g_threads[res->thread].conns[res->connindex].nPages)
+//                                  );
+// }
 
 
 static ERL_NIF_TERM
@@ -2614,7 +2616,7 @@ static ErlNifFunc nif_funcs[] = {
     {"bind_insert",5,bind_insert},
     {"noop", 3, noop},
     {"parse_helper",2,parse_helper},
-    {"wal_pages",1,wal_pages},
+    // {"wal_pages",1,wal_pages},
     // {"backup_init",4,backup_init},
     // {"backup_finish",3,backup_finish},
     // {"backup_step",4,backup_step},
@@ -2631,7 +2633,6 @@ static ErlNifFunc nif_funcs[] = {
     {"all_tunnel_call",3,all_tunnel_call},
     {"store_prepared_table",2,store_prepared_table},
     {"checkpoint_lock",4,checkpoint_lock}
-    // {"checkpoint_actor",3,checkpoint_actor}
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

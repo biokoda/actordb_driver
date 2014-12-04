@@ -274,11 +274,14 @@ int main()
 	db_thread thread;
 	db_command clcmd;
     db_connection *conns;
+    Wal *pWal;
 	int i = 0,j = 0;
     int rc;
     int ndbs = 3;
     char buf[1024*10];
     char buf1[1024*10];
+    char pgBuf[4096+WAL_FRAME_HDRSIZE];
+    char pgDone = 0, pgLast = 0;
     memset(buf,0,sizeof(buf));
     memset(buf1,0,sizeof(buf1));
 
@@ -371,7 +374,6 @@ int main()
     // read written data, will assert if not correct
     for (i = 0; i < ndbs; i++)
     {
-        printf("REad index %d %d\r\n",i,thread.conns[i].connindex);
         thread.curConn = clcmd.conn = &thread.conns[i];
         rc = do_exec("SELECT * from tab where id=1;",&clcmd,&thread,initvals[i]);
         assert(SQLITE_OK == rc);
@@ -391,6 +393,16 @@ int main()
         }
     }
 
+    for (i = 0;; i++)
+    {
+        iterate_wal(&thread.conns[0],4096+WAL_FRAME_HDRSIZE,pgBuf,&pgDone,&pgLast);
+        if(pgDone)
+            break;
+    }
+    // printf("Pages %i %d\r\n",i,thread.conns[0].nPages);
+    
+
+    printf("Checkpointing\r\n");
     while (checkpoint_continue(&thread))
     {
     }
