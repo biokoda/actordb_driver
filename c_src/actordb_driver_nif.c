@@ -539,8 +539,8 @@ do_open(db_command *cmd, db_thread *thread)
     // DB can actually already be opened in thread->conns
     // Check there with filename first.
     size = enif_get_string(cmd->env, cmd->arg, filename+thread->pathlen+1, MAX_PATHNAME-thread->pathlen-1, ERL_NIF_LATIN1);
-    // Actor path name must be written to wal. Filename slot is 100bytes.
-    if(size <= 0 || size > 99) 
+    // Actor path name must be written to wal. Filename slot is MAX_ACTOR_NAME bytes.
+    if(size <= 0 || size >= MAX_ACTOR_NAME) 
         return make_error_tuple(cmd->env, "invalid_filename");
 
     DBG(("PATH1 %s\r\n",filename));
@@ -579,7 +579,7 @@ do_open(db_command *cmd, db_thread *thread)
             return error;
         }
 
-        memset(cmd->conn->dbpath,0,100);
+        memset(cmd->conn->dbpath,0,MAX_ACTOR_NAME);
         enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
         pActorIndex = malloc(sizeof(int));
@@ -988,6 +988,17 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 
 
 static ERL_NIF_TERM
+do_traverse_wal(db_command *cmd, db_thread *thread)
+{
+    char done;
+    char activeWal;
+    char buffer[SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE];
+
+    return atom_ok;
+}
+
+
+static ERL_NIF_TERM
 do_exec_script(db_command *cmd, db_thread *thread)
 {
     ErlNifBinary bin;
@@ -1007,10 +1018,12 @@ do_exec_script(db_command *cmd, db_thread *thread)
     ERL_NIF_TERM rows;
     char *errat = NULL;
     char dofinalize = 1;
+    int pagesPre = thread->walFile->mxFrame;
     
     const ERL_NIF_TERM *insertRow;
     int rowLen = 0;
     listTop = cmd->arg4;
+    thread->threadNum++;
 
 
     if (!cmd->conn->wal_configured)
@@ -1295,6 +1308,12 @@ do_exec_script(db_command *cmd, db_thread *thread)
         statement = NULL;
     }
 
+    // Pages have been written to wal, but we are returning error. 
+    // Call a rollback.
+    if (rc > 0 && pagesPre != thread->walFile->mxFrame)
+    {
+
+    }
 
     // enif_release_resource(cmd->conn);
     // Errors are from 1 to 99.
@@ -1527,6 +1546,8 @@ evaluate_command(db_command *cmd,db_thread *thread)
         return do_backup_step(cmd,thread);
     case cmd_interrupt:
         return do_interrupt(cmd,thread);
+    case cmd_iterate_wal:
+        return do_traverse_wal(cmd,thread);
     case cmd_unknown:
         return atom_ok;
     case cmd_tcp_connect:
@@ -2382,6 +2403,48 @@ checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM 
+page_size(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    return enif_make_int(env,SQLITE_DEFAULT_PAGE_SIZE);
+}
+
+static ERL_NIF_TERM 
+traverse_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    conn_resource *res;
+    db_command *cmd = NULL;
+    ErlNifPid pid;
+    void *item;
+     
+    if(argc != 3) 
+        return enif_make_badarg(env);  
+    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+        return enif_make_badarg(env);
+        
+    if(!enif_is_ref(env, argv[1])) 
+        return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[2], &pid)) 
+        return make_error_tuple(env, "invalid_pid"); 
+    
+    item = command_create(res->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+    {
+        return make_error_tuple(env, "command_create_failed");
+    }
+
+    /* command */
+    cmd->type = cmd_iterate_wal;
+    cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    cmd->pid = pid;
+    cmd->connindex = res->connindex;
+
+    enif_consume_timeslice(env,500);
+
+    return push_command(res->thread, item);
+}
+
+static ERL_NIF_TERM 
 bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
@@ -2567,10 +2630,11 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     
     for (i = 0; i < g_nthreads; i++)
     {
-        if (!(enif_get_string(env,param1[i],g_threads[i].path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-100)))
+        if (!(enif_get_string(env,param1[i],g_threads[i].path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
             return -1;
         g_threads[i].pathlen = strlen(g_threads[i].path);
         g_threads[i].index = i;
+        sqlite3_randomness(4,&g_threads[i].threadNum);
         g_threads[i].commands = queue_create(command_destroy);
         g_threads[i].conns = malloc(sizeof(db_connection)*1024);
         memset(g_threads[i].conns,0,sizeof(db_connection)*1024);
@@ -2632,7 +2696,9 @@ static ErlNifFunc nif_funcs[] = {
     {"wal_checksum",4,wal_checksum},
     {"all_tunnel_call",3,all_tunnel_call},
     {"store_prepared_table",2,store_prepared_table},
-    {"checkpoint_lock",4,checkpoint_lock}
+    {"checkpoint_lock",4,checkpoint_lock},
+    {"traverse_wal",3,traverse_wal},
+    {"page_size",0,page_size}
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

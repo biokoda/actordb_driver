@@ -56,44 +56,40 @@ void do_close(db_command *cmd,db_thread *thread)
     // DB no longer open in erlang code.
     conn->nErlOpen--;
 
-    // Only close if no pages in wal.
-    if (!conn->nPages && conn->nErlOpen <= 0)
+    if (conn->prepared != NULL)
     {
-        if (conn->prepared != NULL)
+        for (i = 0; i < MAX_PREP_SQLS; i++)
         {
-            for (i = 0; i < MAX_PREP_SQLS; i++)
+            if (conn->prepared[i] != 0)
             {
-                if (conn->prepared[i] != 0)
-                {
-                    sqlite3_finalize(conn->prepared[i]);
-                }
-                    
-                conn->prepared[i] = NULL;
+                sqlite3_finalize(conn->prepared[i]);
             }
-            free(conn->prepVersions);
-            conn->prepVersions = NULL;
+                
+            conn->prepared[i] = NULL;
         }
-        free(conn->prepared);
-        conn->prepared = NULL;
-        for (i = 0; i < MAX_STATIC_SQLS; i++)
-        {
-            sqlite3_finalize(conn->staticPrepared[i]);
-            conn->staticPrepared[i] = NULL;
-        }
-
-        pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
-        sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
-        free(pActorPos);
-
-        rc = sqlite3_close(conn->db);
-        if(rc != SQLITE_OK)
-        {
-            
-        }
-        // sqlite3HashClear(&cmd->conn->walPages);
-
-        memset(conn,0,sizeof(db_connection));
+        free(conn->prepVersions);
+        conn->prepVersions = NULL;
     }
+    free(conn->prepared);
+    conn->prepared = NULL;
+    for (i = 0; i < MAX_STATIC_SQLS; i++)
+    {
+        sqlite3_finalize(conn->staticPrepared[i]);
+        conn->staticPrepared[i] = NULL;
+    }
+
+    pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
+    sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
+    free(pActorPos);
+
+    rc = sqlite3_close(conn->db);
+    if(rc != SQLITE_OK)
+    {
+        
+    }
+    // sqlite3HashClear(&cmd->conn->walPages);
+
+    memset(conn,0,sizeof(db_connection));
 }
 
 void do_open(char *name, db_command *cmd, db_thread *thread) 
@@ -134,14 +130,13 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
         }
         size = strlen(name);
 
-        memset(cmd->conn->dbpath,0,100);
+        memset(cmd->conn->dbpath,0,MAX_ACTOR_NAME);
         sprintf(cmd->conn->dbpath,"%s",name);
 
         pActorPos = malloc(sizeof(int));
         *pActorPos = i;
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorPos);
 
-        cmd->conn->nPages = cmd->conn->nPrevPages = 0;
         cmd->conn->thread = thread->index;
     }
     else
@@ -195,7 +190,7 @@ int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char
 			    break;
 		    case SQLITE_TEXT:
 			    print ? printf(" \"%s\" ", sqlite3_column_text(statement, i)) : 0;
-                snprintf(buf,1024*10-1,"'%s'",sqlite3_column_text(statement, i));
+                snprintf(buf,1024*10-1,"%s",sqlite3_column_text(statement, i));
 			    break;
 		    }
 
@@ -232,7 +227,6 @@ void close_conns(db_thread *thread)
         {
             clcmd.conn = &thread->conns[i];
             // If no pages in wall, db will be closed
-            thread->conns[i].nPages = 0;
             do_close(&clcmd,thread);
         }
     }
@@ -269,6 +263,26 @@ void cleanup(db_thread *thread)
     }
 }
 
+void check_large(db_thread *thread, db_command *clcmd, char *buf, char* buf1)
+{
+    int i,j,rc;
+    for (i = 0; i < 3; i++)
+    {
+        thread->curConn = clcmd->conn = &thread->conns[i];
+        for (j = 0; j < 1000; j++)
+        {
+            char str[10];
+            char *res[] = {str,buf1};
+            
+            sprintf(str,"%d",j+10);
+            sprintf(buf,"select * from tab where id=%d;",j+10);
+            rc = do_exec(buf,clcmd,thread,res); 
+            assert(SQLITE_OK == rc);
+        }
+    }
+}
+
+
 int main()
 {
 	db_thread thread;
@@ -285,16 +299,11 @@ int main()
     memset(buf,0,sizeof(buf));
     memset(buf1,0,sizeof(buf1));
 
-    memset(buf1,'a',4096*2);
-    sprintf(buf,"'%s'",buf1);
-    memcpy(buf1,buf,sizeof(buf));
-    memset(buf,0,sizeof(buf));
-
     char* dbnames[] = {"my1.db","my2.db","my3.db"};
-    char* initvals[4][2] = {{"1","'db1 text'"},
-                            {"1","'db2 text'"},
-                            {"1","'db3 text'"},
-                            {"2","'db1 second'"}};
+    char* initvals[4][2] = {{"1","db1 text"},
+                            {"1","db2 text"},
+                            {"1","db3 text"},
+                            {"2","db1 second"}};
 	
 	memset(&thread,0,sizeof(db_thread));
 	memset(&clcmd,0,sizeof(db_command));
@@ -316,7 +325,7 @@ int main()
         thread.curConn = clcmd.conn = &thread.conns[i];
         do_exec("PRAGMA journal_mode=wal;",&clcmd,&thread,NULL);
         do_exec("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",&clcmd,&thread,NULL);
-        sprintf(buf,"INSERT INTO tab VALUES (%s,%s);",initvals[i][0],initvals[i][1]);
+        sprintf(buf,"INSERT INTO tab VALUES (%s,'%s');",initvals[i][0],initvals[i][1]);
         do_exec(buf,&clcmd,&thread,NULL);
     }
 	
@@ -345,10 +354,11 @@ int main()
     rc = do_exec("SAVEPOINT 'adb';",&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
     
+    memset(buf1,'a',4096*2);
     // write more than a pages worth of valid insert (which should force some data to disk)
     for (i = 2; i < 1000; i++)
     {
-        sprintf(buf,"insert into tab values (%d,%s);",i,buf1);
+        sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
         rc = do_exec(buf,&clcmd,&thread,NULL); 
         assert(SQLITE_OK == rc);
     }
@@ -364,7 +374,7 @@ int main()
     assert(SQLITE_OK == rc);
 
     // write to id 2, which must succeed
-    sprintf(buf,"INSERT INTO tab VALUES (%s,%s);",initvals[3][0],initvals[3][1]);
+    sprintf(buf,"INSERT INTO tab VALUES (%s,'%s');",initvals[3][0],initvals[3][1]);
     rc = do_exec(buf,&clcmd,&thread,initvals[3]);
     assert(SQLITE_OK == rc);
     sprintf(buf,"SELECT * from tab where id=%s;",initvals[3][0]);
@@ -379,6 +389,7 @@ int main()
         assert(SQLITE_OK == rc);
     }
 
+    memset(buf1,'b',4096*2);
     // Test checkpoints
     printf("Insert multiple wal file amount of data\r\n");
     // insert a lot of data
@@ -387,7 +398,7 @@ int main()
         for (j = 0; j < ndbs; j++)
         {
             thread.curConn = clcmd.conn = &thread.conns[j];
-            sprintf(buf,"insert into tab values (%d,%s);",i+10,buf1);
+            sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
             rc = do_exec(buf,&clcmd,&thread,NULL); 
             assert(SQLITE_OK == rc);
         }
@@ -400,6 +411,11 @@ int main()
             break;
     }
     // printf("Pages %i %d\r\n",i,thread.conns[0].nPages);
+
+    // Close everything
+    reset(&thread,conns);
+    // Check if all still there
+    check_large(&thread, &clcmd, buf, buf1);
     
 
     printf("Checkpointing\r\n");
@@ -412,21 +428,7 @@ int main()
     reset(&thread,conns);
 
     printf("Verifying data\r\n");
-    // Check for all data.
-    for (i = 0; i < ndbs; i++)
-    {
-        thread.curConn = clcmd.conn = &thread.conns[i];
-        for (j = 0; j < 1000; j++)
-        {
-            char str[10];
-            char *res[] = {str,buf1};
-            
-            sprintf(str,"%d",j+10);
-            sprintf(buf,"select * from tab where id=%d;",j+10);
-            rc = do_exec(buf,&clcmd,&thread,res); 
-            assert(SQLITE_OK == rc);
-        }
-    }
+    check_large(&thread, &clcmd, buf, buf1);
     printf("Tests succeeded\r\n");
 
     close_conns(&thread);

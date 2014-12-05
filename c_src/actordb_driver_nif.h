@@ -9,6 +9,7 @@
 #define PACKET_ITEMS 9
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
+#define MAX_ACTOR_NAME 96
 
 #ifndef _TESTAPP_
 static ErlNifResourceType *db_connection_type = NULL;
@@ -83,6 +84,7 @@ struct Wal {
   u64 walIndex;
   u8 init;
   u8 lockError;
+  u8 dirty;                  /* 1 when between commit flags */
 
   Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
                   that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded
@@ -115,7 +117,7 @@ struct wal_file
 	u8 bigEndCksum;
 	sqlite3_file *pWalFd;
 	u32 aSalt[2];
-	u32 nPages;
+	// u32 nPages;
   u32 lastCommit; // frame number of last commit. Used in sqlite3WalUndo
   u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
                      // once we reach the end of actor table, we are done.
@@ -136,6 +138,11 @@ struct db_thread
     ErlNifTid tid;
     #endif
     int alive;
+    // initialized to random, increased for every call.
+    // it is used to distinguish writes to same actor from each other and detect
+    // when they should be rollbacked (if they do not end with db size number).
+    // Unlike regular sqlite wal files, in actordb wal files can be intertwined.
+    u32 threadNum;
     // Index in table od threads.
     unsigned int index;
     // so currently executing connection data is accessible from wal callback
@@ -178,15 +185,13 @@ struct db_connection
     sqlite3 *db;
     struct Wal *wal;
     // Hash walPages;
-    char dbpath[100];
+    char dbpath[MAX_ACTOR_NAME];
     // Is db open from erlang. It may just be open in driver.
     char nErlOpen;
     char checkpointLock;
+
+    u32 lastWriteThreadNum;
     
-    // // How many pages in wal. Decremented on checkpoints.
-    // int nPages;
-    // // Before a new write, remember old npages.
-    // int nPrevPages;
     u64 writeNumber;
     u64 writeTermNumber;
     char wal_configured;
@@ -238,12 +243,7 @@ typedef enum
 {
     cmd_unknown,
     cmd_open,
-    cmd_exec,
     cmd_exec_script,
-    cmd_prepare,
-    cmd_bind,
-    cmd_step,
-    cmd_column_names,
     cmd_close,
     cmd_stop,
     cmd_backup_init,
@@ -256,7 +256,8 @@ typedef enum
     cmd_bind_insert,
     cmd_alltunnel_call,
     cmd_store_prepared,
-    cmd_checkpoint_lock
+    cmd_checkpoint_lock,
+    cmd_iterate_wal
 } command_type;
 
 typedef struct 

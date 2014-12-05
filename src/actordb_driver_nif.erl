@@ -28,11 +28,19 @@
          replicate_opts/3,
          wal_header/1,
          wal_checksum/4,
+         page_size/0,
+         traverse_wal/3,
          % replicate_status/1,
          bind_insert/5,
          all_tunnel_call/3,
          checkpoint_lock/4
 ]).
+
+page_size() ->
+    exit(nif_library_not_loaded).
+
+traverse_wal(_,_,_) ->
+    exit(nif_library_not_loaded).
 
 checkpoint_lock(_,_,_,_) ->
     exit(nif_library_not_loaded).

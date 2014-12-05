@@ -609,10 +609,11 @@ static void walIndexWriteHdr(Wal *pWal){
 **     0: Page number.
 **     4: For commit records, the size of the database image in pages 
 **        after the commit. For all other records, zero.
-**     8: writeNumber (custom)
-**    16: writeTermNumber (custom)
-**    24: actor index (actor index in thread)
-**    28: Actorname
+**     8: writeNumber (ActorDB addition)
+**    16: writeTermNumber (ActorDB addition)
+**    24: actor index (ActorDB addition: actor index in thread)
+**    28: threadWriteNumber (ActorDB addition: used to detect uncomitted writes)
+**    32: Actorname (ActorDB addition)
 **    128: Salt-1 (copied from the wal-header)
 **    132: Salt-2 (copied from the wal-header)
 **    136: Checksum-1.
@@ -639,7 +640,8 @@ static void walEncodeFrame(
     writeUInt64(&aFrame[8], conn->writeNumber);
     writeUInt64(&aFrame[16], conn->writeTermNumber);
     sqlite3Put4byte(&aFrame[24], conn->connindex);
-    memcpy((char*)&aFrame[28],conn->dbpath,100);
+    sqlite3Put4byte(&aFrame[28], pWal->thread->threadNum);
+    memcpy((char*)&aFrame[32],conn->dbpath,MAX_ACTOR_NAME);
   }
   else
   {
@@ -671,6 +673,7 @@ static int walDecodeFrame(
   u32  *actorIndex,               /* OUT: actor index */
   u64  *writeNumber,              /* OUT: writeNumber */
   u64  *writeTermNumber,          /* OUT: writeTermNumber */
+  u32  *threadWriteNum,
   u8 *aData,                      /* Pointer to page data (for checksum) */
   u8 *aFrame                      /* Frame data */
 ){
@@ -708,25 +711,27 @@ static int walDecodeFrame(
    || aCksum[1]!=sqlite3Get4byte(&aFrame[140]) 
   ){
     /* Checksum failed. */
-	*writeNumber = readUInt64(&aFrame[8]);
-	*writeTermNumber = readUInt64(&aFrame[16]);
-	*actorIndex = sqlite3Get4byte(&aFrame[24]);
-	*piPage = pgno;
-  	*pnTruncate = sqlite3Get4byte(&aFrame[4]);
-	if (filename != NULL)
-		memcpy(filename,&aFrame[28],100);
+	// *writeNumber = readUInt64(&aFrame[8]);
+	// *writeTermNumber = readUInt64(&aFrame[16]);
+	// *actorIndex = sqlite3Get4byte(&aFrame[24]);
+	// *threadWriteNum = sqlite3Get4byte(&aFrame[28]);
+	// *piPage = pgno;
+ 	// *pnTruncate = sqlite3Get4byte(&aFrame[4]);
+	// if (filename != NULL)
+	// 	memcpy(filename,&aFrame[32],MAX_ACTOR_NAME);
 	// DBG(("Pagen %d %d, trunc %d\r\n",pWal->bigEndCksum,*piPage,*pnTruncate));
 	// DBG(("Actor index %d, wn %llu, wtn %llu\r\n",*actorIndex, *writeNumber, *writeTermNumber));
 	// DBG(("NAME %s\r\n",filename));
- //    DBG(("Checksum failed %d %d %d %d\r\n",aCksum[0],aCksum[1],sqlite3Get4byte(&aFrame[136]),sqlite3Get4byte(&aFrame[140])));
+ 	// DBG(("Checksum failed %d %d %d %d\r\n",aCksum[0],aCksum[1],sqlite3Get4byte(&aFrame[136]),sqlite3Get4byte(&aFrame[140])));
     return 0;
   }
 
   *writeNumber = readUInt64(&aFrame[8]);
   *writeTermNumber = readUInt64(&aFrame[16]);
   *actorIndex = sqlite3Get4byte(&aFrame[24]);
+  *threadWriteNum = sqlite3Get4byte(&aFrame[28]);
   if (filename != NULL)
-  	memcpy(filename,&aFrame[28],100);
+  	memcpy(filename,&aFrame[32],MAX_ACTOR_NAME);
 
   /* If we reach this point, the frame is valid.  Return the page number
   ** and the new database size.
@@ -1241,6 +1246,7 @@ int read_thread_wal(db_thread *thread)
     short curPathLen;
     int i;
     int *pActorIndex;
+    u32 threadWriteNum;
 
     rc = sqlite3OsFileSize(curWal->pWalFd, &nSize);
     if( rc!=SQLITE_OK )
@@ -1274,7 +1280,8 @@ int read_thread_wal(db_thread *thread)
         	DBG(("Can not read file\r\n"));
         	break;
         }
-        isValid = walDecodeFrame(curWal, &pgno, &nTruncate,filename+thread->pathlen+1,&actorIndex, &writeNumber,&writeTermNumber, aData, aFrame);
+        isValid = walDecodeFrame(curWal, &pgno, &nTruncate,filename+thread->pathlen+1,&actorIndex, 
+        						&writeNumber,&writeTermNumber,&threadWriteNum,aData, aFrame);
         if( !isValid )
         {
         	DBG(("Frame INVALID! %s\r\n",filename));
@@ -1283,44 +1290,35 @@ int read_thread_wal(db_thread *thread)
 
         // DBG(("Frame belongs to %s, truncate %d, pgno %d\r\n",filename,nTruncate,pgno));
 
-        if (curConn != NULL && strncmp(filename+thread->pathlen+1,curConn->dbpath,100) == 0)
+        if (curConn != NULL && actorIndex == curConn->connindex && curConn->wal->walIndex == curWal->walIndex)
         {
-          // continue
-          // curConn->nPages++;
         }
         else
         {
-          // open new
-          if (!prevDone)
-          {
-            // previous transaction was not finished, we must undo index for it
-            sqlite3WalUndo(curConn->wal, NULL, NULL);
-          }
-
           if (thread->nconns <= actorIndex)
           {
-            int newsize = sizeof(db_connection)*thread->nconns*actorIndex*1.2;
+            int newsize = sizeof(db_connection)*(actorIndex*1.2);
             db_connection *newcons = malloc(newsize);
             memset(newcons,0,newsize);
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
             thread->nconns = actorIndex*1.2;
           }
-          if (curConn != NULL)
-          {
-          	sqlite3WalEndReadTransaction(curConn->wal);
-          	curConn->wal->init = 0;
-          }
+          // if (curConn != NULL)
+          // {
+          // 	sqlite3WalEndReadTransaction(curConn->wal);
+          // 	curConn->wal->init = 0;
+          // }
           	
           curConn = &thread->conns[actorIndex];
           if (curConn->db == NULL)
           {
             curPathLen = strlen(filename+thread->pathlen+1)+1;
-            if (curPathLen >= 100)
+            if (curPathLen >= MAX_ACTOR_NAME)
             {
             	rc = SQLITE_ERROR;
             	break;
             }
-            memset(curConn->dbpath,0,100);
+            memset(curConn->dbpath,0,MAX_ACTOR_NAME);
             strcpy(curConn->dbpath,filename+thread->pathlen+1);
 
             rc = sqlite3_open(filename,&(curConn->db));
@@ -1342,11 +1340,32 @@ int read_thread_wal(db_thread *thread)
 		    pActorIndex = malloc(sizeof(int));
 		    *pActorIndex = actorIndex;
             sqlite3HashInsert(&thread->walHash, curConn->dbpath, pActorIndex);
-            // curConn->nPages = 1;
-            // curConn->nPrevPages = 0;
           }
-          else
-          	sqlite3WalBeginReadTransaction(curConn->wal,&rc);
+          // Actor already open from previous wal file. We need to create a new Wal structure
+          //  at head of linked list.
+          else if (curConn->wal->walIndex != curWal->walIndex)
+          {
+          	Wal *tmpWal = malloc(sizeof(struct Wal));
+            memset(tmpWal,0,sizeof(struct Wal));
+            tmpWal->thread = thread;
+		    tmpWal->pWalFd = curWal->pWalFd;
+		    tmpWal->exclusiveMode = WAL_HEAPMEMORY_MODE;
+		    tmpWal->padToSectorBoundary = 1;
+		    tmpWal->syncHeader = 0;
+		    tmpWal->readLock = -1;
+		    sqlite3WalBeginReadTransaction(tmpWal,&rc);
+		    // We are moving from oldest to youngest wal. So new one in front.
+		    tmpWal->prev = curConn->wal;
+		    curConn->wal = tmpWal;
+          }
+          // else
+          // 	sqlite3WalBeginReadTransaction(curConn->wal,&rc);
+        }
+        
+        if (curConn->lastWriteThreadNum != threadWriteNum && curConn->wal->dirty)
+        {
+        	// previous transaction was not finished, we must undo index for it
+            sqlite3WalUndo(curConn->wal, NULL, NULL);
         }
 
         rc = walIndexAppend(curConn->wal, iFrame, pgno);
@@ -1356,9 +1375,9 @@ int read_thread_wal(db_thread *thread)
         if( nTruncate )
         {
           WalCkptInfo *pInfo;
-          prevDone = 1;
           thread->walFile->mxFrame = iFrame;
           thread->walFile->lastCommit = iFrame;
+          curConn->wal->dirty = 0;
           curConn->wal->hdr.mxFrame = iFrame;
           curConn->wal->hdr.nPage = nTruncate;
           curConn->wal->hdr.szPage = (u16)((curWal->szPage&0xff00) | (curWal->szPage>>16));
@@ -1373,22 +1392,29 @@ int read_thread_wal(db_thread *thread)
           for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
           if( curConn->wal->hdr.mxFrame ) pInfo->aReadMark[1] = curConn->wal->hdr.mxFrame;
       	  sqlite3WalEndWriteTransaction(curConn->wal);
-
-          // aFrameCksum[0] = pWal->hdr.aFrameCksum[0];
-          // aFrameCksum[1] = pWal->hdr.aFrameCksum[1];
         }
         else
-          prevDone = 0;
+        {
+        	curConn->wal->dirty = 1;
+        }
+        curConn->lastWriteThreadNum = threadWriteNum;
       }
-      // open new
-      if (!prevDone && curConn != NULL)
+
+      for (i = 0; i < thread->nconns; i++)
       {
-        // previous transaction was not finished, we must undo index for it
-        sqlite3WalUndo(curConn->wal, NULL, NULL);
-      }
-      if (curConn != NULL)
-      {
+      	if (!thread->conns[i].db)
+      		continue;
+
+      	curConn = &thread->conns[actorIndex];
+      	if (curConn->wal->dirty)
+      	{
+      		// we have an unfinished transaction and we reached end of wal
+      		sqlite3WalUndo(curConn->wal, NULL, NULL);
+      		curConn->wal->dirty = 0;
+      	}
+      	// If conn had and wals in current file, it has an open read transaction
       	sqlite3WalEndReadTransaction(curConn->wal);
+      	// necessary to cause clear page cache on first read/write to DB. 
       	curConn->wal->init = 0;
       }
       	
@@ -2645,36 +2671,40 @@ int sqlite3WalFrames(
   ** nTruncate==0 then this frame set does not complete the transaction. */
   assert( (isCommit!=0)==(nTruncate!=0) );
 
-  // Do we need to create new wal file?
-  if ((*pWal)->thread->walFile->mxFrame > 1024*3)
+  // Only move on to new wal files when this is beginning of a new write
+  if (!(*pWal)->dirty)
   {
-  	char filename[MAX_PATHNAME];
-  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,(*pWal)->thread->walFile->walIndex+1);
-  	DBG(("Creating new wal!\r\n"));
-  	wal_file *nw = new_wal_file(filename,(*pWal)->thread->vfs);
-  	nw->walIndex = (*pWal)->thread->walFile->walIndex+1;
-  	nw->prev = (*pWal)->thread->walFile;
-  	(*pWal)->thread->walFile = nw;
-  }
+  	  // Do we need to create new wal file?
+	  if ((*pWal)->thread->walFile->mxFrame > 1024*3)
+	  {
+	  	char filename[MAX_PATHNAME];
+	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,(*pWal)->thread->walFile->walIndex+1);
+	  	DBG(("Creating new wal!\r\n"));
+	  	wal_file *nw = new_wal_file(filename,(*pWal)->thread->vfs);
+	  	nw->walIndex = (*pWal)->thread->walFile->walIndex+1;
+	  	nw->prev = (*pWal)->thread->walFile;
+	  	(*pWal)->thread->walFile = nw;
+	  }
 
-  // Do we need to create a new wal structure for newer file?
-  if ((*pWal)->thread->walFile->walIndex > (*pWal)->walIndex)
-  {
-  	// DBG(("OPENING INTO NEW WAL FILE %d\r\n",(*pWal)->thread->curConn->connindex));
-    Wal *newWal;
-    int changed;
-    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)(*pWal)->thread);
-    sqlite3WalEndReadTransaction(*pWal);
-    sqlite3WalEndWriteTransaction(*pWal);
-    newWal->prev = *pWal;
-    newWal->pWalFd = (*pWal)->thread->walFile->pWalFd;
-    newWal->walIndex = (*pWal)->thread->walFile->walIndex;
-    
-    (*pWal)->thread->curConn->wal = newWal;
-    *pWal = newWal;
+	  // Do we need to create a new wal structure for newer file?
+	  if ((*pWal)->thread->walFile->walIndex > (*pWal)->walIndex)
+	  {
+	  	// DBG(("OPENING INTO NEW WAL FILE %d\r\n",(*pWal)->thread->curConn->connindex));
+	    Wal *newWal;
+	    int changed;
+	    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)(*pWal)->thread);
+	    sqlite3WalEndReadTransaction(*pWal);
+	    sqlite3WalEndWriteTransaction(*pWal);
+	    newWal->prev = *pWal;
+	    newWal->pWalFd = (*pWal)->thread->walFile->pWalFd;
+	    newWal->walIndex = (*pWal)->thread->walFile->walIndex;
+	    
+	    (*pWal)->thread->curConn->wal = newWal;
+	    *pWal = newWal;
 
-    sqlite3WalBeginReadTransaction(*pWal,&changed);
-    sqlite3WalBeginWriteTransaction(*pWal);
+	    sqlite3WalBeginReadTransaction(*pWal,&changed);
+	    sqlite3WalBeginWriteTransaction(*pWal);
+	  }
   }
 
   iFrame = (*pWal)->thread->walFile->mxFrame;
@@ -2821,10 +2851,13 @@ int sqlite3WalFrames(
     (*pWal)->hdr.mxFrame = iFrame;
     (*pWal)->thread->walFile->mxFrame = iFrame;
     if( isCommit ){
+      (*pWal)->dirty = 0;
       (*pWal)->hdr.iChange++;
       (*pWal)->hdr.nPage = nTruncate;
       (*pWal)->thread->walFile->lastCommit = iFrame;
     }
+    else
+    	(*pWal)->dirty = 1;
     /* If this is a commit, update the wal-index header too. */
     if( isCommit ){
       walIndexWriteHdr(*pWal);
@@ -3036,6 +3069,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
     ** was in before the client began writing to the database. 
     */
     memcpy(&pWal->hdr, (void *)walIndexHdr(pWal), sizeof(WalIndexHdr));
+    pWal->dirty = 0;
 
     if (xUndo != NULL)
     {
