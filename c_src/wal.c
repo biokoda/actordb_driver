@@ -1165,8 +1165,6 @@ int read_thread_wal(db_thread *thread)
 
     if (!(strlen(ent->d_name) > 4 && ent->d_name[0] == 'w' && ent->d_name[1] == 'a' && ent->d_name[2] == 'l' && ent->d_name[3] == '.'))
       continue;
-
-    DBG(("OPENING : %s/%s\r\n",thread->path,ent->d_name));
     
     snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,ent->d_name);
     pWalFd = sqlite3MallocZero(thread->vfs->szOsFile);
@@ -1179,6 +1177,7 @@ int read_thread_wal(db_thread *thread)
       remove(filename);
       continue;
     }
+    // DBG(("OPENED: %s/%s - %llu\r\n",thread->path,ent->d_name, walInfo->walIndex));
 
     walInfo->filename = malloc(strlen(filename)+1);
     memset(walInfo->filename,0,sizeof(strlen(filename)+1));
@@ -1195,6 +1194,11 @@ int read_thread_wal(db_thread *thread)
     // Linked list is from newest to oldest.
     if (!thread->walFile)
       thread->walFile = walInfo;
+  	else if (walInfo->walIndex > thread->walFile->walIndex)
+  	{
+  		walInfo->prev = thread->walFile;
+  		thread->walFile = walInfo;
+  	}
     else
     {
       prevWal = thread->walFile->prev;
@@ -1202,8 +1206,8 @@ int read_thread_wal(db_thread *thread)
       // Go back to the end or until we find a wal file with lower index
       while (prevWal != NULL && prevWal->walIndex > walInfo->walIndex)
       {
+      	curWal = prevWal;
         prevWal = prevWal->prev;
-        curWal = prevWal;
       }
       curWal->prev = walInfo;
       // Place current wal in the middle
@@ -1303,11 +1307,6 @@ int read_thread_wal(db_thread *thread)
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
             thread->nconns = actorIndex*1.2;
           }
-          // if (curConn != NULL)
-          // {
-          // 	sqlite3WalEndReadTransaction(curConn->wal);
-          // 	curConn->wal->init = 0;
-          // }
           	
           curConn = &thread->conns[actorIndex];
           if (curConn->db == NULL)
@@ -1335,6 +1334,7 @@ int read_thread_wal(db_thread *thread)
 		    curConn->wal->padToSectorBoundary = 1;
 		    curConn->wal->syncHeader = 0;
 		    curConn->wal->readLock = -1;
+		    curConn->wal->walIndex = curWal->walIndex;
 
 		    sqlite3WalBeginReadTransaction(curConn->wal,&rc);
 		    pActorIndex = malloc(sizeof(int));
@@ -1353,13 +1353,12 @@ int read_thread_wal(db_thread *thread)
 		    tmpWal->padToSectorBoundary = 1;
 		    tmpWal->syncHeader = 0;
 		    tmpWal->readLock = -1;
+		    tmpWal->walIndex = curWal->walIndex;
 		    sqlite3WalBeginReadTransaction(tmpWal,&rc);
 		    // We are moving from oldest to youngest wal. So new one in front.
 		    tmpWal->prev = curConn->wal;
 		    curConn->wal = tmpWal;
           }
-          // else
-          // 	sqlite3WalBeginReadTransaction(curConn->wal,&rc);
         }
         
         if (curConn->lastWriteThreadNum != threadWriteNum && curConn->wal->dirty)
@@ -1405,7 +1404,7 @@ int read_thread_wal(db_thread *thread)
       	if (!thread->conns[i].db)
       		continue;
 
-      	curConn = &thread->conns[actorIndex];
+      	curConn = &thread->conns[i];
       	if (curConn->wal->dirty)
       	{
       		// we have an unfinished transaction and we reached end of wal
