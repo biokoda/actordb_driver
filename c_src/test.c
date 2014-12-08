@@ -410,10 +410,10 @@ int main()
         if(pgDone)
             break;
     }
-    // printf("Pages %i %d\r\n",i,thread.conns[0].nPages);
-
+    printf("Reset\r\n");
     // Close everything
     reset(&thread,conns);
+    printf("Check data\r\n");
     // Check if all still there
     check_large(&thread, &clcmd, buf, buf1);
     

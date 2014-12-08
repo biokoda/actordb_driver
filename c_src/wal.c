@@ -2595,36 +2595,57 @@ int sqlite3WalOpen(
 ){
     int iDC;
     Wal *pRet = NULL;
+    Wal *curWal = NULL;
+    wal_file *walFile = NULL;
+    db_thread *thread = (db_thread*)walData;
 
     if (zWalName != NULL)
-		pRet = ((db_thread*)walData)->curConn->wal;
+    {
+    	pRet = ((db_thread*)walData)->curConn->wal;
+    	// curWal = pRet;
+    	// while (curWal != NULL)
+    	// {
+    	// 	curWal->pVfs = pVfs;
+    	// 	curWal = curWal->prev;
+    	// }
+    }
+		
 	if (!pRet)
 	{
 		pRet = malloc(sizeof(Wal));
 		memset(pRet,0,sizeof(Wal));
 	}
+	curWal = pRet;
+	walFile = thread->walFile;
 
-    // if(!pRet)
-    // {
-    //     return SQLITE_NOMEM;
-    // }
-    pRet->pVfs = pVfs;
-    pRet->pDbFd = pDbFd;
-    pRet->thread = (db_thread*)walData;
-    pRet->pWalFd = pRet->thread->walFile->pWalFd;
-    // pRet->thread->curConn->pWal = pRet;
+	do
+	{	
+		curWal->pVfs = pVfs;
+	    curWal->pDbFd = pDbFd;
+	    curWal->thread = thread;
+	    curWal->pWalFd = walFile->pWalFd;
 
-    // No one is accessing this db other than current thread.
-    pRet->exclusiveMode = WAL_HEAPMEMORY_MODE;
-    pRet->padToSectorBoundary = 1;
-    pRet->syncHeader = 0;
-    pRet->readLock = -1;
+	    // No one is accessing this db other than current thread.
+	    curWal->exclusiveMode = WAL_HEAPMEMORY_MODE;
+	    curWal->padToSectorBoundary = 1;
+	    curWal->syncHeader = 0;
+	    curWal->readLock = -1;
 
-    iDC = sqlite3OsDeviceCharacteristics(pDbFd);
-    if( iDC & SQLITE_IOCAP_SEQUENTIAL ){ pRet->syncHeader = 0; }
-    if( iDC & SQLITE_IOCAP_POWERSAFE_OVERWRITE ){
-      pRet->padToSectorBoundary = 0;
-    }
+	    iDC = sqlite3OsDeviceCharacteristics(pDbFd);
+	    if( iDC & SQLITE_IOCAP_SEQUENTIAL ){ curWal->syncHeader = 0; }
+	    if( iDC & SQLITE_IOCAP_POWERSAFE_OVERWRITE ){
+	      curWal->padToSectorBoundary = 0;
+	    }
+	    curWal = curWal->prev;
+	    if (curWal)
+	    {
+	    	walFile = thread->walFile;
+	    	while (walFile->walIndex != curWal->walIndex)
+				walFile = walFile->prev;
+	    }
+	}while(curWal);
+
+    
     *ppWal = pRet;
 
     return SQLITE_OK;
@@ -2878,7 +2899,7 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    // DBG(("Wal find frame %d, last %d\r\n",pgno, iLast));
+    // DBG(("Wal find frame, walindex=%llu, pgno=%d last=%d\r\n",pWal->walIndex,pgno, iLast));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -2920,6 +2941,10 @@ int sqlite3WalFindFrame(
           return SQLITE_CORRUPT_BKPT;
         }
       }
+    }
+    if (iRead == 0 && pWal->prev)
+    {
+    	return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
     }
 
     *walIndex = pWal->walIndex;
