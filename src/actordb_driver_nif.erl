@@ -33,7 +33,8 @@
          % replicate_status/1,
          bind_insert/5,
          all_tunnel_call/3,
-         checkpoint_lock/4
+         checkpoint_lock/4,
+         inject_page/4
 ]).
 
 page_size() ->
@@ -43,6 +44,9 @@ traverse_wal(_,_,_) ->
     exit(nif_library_not_loaded).
 
 checkpoint_lock(_,_,_,_) ->
+    exit(nif_library_not_loaded).
+
+inject_page(_,_,_,_) ->
     exit(nif_library_not_loaded).
 
 store_prepared_table(_,_) ->

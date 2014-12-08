@@ -1245,7 +1245,6 @@ int read_thread_wal(db_thread *thread)
     int iOffset;
     int isValid;
     db_connection *curConn = thread->curConn;
-    char prevDone = 1;
     u32 actorIndex;
     short curPathLen;
     int i;

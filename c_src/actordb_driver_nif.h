@@ -10,6 +10,7 @@
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 96
+#define WAL_LIMIT 1024*3 //*pagesize -> ~12MB
 
 #ifndef _TESTAPP_
 static ErlNifResourceType *db_connection_type = NULL;
@@ -257,7 +258,8 @@ typedef enum
     cmd_alltunnel_call,
     cmd_store_prepared,
     cmd_checkpoint_lock,
-    cmd_iterate_wal
+    cmd_iterate_wal,
+    cmd_inject_page
 } command_type;
 
 typedef struct 

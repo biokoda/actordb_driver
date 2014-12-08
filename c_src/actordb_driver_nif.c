@@ -992,8 +992,44 @@ do_traverse_wal(db_command *cmd, db_thread *thread)
 {
     char done;
     char activeWal;
-    char buffer[SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE];
+    ErlNifBinary bin;
+    ERL_NIF_TERM tBin;
+    int rc;
 
+    enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
+
+    rc = iterate_wal(cmd->conn,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(char*)bin.data,&done,&activeWal);
+    if (rc > 0)    
+    {
+        tBin = enif_make_binary(cmd->env,&bin);
+        enif_release_binary(&bin);
+        return enif_make_tuple4(cmd->env,atom_ok,tBin,
+                            enif_make_int(cmd->env,(int)done), 
+                            enif_make_int(cmd->env,(int)activeWal));
+    }
+    enif_release_binary(&bin);
+    return atom_false;
+}
+
+static ERL_NIF_TERM
+do_inject_page(db_command *cmd, db_thread *thread)
+{
+    Wal *pWalIn = cmd->conn->wal;
+    PgHdr page;
+    ErlNifBinary bin;
+    u32 commit;
+    int rc;
+
+    memset(&page,0,sizeof(PgHdr));
+    enif_inspect_binary(cmd->env,cmd->arg,&bin);
+
+    page.pData = bin.data;
+    page.pgno = sqlite3Get4byte(bin.data);
+    commit = sqlite3Get4byte(&bin.data[4]);
+
+    rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+    if (rc == SQLITE_OK)
+        return atom_false;
     return atom_ok;
 }
 
@@ -1544,6 +1580,8 @@ evaluate_command(db_command *cmd,db_thread *thread)
         return do_backup_finish(cmd,thread);
     case cmd_backup_step:
         return do_backup_step(cmd,thread);
+    case cmd_inject_page:
+        return do_inject_page(cmd,thread);
     case cmd_interrupt:
         return do_interrupt(cmd,thread);
     case cmd_iterate_wal:
@@ -2445,6 +2483,45 @@ traverse_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM 
+inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    conn_resource *res;
+    db_command *cmd = NULL;
+    ErlNifPid pid;
+    void *item;
+     
+    if(argc != 4) 
+        return enif_make_badarg(env);  
+    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+        return enif_make_badarg(env);
+        
+    if(!enif_is_ref(env, argv[1])) 
+        return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[2], &pid)) 
+        return make_error_tuple(env, "invalid_pid"); 
+    if (!enif_is_binary(env,argv[3]))
+        return make_error_tuple(env,"not binary");
+    
+    item = command_create(res->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+    {
+        return make_error_tuple(env, "command_create_failed");
+    }
+
+    /* command */
+    cmd->type = cmd_inject_page;
+    cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    cmd->pid = pid;
+    cmd->arg = enif_make_copy(cmd->env,argv[3]);
+    cmd->connindex = res->connindex;
+
+    enif_consume_timeslice(env,500);
+
+    return push_command(res->thread, item);
+}
+
+static ERL_NIF_TERM 
 bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
@@ -2698,7 +2775,8 @@ static ErlNifFunc nif_funcs[] = {
     {"store_prepared_table",2,store_prepared_table},
     {"checkpoint_lock",4,checkpoint_lock},
     {"traverse_wal",3,traverse_wal},
-    {"page_size",0,page_size}
+    {"page_size",0,page_size},
+    {"inject_page",4,inject_page}
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);
