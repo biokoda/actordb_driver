@@ -1540,6 +1540,9 @@ do_close(db_command *cmd,db_thread *thread)
         sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
         free(pActorPos);
 
+        if (conn->walIter)
+            walIteratorFree(conn->walIter);
+
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
