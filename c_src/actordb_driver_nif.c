@@ -999,14 +999,19 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
 
     enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
     rc = wal_iterate(cmd->conn,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(char*)bin.data,&done,&activeWal);
-    tBin = enif_make_binary(cmd->env,&bin);
-    enif_release_binary(&bin);
     if (rc == 0 && done)
+    {
+        enif_release_binary(&bin);
         return atom_done;
+    }
     else
+    {
+        tBin = enif_make_binary(cmd->env,&bin);
+        enif_release_binary(&bin);
         return enif_make_tuple4(cmd->env,atom_ok,tBin,
                         enif_make_int(cmd->env,(int)done), 
                         enif_make_int(cmd->env,(int)activeWal));
+    }
 }
 
 static ERL_NIF_TERM
