@@ -307,7 +307,7 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
 #endif
 
-int iterate_wal(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal);
+int wal_iterate(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal);
 int checkpoint_continue(db_thread *thread);
 wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs);
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);

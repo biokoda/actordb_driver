@@ -8,7 +8,7 @@
          exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
          store_prepared_table/2,
          close/1,inject_page/2,
-         parse_helper/1,parse_helper/2, traverse_wal/1,page_size/0, %wal_pages/1,
+         parse_helper/1,parse_helper/2, iterate_wal/1,page_size/0, %wal_pages/1,
          % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
          replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
@@ -98,14 +98,14 @@ lz4_decompress(B,SizeOrig,SizeIn) ->
 % wal_pages({actordb_driver, _Ref, Connection}) ->
 %     actordb_driver_nif:wal_pages(Connection).
 
-traverse_wal({actordb_driver, _Ref, Connection}) ->
+iterate_wal({actordb_driver, _Ref, Connection}) ->
     Ref = make_ref(),
-    ok = actordb_driver_nif:traverse_wal(Connection, Ref, self()),
+    ok = actordb_driver_nif:iterate_wal(Connection, Ref, self()),
     receive_answer(Ref).
 
 inject_page({actordb_driver, _Ref, Connection},Bin) ->
     Ref = make_ref(),
-    ok = actordb_driver_nif:traverse_wal(Connection, Ref, self(),Bin),
+    ok = actordb_driver_nif:inject_page(Connection, Ref, self(),Bin),
     receive_answer(Ref).
 
 page_size() ->

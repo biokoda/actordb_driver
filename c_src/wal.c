@@ -589,7 +589,7 @@ static void walIndexWriteHdr(Wal *pWal){
   WalIndexHdr *aHdr = walIndexHdr(pWal);
   const int nCksum = offsetof(WalIndexHdr, aCksum);
 
-  assert( pWal->writeLock );
+  // assert( pWal->writeLock );
   pWal->hdr.isInit = 1;
   pWal->hdr.iVersion = WALINDEX_MAX_VERSION;
   walChecksumBytes(1, (u8*)&pWal->hdr, nCksum, 0, pWal->hdr.aCksum);
@@ -2033,7 +2033,7 @@ static int walCheckpoint(
 // buffer    -> OUT: buffer to copy wal to
 // done      -> OUT: 1 if no more pages are available
 // activeWal -> OUT: 1 if pages are from an active wal file
-int iterate_wal(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal)
+int wal_iterate(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal)
 {
 	int nFilled = 0;
 	int rc = SQLITE_OK;
@@ -2600,7 +2600,7 @@ int sqlite3WalOpen(
 
     if (zWalName != NULL)
     {
-    	pRet = ((db_thread*)walData)->curConn->wal;
+    	pRet = thread->curConn->wal;
     	// curWal = pRet;
     	// while (curWal != NULL)
     	// {
@@ -2613,6 +2613,7 @@ int sqlite3WalOpen(
 	{
 		pRet = malloc(sizeof(Wal));
 		memset(pRet,0,sizeof(Wal));
+		thread->curConn->wal = pRet;
 	}
 	curWal = pRet;
 	walFile = thread->walFile;

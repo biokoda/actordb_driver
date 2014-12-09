@@ -528,13 +528,9 @@ do_open(db_command *cmd, db_thread *thread)
     int i;
     int *pActorIndex;
 
-    DBG(("thread %s\r\n",thread->path));
-
     memset(filename,0,MAX_PATHNAME);
     memcpy(filename, thread->path, thread->pathlen);
     filename[thread->pathlen] = '/';
-
-    DBG(("PATH %s\r\n",filename));
 
     // DB can actually already be opened in thread->conns
     // Check there with filename first.
@@ -542,8 +538,6 @@ do_open(db_command *cmd, db_thread *thread)
     // Actor path name must be written to wal. Filename slot is MAX_ACTOR_NAME bytes.
     if(size <= 0 || size >= MAX_ACTOR_NAME) 
         return make_error_tuple(cmd->env, "invalid_filename");
-
-    DBG(("PATH1 %s\r\n",filename));
 
     res = enif_alloc_resource(db_connection_type, sizeof(conn_resource*));
     if(!res) 
@@ -569,8 +563,13 @@ do_open(db_command *cmd, db_thread *thread)
         }
         cmd->conn = &thread->conns[i];
         cmd->connindex = i;
+        thread->curConn = cmd->conn;
 
-        rc = sqlite3_open(filename,&(cmd->conn->db));
+        // in case of :memory: db name
+        if (filename[thread->pathlen+1] == ':')
+            rc = sqlite3_open(filename+thread->pathlen+1,&(cmd->conn->db));
+        else
+            rc = sqlite3_open(filename,&(cmd->conn->db));
         if(rc != SQLITE_OK) 
         {
             error = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
@@ -579,6 +578,8 @@ do_open(db_command *cmd, db_thread *thread)
             return error;
         }
 
+        cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
+
         memset(cmd->conn->dbpath,0,MAX_ACTOR_NAME);
         enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
@@ -586,8 +587,8 @@ do_open(db_command *cmd, db_thread *thread)
         *pActorIndex = i;
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorIndex);
 
-        // cmd->conn->nPages = cmd->conn->nPrevPages = 0;
-        // cmd->conn->thread = thread->index;
+        // Always wal. If it was called as :memory: then this call will do nothing.
+        sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;",NULL,NULL,NULL);
     }
     else
     {
@@ -988,7 +989,7 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 
 
 static ERL_NIF_TERM
-do_traverse_wal(db_command *cmd, db_thread *thread)
+do_iterate_wal(db_command *cmd, db_thread *thread)
 {
     char done;
     char activeWal;
@@ -997,18 +998,15 @@ do_traverse_wal(db_command *cmd, db_thread *thread)
     int rc;
 
     enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
-
-    rc = iterate_wal(cmd->conn,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(char*)bin.data,&done,&activeWal);
-    if (rc > 0)    
-    {
-        tBin = enif_make_binary(cmd->env,&bin);
-        enif_release_binary(&bin);
-        return enif_make_tuple4(cmd->env,atom_ok,tBin,
-                            enif_make_int(cmd->env,(int)done), 
-                            enif_make_int(cmd->env,(int)activeWal));
-    }
+    rc = wal_iterate(cmd->conn,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(char*)bin.data,&done,&activeWal);
+    tBin = enif_make_binary(cmd->env,&bin);
     enif_release_binary(&bin);
-    return atom_false;
+    if (rc == 0 && done)
+        return atom_done;
+    else
+        return enif_make_tuple4(cmd->env,atom_ok,tBin,
+                        enif_make_int(cmd->env,(int)done), 
+                        enif_make_int(cmd->env,(int)activeWal));
 }
 
 static ERL_NIF_TERM
@@ -1019,15 +1017,23 @@ do_inject_page(db_command *cmd, db_thread *thread)
     ErlNifBinary bin;
     u32 commit;
     int rc;
+    int ch;
 
     memset(&page,0,sizeof(PgHdr));
     enif_inspect_binary(cmd->env,cmd->arg,&bin);
 
-    page.pData = bin.data;
+    // skip header in data as it will be created when writing
+    page.pData = bin.data + WAL_FRAME_HDRSIZE;
     page.pgno = sqlite3Get4byte(bin.data);
     commit = sqlite3Get4byte(&bin.data[4]);
 
+    cmd->conn->writeNumber = readUInt64(&bin.data[8]);
+    cmd->conn->writeTermNumber = readUInt64(&bin.data[16]);
+    if (cmd->conn->wal)
+        cmd->conn->wal->init = 0;
+
     rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+
     if (rc == SQLITE_OK)
         return atom_false;
     return atom_ok;
@@ -1060,7 +1066,6 @@ do_exec_script(db_command *cmd, db_thread *thread)
     int rowLen = 0;
     listTop = cmd->arg4;
     thread->threadNum++;
-
 
     if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
@@ -1585,7 +1590,7 @@ evaluate_command(db_command *cmd,db_thread *thread)
     case cmd_interrupt:
         return do_interrupt(cmd,thread);
     case cmd_iterate_wal:
-        return do_traverse_wal(cmd,thread);
+        return do_iterate_wal(cmd,thread);
     case cmd_unknown:
         return atom_ok;
     case cmd_tcp_connect:
@@ -2447,7 +2452,7 @@ page_size(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM 
-traverse_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
     db_command *cmd = NULL;
@@ -2774,7 +2779,7 @@ static ErlNifFunc nif_funcs[] = {
     {"all_tunnel_call",3,all_tunnel_call},
     {"store_prepared_table",2,store_prepared_table},
     {"checkpoint_lock",4,checkpoint_lock},
-    {"traverse_wal",3,traverse_wal},
+    {"iterate_wal",3,iterate_wal},
     {"page_size",0,page_size},
     {"inject_page",4,inject_page}
 };

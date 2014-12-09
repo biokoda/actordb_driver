@@ -323,7 +323,6 @@ int main()
     {
         do_open(dbnames[i],&clcmd,&thread);
         thread.curConn = clcmd.conn = &thread.conns[i];
-        do_exec("PRAGMA journal_mode=wal;",&clcmd,&thread,NULL);
         do_exec("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",&clcmd,&thread,NULL);
         sprintf(buf,"INSERT INTO tab VALUES (%s,'%s');",initvals[i][0],initvals[i][1]);
         do_exec(buf,&clcmd,&thread,NULL);
@@ -406,7 +405,7 @@ int main()
 
     for (i = 0;; i++)
     {
-        iterate_wal(&thread.conns[0],4096+WAL_FRAME_HDRSIZE,pgBuf,&pgDone,&pgLast);
+        wal_iterate(&thread.conns[0],4096+WAL_FRAME_HDRSIZE,pgBuf,&pgDone,&pgLast);
         if(pgDone)
             break;
     }
