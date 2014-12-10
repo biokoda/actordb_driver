@@ -2053,6 +2053,9 @@ int wal_rewind(db_connection *conn, u64 evnum)
 	u64 curEvnum;
 	int found = 0;
 	int movedOver = 0;
+	int nSize = 0;
+	const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
+	u32 threadWriteNum;
 
 	while (wal != NULL)
 	{
@@ -2069,7 +2072,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		if (walIteratorNext(conn->walIter, &iDbpage, &iFrame) == 0)
 		{
 			iOffset = walFrameOffset(iFrame, SQLITE_DEFAULT_PAGE_SIZE);
-			rc = sqlite3OsRead(wal->pWalFd, buffer, SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE, iOffset);
+			rc = sqlite3OsRead(wal->pWalFd, buffer, szFrame, iOffset);
 			if (rc != SQLITE_OK)
 			{
 				walIteratorFree(iter);
@@ -2089,8 +2092,8 @@ int wal_rewind(db_connection *conn, u64 evnum)
 					found = found > 1 ? found : 1;
 				}
 				// zero out frame
-				memset(buffer,0,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE);
-				rc = sqlite3OsWrite(wal->pDbFd, buffer, SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE, iOffset);
+				memset(buffer,0,szFrame);
+				rc = sqlite3OsWrite(wal->pDbFd, buffer, szFrame, iOffset);
 				if (rc != SQLITE_OK)
 				{
 					walIteratorFree(iter);
@@ -2112,6 +2115,47 @@ int wal_rewind(db_connection *conn, u64 evnum)
 			movedOver = 0;
 
 			// recreate index
+			walIndexClose(wal, 0);
+			wal->init = 0;
+
+			sqlite3WalBeginReadTransaction(wal,&rc);
+			sqlite3WalBeginWriteTransaction(curConn->wal);
+			rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
+
+			iFrame = 0;
+			for(iOffset=WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
+			{
+				u32 pgno;
+				u32 nTruncate;
+				char filename[MAX_ACTOR_NAME];
+				u32 actorIndex;
+
+				iFrame++;
+				rc = sqlite3OsRead(wal->pWalFd, buffer, szFrame, iOffset);
+		        if( rc!=SQLITE_OK )
+		        {
+		        	DBG(("Can not read file\r\n"));
+		        	break;
+		        }
+		        isValid = walDecodeFrame(curWal, &pgno, &nTruncate,filename,&actorIndex, 
+		        			&curEvnum,&curEvnum,&threadWriteNum,buffer+WAL_FRAME_HDRSIZE, buffer);
+		        if(!isValid)
+		        {
+		        	DBG(("Frame INVALID! %s\r\n",filename));
+		        	break;
+		        }
+		        if (!pgno)
+		        	continue;
+		        if (actorIndex != conn->connindex)
+		        	continue;
+		        rc = walIndexAppend(wal, iFrame, pgno);
+		        if (nTruncate)
+		        {
+		        }
+	    	}
+
+	    	sqlite3WalEndWriteTransaction(wal);
+	    	sqlite3WalEndReadTransaction(wal);
 
 			if (found != 2)
 			{
@@ -2120,6 +2164,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 			else
 				break;
 		}
+
 	}
 
 	return found;
