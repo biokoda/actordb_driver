@@ -397,6 +397,7 @@ int main()
         for (j = 0; j < ndbs; j++)
         {
             thread.curConn = clcmd.conn = &thread.conns[j];
+            clcmd.conn->writeNumber = clcmd.conn->writeTermNumber = i;
             sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
             rc = do_exec(buf,&clcmd,&thread,NULL); 
             assert(SQLITE_OK == rc);

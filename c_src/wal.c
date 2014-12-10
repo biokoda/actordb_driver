@@ -685,8 +685,15 @@ static int walDecodeFrame(
   ** match the salt values in the wal-header. 
   */
   if( memcmp(&pWal->aSalt, &aFrame[128], 8)!=0 ){
-  	// DBG(("Salt does not match %d %d, %d %d\r\n",pWal->aSalt[0],pWal->aSalt[1],(int)aFrame[128],(int)aFrame[132]));
-    return 0;
+  	int i;
+  	for (i = 0; i < WAL_FRAME_HDRSIZE; i++)
+  	{
+  		// DBG(("Salt does not match %d %d, %d %d\r\n",pWal->aSalt[0],pWal->aSalt[1],(int)aFrame[128],(int)aFrame[132]));
+  		if (aFrame[i] != 0)
+  			return 0;
+  	}
+  	// if we reached this point this is a zeroed out frame, all out data will be 0
+  	// cksum will be 0
   }
 
   /* A frame is only valid if the page number is creater than zero.
@@ -1290,6 +1297,11 @@ int read_thread_wal(db_thread *thread)
         	DBG(("Frame INVALID! %s\r\n",filename));
         	break;
         }
+
+        // valid wal pages do not have pgno 0. They mighty occur when a DB wants to forget some writes
+        //  when a replication conflict occurs.
+        if (!pgno)
+        	continue;
 
         // DBG(("Frame belongs to %s, truncate %d, pgno %d\r\n",filename,nTruncate,pgno));
 
@@ -2026,6 +2038,91 @@ static int walCheckpoint(
  walcheckpoint_out:
   walIteratorFree(pIter);
   return rc;
+}
+
+// return:0 no valid pages have been found
+// 		  1 pages with >evnum have been found and removed (partially successful)
+// 		  2 pages with >=evnum have been removed (completely successful)
+int wal_rewind(db_connection *conn, u64 evnum)
+{
+	int rc = SQLITE_OK;
+	u32 iDbpage, iFrame, iOffset;
+	WalIterator *iter = NULL;
+	Wal *wal = conn->wal;
+	u8 buffer[WAL_FRAME_HDRSIZE+SQLITE_DEFAULT_PAGE_SIZE];
+	u64 curEvnum;
+	int found = 0;
+	int movedOver = 0;
+
+	while (wal != NULL)
+	{
+		if (!iter)
+		{
+			rc = walIteratorInit(wal,&iter);
+			if (rc != SQLITE_OK)
+			{
+				wal = wal->prev;
+				continue;
+			}
+		}
+
+		if (walIteratorNext(conn->walIter, &iDbpage, &iFrame) == 0)
+		{
+			iOffset = walFrameOffset(iFrame, SQLITE_DEFAULT_PAGE_SIZE);
+			rc = sqlite3OsRead(wal->pWalFd, buffer, SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE, iOffset);
+			if (rc != SQLITE_OK)
+			{
+				walIteratorFree(iter);
+				iter = NULL;
+				break;
+			}
+
+			curEvnum = readUInt64(&buffer[8]);
+			if (curEvnum >= evnum)
+			{
+				if (curEvnum == evnum)
+				{
+					found = 2;
+				}
+				else
+				{
+					found = found > 1 ? found : 1;
+				}
+				// zero out frame
+				memset(buffer,0,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE);
+				rc = sqlite3OsWrite(wal->pDbFd, buffer, SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE, iOffset);
+				if (rc != SQLITE_OK)
+				{
+					walIteratorFree(iter);
+					iter = NULL;
+					break;
+				}
+			}
+			movedOver++;
+		}
+		else
+		{
+			// All frames are behind current evnum search point.
+			// Nothing has been done.
+			if (movedOver > 0 && found == 0)
+				break;
+			
+			walIteratorFree(iter);
+			iter = NULL;
+			movedOver = 0;
+
+			// recreate index
+
+			if (found != 2)
+			{
+				wal = wal->prev;
+			}
+			else
+				break;
+		}
+	}
+
+	return found;
 }
 
 // conn      -> connection to iterate wal from

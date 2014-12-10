@@ -1022,7 +1022,6 @@ do_inject_page(db_command *cmd, db_thread *thread)
     ErlNifBinary bin;
     u32 commit;
     int rc;
-    int ch;
 
     memset(&page,0,sizeof(PgHdr));
     enif_inspect_binary(cmd->env,cmd->arg,&bin);
