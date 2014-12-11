@@ -2100,10 +2100,11 @@ int wal_rewind(db_connection *conn, u64 evnum)
 				{
 					found = found > 1 ? found : 1;
 				}
-				DBG(("Zero out evnum=%llu, pgno=%d, offset=%d, walindex=%llu\r\n",curEvnum,sqlite3Get4byte(&buffer[0]),iOffset,wal->walIndex));
+				DBG(("Zero out evnum=%llu, pgno=%d, offset=%d, walindex=%llu, sf=%d\r\n",
+					curEvnum,sqlite3Get4byte(&buffer[0]),iOffset,wal->walIndex,szFrame));
 				// zero out frame
 				memset(buffer,0,szFrame);
-				rc = sqlite3OsWrite(wal->pDbFd, buffer, szFrame, iOffset);
+				rc = sqlite3OsWrite(wal->pWalFd, buffer, szFrame, iOffset);
 				if (rc != SQLITE_OK)
 				{
 					wal->ckptLock = 0;
