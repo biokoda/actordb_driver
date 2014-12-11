@@ -2071,6 +2071,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 			rc = walIteratorInit(wal,&iter);
 			if (rc != SQLITE_OK)
 			{
+				wal->ckptLock = 0;
 				wal = wal->prev;
 				continue;
 			}
