@@ -137,6 +137,8 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
         *pActorPos = i;
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorPos);
 
+        sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;",NULL,NULL,NULL);
+
         cmd->conn->thread = thread->index;
     }
     else
@@ -423,14 +425,32 @@ int main()
     {
     }
 
-    // we are now left with the last wal file. Close everything and reopen.
+    // we are now left with the last 2 wal files. Close everything and reopen.
     // All the data must still be there
     reset(&thread,conns);
 
     printf("Verifying data\r\n");
     check_large(&thread, &clcmd, buf, buf1);
-    printf("Tests succeeded\r\n");
+    
+    printf("Do rewind on first db\r\n");
+    thread.curConn = clcmd.conn = &thread.conns[0];
+    printf("REWIND result=%d\r\n",wal_rewind(clcmd.conn,995));
 
+    for (j = 0; j < 1000; j++)
+    {
+        char str[10];
+        char *res[] = {str,buf1};
+        
+        sprintf(str,"%d",j+10);
+        sprintf(buf,"select * from tab where id=%d;",j+10);
+        rc = do_exec(buf,&clcmd,&thread,res); 
+        if (j >= 995)
+            assert(SQLITE_OK != rc);
+        else
+            assert(SQLITE_OK == rc);
+    }
+
+    printf("Tests succeeded\r\n");
     close_conns(&thread);
     free(thread.conns);
     cleanup(&thread);
