@@ -137,6 +137,7 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
         *pActorPos = i;
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorPos);
 
+        cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
         sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;",NULL,NULL,NULL);
 
         cmd->conn->thread = thread->index;
@@ -158,7 +159,7 @@ int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char
 {
 	sqlite3_stmt *statement = NULL;
 	int rc = SQLITE_OK;
-	int i;
+	int i, nresults = 0;
     char buf[1024*10];
 
 	if (!cmd->conn->wal_configured)
@@ -170,6 +171,7 @@ int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char
 
     while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
     {
+        nresults++;
     	for (i = 0; i < sqlite3_column_count(statement); i++)
     	{
             int type = sqlite3_column_type(statement, i);
@@ -204,9 +206,6 @@ int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char
     	}
     	print ? printf("\r\n") : 0;
     }
-    
-    // else
-    // 	printf("Query DONE OK\r\n");
 
     sqlite3_finalize(statement);
     if (rc != SQLITE_DONE)
@@ -214,6 +213,9 @@ int do_exec1(char *txt,db_command *cmd, db_thread *thread, char *results[], char
         printf("Query error=%d\r\n",rc);
         return rc;
     }
+    // If we expected result, but query did not return anything, return error
+    if (rc == SQLITE_DONE && nresults == 0 && results != NULL)
+        return SQLITE_ERROR;
     return SQLITE_OK;
 }
 
@@ -376,7 +378,7 @@ int main()
 
     // write to id 2, which must succeed
     sprintf(buf,"INSERT INTO tab VALUES (%s,'%s');",initvals[3][0],initvals[3][1]);
-    rc = do_exec(buf,&clcmd,&thread,initvals[3]);
+    rc = do_exec(buf,&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
     sprintf(buf,"SELECT * from tab where id=%s;",initvals[3][0]);
     rc = do_exec(buf,&clcmd,&thread,initvals[3]);
@@ -442,10 +444,13 @@ int main()
         char *res[] = {str,buf1};
         
         sprintf(str,"%d",j+10);
-        sprintf(buf,"select * from tab where id=%d;",j+10);
-        rc = do_exec(buf,&clcmd,&thread,res); 
+        sprintf(buf,"select id from tab where id=%d;",j+10);
+        rc = do_exec1(buf,&clcmd,&thread,res,1); 
         if (j >= 995)
+        {
+            // must return error, because we supplied result to check against but none was returned
             assert(SQLITE_OK != rc);
+        }
         else
             assert(SQLITE_OK == rc);
     }
