@@ -445,7 +445,7 @@ int main()
         
         sprintf(str,"%d",j+10);
         sprintf(buf,"select id from tab where id=%d;",j+10);
-        rc = do_exec1(buf,&clcmd,&thread,res,1); 
+        rc = do_exec1(buf,&clcmd,&thread,res,0); 
         if (j >= 995)
         {
             // must return error, because we supplied result to check against but none was returned

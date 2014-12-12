@@ -2082,7 +2082,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		movedOver = 0;
 		wal->hdr.aSalt[0] = 123456789;
 		wal->hdr.aSalt[1] = 987654321;
-		DBG(("RESCAN WAL %llu\r\n",wal->walIndex));
+		// DBG(("RESCAN WAL %llu\r\n",wal->walIndex));
 		for(iOffset=WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
 		{
 			u32 pgno;
@@ -2106,8 +2106,8 @@ int wal_rewind(db_connection *conn, u64 evnum)
 
 	        movedOver++;
 
-	        DBG(("Index append wal=%llu, frame=%d,offset=%d, pgno=%d, evnum=%llu, trunc=%d\r\n",
-	        	wal->walIndex,iFrame,iOffset,pgno,curEvnum,nTruncate));
+	        // DBG(("Index append wal=%llu, frame=%d,offset=%d, pgno=%d, evnum=%llu, trunc=%d\r\n",
+	        // 	wal->walIndex,iFrame,iOffset,pgno,curEvnum,nTruncate));
 	        if (curEvnum < evnum)
 	        {
 	        	if (conn->lastWriteThreadNum != threadWriteNum && wal->dirty)
