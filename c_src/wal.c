@@ -2068,8 +2068,6 @@ int wal_rewind(db_connection *conn, u64 evnum)
 
 	while (wal != NULL)
 	{
-		wal->ckptLock = 0;
-
 		// recreate index
 		walIndexClose(wal, 0);
 		memset(&wal->hdr,0,sizeof(WalIndexHdr));
@@ -2179,6 +2177,83 @@ int wal_rewind(db_connection *conn, u64 evnum)
 	}
 
 	return found;
+}
+
+int wal_iterate_from(db_connection *conn, u64 evnumFrom, int bufSize, char* buffer, char *done, char *activeWal, u32 *curOffset)
+{
+	int rc = SQLITE_OK;
+	u32 iDbpage, iFrame, iOffset
+	Wal *wal = conn->wal;
+	u64 curEvnum, curTerm;
+	int found = 0, i, movedOver = 0;
+	int movedOver = 0;
+	i64 nSize = 0;
+	const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
+	u32 threadWriteNum;
+
+	while (bufSize >= SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE)
+	{
+		rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
+
+		iFrame = 0;
+		movedOver = 0;
+		wal->hdr.aSalt[0] = 123456789;
+		wal->hdr.aSalt[1] = 987654321;
+		for(iOffset=WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
+		{
+			u32 pgno;
+			u32 nTruncate;
+			char filename[MAX_ACTOR_NAME];
+			u32 actorIndex;
+
+			iFrame++;
+			rc = sqlite3OsRead(wal->pWalFd, buffer, szFrame, iOffset);
+	        if( rc!=SQLITE_OK )
+	        {
+	        	DBG(("Can not read file\r\n"));
+	        	break;
+	        }
+	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
+	        			&curEvnum,&curTerm,&threadWriteNum,buffer+WAL_FRAME_HDRSIZE, buffer);
+	        if(!rc || !pgno || actorIndex != conn->connindex)
+	        {
+	        	continue;
+	        }
+
+	        movedOver++;
+
+	        // DBG(("Index append wal=%llu, frame=%d,offset=%d, pgno=%d, evnum=%llu, trunc=%d\r\n",
+	        // 	wal->walIndex,iFrame,iOffset,pgno,curEvnum,nTruncate));
+	        if (curEvnum < evnum)
+	        {
+	        	continue;
+	        }
+
+			if (curEvnum == evnum)
+			{
+				found = 2;
+			}
+			else
+			{
+				found = found > 1 ? found : 1;
+			}
+    	}
+
+    	// All frames are behind current evnum search point.
+		// Nothing has been done.
+		if (movedOver > 0 && found == 0)
+			break;
+
+		if (found != 2)
+		{
+			wal = wal->prev;
+		}
+		else
+			break;
+
+	}
+
+	return found;	
 }
 
 // conn      -> connection to iterate wal from
