@@ -696,7 +696,7 @@ static int walDecodeFrame(
   			continue;
   		if (aFrame[i] != 0)
   		{
-  			// DBG(("Salt does not match %d %d, %d %d\r\n",aSalt[0],aSalt[1],sqlite3Get4byte(&aFrame[128]) ,sqlite3Get4byte(&aFrame[132])));
+  			DBG(("Salt does not match %d %d, %d %d\r\n",aSalt[0],aSalt[1],sqlite3Get4byte(&aFrame[128]) ,sqlite3Get4byte(&aFrame[132])));
   			return 0;
   		}
   	}
@@ -2192,7 +2192,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	int rc = SQLITE_OK;
 	u32 iOffset;
 	Wal *wal = conn->wal;
-	u64 curEvnum, curTerm;
+	u64 curEvnum = 0, curTerm = 0;
 	char found = 0;
 	i64 nSize = 0;
 	const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
@@ -2201,6 +2201,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	u32 pgno;
 	u32 nTruncate;
 	u32 actorIndex;
+	u32 iPrevOffset;
 	char filename[MAX_ACTOR_NAME];
 	*nFilled = 0;
 	*activeWal = 0;
@@ -2216,6 +2217,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 			wal->hdr.aSalt[0] = 123456789;
 			wal->hdr.aSalt[1] = 987654321;
 			// start with last frame of wal (for connection)
+			// use prevFrameOffset number in wal to move backwards through wal
 			iOffset = wal->prevFrameOffset;
 			while (iOffset > 0)
 			{
@@ -2225,19 +2227,22 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	        		DBG(("Can not read file\r\n"));
 	        		break;
 				}
+				iPrevOffset = iOffset;
 				rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
 	        			&curEvnum,&curTerm,&threadWriteNum,&iOffset,NULL, buffer);
+				if(!rc || !pgno || actorIndex != conn->connindex)
+					continue;
 				if (curEvnum < iter->evnumFrom)
 				{
 					// we either started out or went past evnum we are looking for.
 					break;
 				}
-				if (curEvnum == iter->evnumFrom)
+				else if (curEvnum == iter->evnumFrom)
 				{
 					// We have found evnum, but it can be spread out over multiple frames.
 					// Go back but remember position.
 					found = 1;
-					prevFrameOffset = iOffset;
+					prevFrameOffset = iPrevOffset;
 				}
 			}
 			if (!found)
@@ -2261,7 +2266,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	if (wal == NULL)
 		return SQLITE_DONE;
 
-	DBG(("FOUND ON %llu, %d\r\n",iter->walIndex, iter->iOffset));
+	// DBG(("FOUND ON %llu, %d\r\n",iter->walIndex, iter->iOffset));
 
 	while (((*nFilled)+SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE) <= bufSize)
 	{
@@ -2275,7 +2280,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	        }
 	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
 	        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset,buffer+(*nFilled)+WAL_FRAME_HDRSIZE, buffer+(*nFilled));
-	        DBG(("DECODED %llu %d %d\r\n",curEvnum, actorIndex, conn->connindex));
+	        // DBG(("DECODED %llu %llu %d %d %d\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
 	        if(!rc || !pgno || actorIndex != conn->connindex)
 	        {
 	        	continue;
@@ -2303,7 +2308,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
     	while (wal->prev->walIndex != iter->walIndex)
     		wal = wal->prev;
 
-    	iter->iOffset = 0;
+    	iter->iOffset = WAL_HDRSIZE;
     	iter->walIndex = wal->walIndex;
 	}
 
