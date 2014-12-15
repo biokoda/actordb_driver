@@ -300,6 +300,9 @@ int main()
     char buf1[1024*10];
     char pgBuf[4096+WAL_FRAME_HDRSIZE];
     char pgDone = 0, pgLast = 0;
+    iterate_resource iter;
+
+    memset(&iter,0,sizeof(iter));
     memset(buf,0,sizeof(buf));
     memset(buf1,0,sizeof(buf1));
 
@@ -408,12 +411,14 @@ int main()
         }
     }
 
+    iter.evnumFrom = 500;
     for (i = 0;; i++)
     {
-        wal_iterate(&thread.conns[0],4096+WAL_FRAME_HDRSIZE,pgBuf,&pgDone,&pgLast);
-        if(pgDone)
+        // wal_iterate(&thread.conns[0],4096+WAL_FRAME_HDRSIZE,pgBuf,&pgDone,&pgLast);
+        if (wal_iterate_from(&thread.conns[0], &iter, 4096+WAL_FRAME_HDRSIZE, (u8*)pgBuf, &j, &pgLast) == SQLITE_DONE)
             break;
     }
+    assert(i > 500);
     printf("Reset\r\n");
     // Close everything
     reset(&thread,conns);

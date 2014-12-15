@@ -9,7 +9,7 @@
 #define PACKET_ITEMS 9
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
-#define MAX_ACTOR_NAME 96
+#define MAX_ACTOR_NAME 92
 #define WAL_LIMIT 1024*3 //*pagesize -> ~12MB
 
 #ifndef _TESTAPP_
@@ -30,6 +30,7 @@ typedef struct wal_file wal_file;
 typedef struct WalIndexHdr WalIndexHdr;
 typedef struct WalIterator WalIterator;
 typedef struct WalCkptInfo WalCkptInfo;
+typedef struct iterate_resource iterate_resource;
 
 typedef u16 ht_slot;
 
@@ -85,6 +86,7 @@ struct Wal {
   u64 walIndex;
   u8 init;
   u8 lockError;
+  u32 prevFrameOffset;       /* Offset of last written frame to wal file. Regardless if commited or not. */
   u8 dirty;                  /* 1 when between commit flags */
 
   Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
@@ -224,19 +226,27 @@ struct db_connection
 
 struct conn_resource
 {
-    int thread;
-    int connindex;
-    char checkpointLock;
+  int thread;
+  int connindex;
+  char checkpointLock;
+};
+
+struct iterate_resource
+{
+  char started;
+  u32 iOffset;
+  u64 evnumFrom;
+  u64 walIndex;
 };
 
 /* backup object */
 struct db_backup
 {
-    sqlite3_backup *b;
-    int pages_for_step;
-    unsigned int thread;
-    sqlite3 *dst;
-    sqlite3 *src;
+  sqlite3_backup *b;
+  int pages_for_step;
+  unsigned int thread;
+  sqlite3 *dst;
+  sqlite3 *src;
 };
 
 
@@ -307,6 +317,7 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
 #endif
 
+int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u8* buffer, int *nFilled,char *activeWal);
 SQLITE_API int sqlite3_wal_data(sqlite3 *db,void *pArg);
 int wal_rewind(db_connection *conn, u64 evnum);
 int wal_iterate(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal);
