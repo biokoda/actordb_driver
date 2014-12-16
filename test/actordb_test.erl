@@ -41,11 +41,14 @@ replication_test() ->
     % Check both
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
+
     ok.
 get_pages(Db) ->
-	case actordb_driver:iterate_wal(Db) of
-		{ok,Bin,0,1} ->
-    		[Bin|get_pages(Db)];
+	get_pages(Db,1).
+get_pages(Db,Iter) ->
+	case actordb_driver:iterate_wal(Db,Iter) of
+		{ok,Iter2,Bin,1} ->
+    		[Bin|get_pages(Db,Iter2)];
     	done ->
     		[]
     end.

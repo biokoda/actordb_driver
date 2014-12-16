@@ -15,6 +15,7 @@
 #ifndef _TESTAPP_
 static ErlNifResourceType *db_connection_type = NULL;
 static ErlNifResourceType *db_backup_type = NULL;
+static ErlNifResourceType *iterate_type = NULL;
 #endif
 
 char g_static_sqls[MAX_STATIC_SQLS][256];
@@ -237,6 +238,9 @@ struct iterate_resource
   u32 iOffset;
   u64 evnumFrom;
   u64 walIndex;
+
+  int thread;
+  int connindex;
 };
 
 /* backup object */
@@ -304,6 +308,7 @@ ERL_NIF_TERM atom_undefined;
 ERL_NIF_TERM atom_rowid;
 ERL_NIF_TERM atom_changes;
 ERL_NIF_TERM atom_done;
+ERL_NIF_TERM atom_iter;
 
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
 static ERL_NIF_TERM push_command(int thread, void *cmd);

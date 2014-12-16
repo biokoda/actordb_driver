@@ -516,6 +516,24 @@ destruct_backup(ErlNifEnv *env, void *arg)
     }
 }
 
+static void
+destruct_iterate(ErlNifEnv *env, void *arg)
+{
+    void *item;
+    db_command *cmd;
+    iterate_resource *res = (iterate_resource*)arg;
+
+    item = command_create(res->thread);
+    cmd = queue_get_item_data(item);
+     
+    cmd->type = cmd_checkpoint_lock;
+    cmd->arg = enif_make_int(cmd->env, 0); 
+    cmd->connindex = res->connindex;
+    cmd->ref = 0;
+
+    push_command(res->thread, item);
+}
+
 
 static ERL_NIF_TERM
 do_open(db_command *cmd, db_thread *thread) 
@@ -539,7 +557,7 @@ do_open(db_command *cmd, db_thread *thread)
     if(size <= 0 || size >= MAX_ACTOR_NAME) 
         return make_error_tuple(cmd->env, "invalid_filename");
 
-    res = enif_alloc_resource(db_connection_type, sizeof(conn_resource*));
+    res = enif_alloc_resource(db_connection_type, sizeof(conn_resource));
     if(!res) 
         return make_error_tuple(cmd->env, "no_memory");
 
@@ -991,26 +1009,45 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 static ERL_NIF_TERM
 do_iterate_wal(db_command *cmd, db_thread *thread)
 {
-    char done;
     char activeWal;
     ErlNifBinary bin;
     ERL_NIF_TERM tBin;
     int rc;
+    u64 evnumFrom;
+    iterate_resource *iter;
+    int nfilled = 0;
+
+    if (!enif_get_resource(cmd->env, cmd->arg, iterate_type, (void **) &iter))
+    {
+        if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnumFrom))
+            return enif_make_badarg(cmd->env);
+
+        iter = enif_alloc_resource(iterate_type, sizeof(iterate_resource));
+        if(!iter) 
+            return make_error_tuple(cmd->env, "no_memory");
+
+        memset(iter,0,sizeof(iterate_resource));
+        iter->thread = thread->index;
+        iter->connindex = cmd->conn->connindex;
+        // Creating a iterator requires checkpoint lock.
+        // On iterator destruct checkpoint will be released.
+        cmd->conn->checkpointLock++;
+    }
 
     enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
-    rc = wal_iterate(cmd->conn,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(char*)bin.data,&done,&activeWal);
-    if (rc == 0 && done)
+    rc = wal_iterate_from(cmd->conn,iter,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(u8*)bin.data,&nfilled,&activeWal);
+    if (rc == SQLITE_DONE)
     {
         enif_release_binary(&bin);
+        enif_release_resource(iter);
         return atom_done;
     }
     else
     {
         tBin = enif_make_binary(cmd->env,&bin);
         enif_release_binary(&bin);
-        return enif_make_tuple4(cmd->env,atom_ok,tBin,
-                        enif_make_int(cmd->env,(int)done), 
-                        enif_make_int(cmd->env,(int)activeWal));
+        return enif_make_tuple4(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,enif_make_resource(cmd->env,iter)), 
+                        tBin, enif_make_int(cmd->env,(int)activeWal));
     }
 }
 
@@ -2466,7 +2503,7 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     void *item;
      
-    if(argc != 3) 
+    if(argc != 4) 
         return enif_make_badarg(env);  
     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
         return enif_make_badarg(env);
@@ -2488,6 +2525,7 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = enif_make_copy(cmd->env, argv[1]);
     cmd->pid = pid;
     cmd->connindex = res->connindex;
+    cmd->arg = enif_make_copy(env,argv[3]);
 
     enif_consume_timeslice(env,500);
 
@@ -2670,6 +2708,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     atom_rowid = enif_make_atom(env,"rowid");
     atom_changes = enif_make_atom(env,"changes");
     atom_done = enif_make_atom(env,"done");
+    atom_iter = enif_make_atom(env,"iter");
     
     // Paths will determine thread numbers. Every path has a thread.
     // {{Path1,Path2,Path3,...},{StaticSql1,StaticSql2,StaticSql3,...}}
@@ -2704,6 +2743,14 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     if(!rt) 
         return -1;
     db_backup_type = rt;
+
+
+    rt =  enif_open_resource_type(env, "actordb_driver_nif", "iterate_type",
+                   destruct_iterate, ERL_NIF_RT_CREATE, NULL);
+    if(!rt) 
+        return -1;
+    iterate_type = rt;
+    
     
     g_threads = (db_thread*)malloc(sizeof(db_thread)*g_nthreads);
     memset(g_threads,0,sizeof(db_thread)*g_nthreads);
@@ -2786,7 +2833,7 @@ static ErlNifFunc nif_funcs[] = {
     {"all_tunnel_call",3,all_tunnel_call},
     {"store_prepared_table",2,store_prepared_table},
     {"checkpoint_lock",4,checkpoint_lock},
-    {"iterate_wal",3,iterate_wal},
+    {"iterate_wal",4,iterate_wal},
     {"page_size",0,page_size},
     {"inject_page",4,inject_page}
 };

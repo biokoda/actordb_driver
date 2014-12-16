@@ -2285,6 +2285,8 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	        {
 	        	continue;
 	        }
+
+	        rc = SQLITE_OK;
 	        *nFilled += szFrame;
 	        iter->iOffset = iOffset+szFrame;
 	        if (((*nFilled)+SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE) > bufSize)
