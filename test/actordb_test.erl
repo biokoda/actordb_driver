@@ -1,4 +1,4 @@
--module(actordb_test).
+-module(test).
 -include_lib("eunit/include/eunit.hrl").
 -define(INIT,
     [begin file:delete(Fn) end || Fn <- filelib:wildcard("wal.*")],
@@ -13,6 +13,17 @@ lz4_test() ->
     % ?debugFmt("Compressed ~p size ~p ",[byte_size(Compressed),CompressedSize]),
     Bin1 = actordb_driver:lz4_decompress(Compressed1,byte_size(Bin1),CompressedSize1),
     ok.
+
+mem_test() ->
+    ?INIT,
+    Sql = <<"select name, sql from sqlite_master where type='table';",
+                    "$PRAGMA cache_size=10;">>,
+    {ok,Db,_} = actordb_driver:open(":memory:",1,Sql),
+    {ok,_} = actordb_driver:exec_script(<<"$CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT);",
+        "$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
+        "$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db),
+    {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
+    {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db).
 
 replication_test() ->
     ?INIT,

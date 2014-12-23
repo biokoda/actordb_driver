@@ -562,7 +562,7 @@ do_open(db_command *cmd, db_thread *thread)
         return make_error_tuple(cmd->env, "no_memory");
 
     cmd->conn = sqlite3HashFind(&thread->walHash,filename+thread->pathlen+1);
-    if (cmd->conn == NULL)
+    if (cmd->conn == NULL || filename[thread->pathlen+1] == ':')
     {
         for (i = 0; i < thread->nconns; i++)
         {
@@ -585,9 +585,14 @@ do_open(db_command *cmd, db_thread *thread)
 
         // in case of :memory: db name
         if (filename[thread->pathlen+1] == ':')
+        {
             rc = sqlite3_open(filename+thread->pathlen+1,&(cmd->conn->db));
+        }   
         else
+        {
             rc = sqlite3_open(filename,&(cmd->conn->db));
+        }
+            
         if(rc != SQLITE_OK) 
         {
             error = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
@@ -1125,7 +1130,6 @@ do_exec_script(db_command *cmd, db_thread *thread)
     readpoint = (char*)bin.data;
     results = enif_make_list(cmd->env,0);
     
-
     while (readpoint < end)
     {
         if (readpoint[0] == '$')
@@ -1855,7 +1859,7 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     void *item;
     unsigned int thread;
-     
+ 
     if(!(argc == 4 || argc == 5)) 
 	    return enif_make_badarg(env);     
     if(!enif_is_ref(env, argv[0])) 
@@ -1865,6 +1869,7 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_uint(env, argv[3], &thread)) 
         return make_error_tuple(env, "invalid_pid");
 
+    thread %= g_nthreads;
     item = command_create(thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
