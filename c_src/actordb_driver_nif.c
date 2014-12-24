@@ -1058,6 +1058,18 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
 }
 
 static ERL_NIF_TERM
+do_wal_rewind(db_command *cmd, db_thread *thread)
+{
+    int rc;
+    u64 evnum;
+
+    enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
+    rc = wal_rewind(cmd->conn,evnum);
+
+    return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
+}
+
+static ERL_NIF_TERM
 do_inject_page(db_command *cmd, db_thread *thread)
 {
     Wal *pWalIn = cmd->conn->wal;
@@ -1636,6 +1648,8 @@ evaluate_command(db_command *cmd,db_thread *thread)
         return do_backup_step(cmd,thread);
     case cmd_inject_page:
         return do_inject_page(cmd,thread);
+    case cmd_wal_rewind:
+        return do_wal_rewind(cmd,thread);
     case cmd_interrupt:
         return do_interrupt(cmd,thread);
     case cmd_iterate_wal:
@@ -2578,6 +2592,46 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM 
+drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    conn_resource *res;
+    db_command *cmd = NULL;
+    ErlNifPid pid;
+    void *item;
+     
+    if(argc != 4) 
+        return enif_make_badarg(env);  
+    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+        return enif_make_badarg(env);
+        
+    if(!enif_is_ref(env, argv[1])) 
+        return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[2], &pid)) 
+        return make_error_tuple(env, "invalid_pid"); 
+    if (!enif_is_number(env,argv[3]))
+        return make_error_tuple(env,"not evnum");
+    
+    item = command_create(res->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+    {
+        return make_error_tuple(env, "command_create_failed");
+    }
+
+    /* command */
+    cmd->type = cmd_wal_rewind;
+    cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    cmd->pid = pid;
+    cmd->arg = enif_make_copy(cmd->env,argv[3]);
+    cmd->connindex = res->connindex;
+
+    enif_consume_timeslice(env,500);
+
+    return push_command(res->thread, item);
+}
+
+
+static ERL_NIF_TERM 
 bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
@@ -2841,7 +2895,8 @@ static ErlNifFunc nif_funcs[] = {
     {"checkpoint_lock",4,checkpoint_lock},
     {"iterate_wal",4,iterate_wal},
     {"page_size",0,page_size},
-    {"inject_page",4,inject_page}
+    {"inject_page",4,inject_page},
+    {"wal_rewind",4,drv_wal_rewind}
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

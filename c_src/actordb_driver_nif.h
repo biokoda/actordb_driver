@@ -273,7 +273,8 @@ typedef enum
     cmd_store_prepared,
     cmd_checkpoint_lock,
     cmd_iterate_wal,
-    cmd_inject_page
+    cmd_inject_page,
+    cmd_wal_rewind
 } command_type;
 
 typedef struct 

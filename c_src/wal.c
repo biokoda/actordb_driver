@@ -2133,6 +2133,8 @@ int wal_rewind(db_connection *conn, u64 evnum)
 					pInfo = walCkptInfo(wal);
 					pInfo->nBackfill = 0;
 					pInfo->aReadMark[0] = 0;
+					wal->hdr.aSalt[0] = 123456789;
+					wal->hdr.aSalt[1] = 987654321;
 					for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
 					if( wal->hdr.mxFrame ) pInfo->aReadMark[1] = wal->hdr.mxFrame;
 		        }
@@ -2157,7 +2159,6 @@ int wal_rewind(db_connection *conn, u64 evnum)
 				break;
 			}
     	}
-
     	if (wal->dirty)
     	{
     		sqlite3WalUndo(wal, NULL, NULL);
@@ -2179,7 +2180,6 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		}
 		else
 			break;
-
 	}
 
 	return found;
@@ -2865,6 +2865,7 @@ static int walWriteOneFrame(
   if( rc ) return rc;
   /* Write the page data */
   rc = walWriteToLog(p, pData, p->szPage, iOffset+sizeof(aFrame));
+  wal_page_hook(p->pWal->thread,pData,p->szPage,aFrame,WAL_FRAME_HDRSIZE);
   return rc;
 }
 

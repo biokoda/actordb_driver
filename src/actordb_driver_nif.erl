@@ -34,9 +34,13 @@
          bind_insert/5,
          all_tunnel_call/3,
          checkpoint_lock/4,
-         inject_page/4
+         inject_page/4,
+         wal_rewind/4
 ]).
 
+wal_rewind(_,_,_,_) ->
+    exit(nif_library_not_loaded).
+    
 page_size() ->
     exit(nif_library_not_loaded).
 

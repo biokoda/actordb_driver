@@ -11,6 +11,7 @@
          parse_helper/1,parse_helper/2, iterate_wal/2,page_size/0, %wal_pages/1,
          % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
+         wal_rewind/2,
          replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
          tcp_connect_async/4,tcp_connect_async/5,make_wal_header/1,tcp_reconnect/0,wal_checksum/4,bind_insert/3]).
 
@@ -97,6 +98,11 @@ lz4_decompress(B,SizeOrig,SizeIn) ->
 
 % wal_pages({actordb_driver, _Ref, Connection}) ->
 %     actordb_driver_nif:wal_pages(Connection).
+
+wal_rewind({actordb_driver, _Ref, Connection},Evnum) ->
+    Ref = make_ref(),
+    ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),Evnum),
+    receive_answer(Ref).
 
 iterate_wal({actordb_driver, _Ref, Connection},{iter,Iter}) ->
     Ref = make_ref(),

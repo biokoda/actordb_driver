@@ -54,6 +54,10 @@ replication_test() ->
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
 
+    % make last write go away on first db
+    actordb_driver:wal_rewind(Db,4),
+    {ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
+    {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
     ok.
 get_pages(Db) ->
 	get_pages(Db,1).
