@@ -1034,6 +1034,7 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
         memset(iter,0,sizeof(iterate_resource));
         iter->thread = thread->index;
         iter->connindex = cmd->conn->connindex;
+        iter->evnumFrom = evnumFrom;
         // Creating a iterator requires checkpoint lock.
         // On iterator destruct checkpoint will be released.
         cmd->conn->checkpointLock++;

@@ -28,9 +28,10 @@ mem_test() ->
 replication_test() ->
     ?INIT,
     {ok,Db} = actordb_driver:open("t1.db"),
-    {ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",Db),
-    {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad');",Db),
-    {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (2, '",binary:copy(<<"a">>,1024*6),"');"],Db),
+    % exec_script(Sql,  {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+    {ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",Db,10000,1,1,<<>>),
+    {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad');",Db,10000,1,2,<<>>),
+    {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (2, '",binary:copy(<<"a">>,1024*6),"');"],Db,10000,1,3,<<>>),
     {ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
     ok = actordb_driver:checkpoint_lock(Db,1),
     ok = actordb_driver:checkpoint_lock(Db,1),
@@ -45,7 +46,7 @@ replication_test() ->
     
     % Now insert into second db, copy new pages back into first db
     L1 = get_pages(Db2),
-    {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3, 'thirdthird');",Db2),
+    {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3, 'thirdthird');",Db2,10000,1,4,<<>>),
     L2 = get_pages(Db2),
     [actordb_driver:inject_page(Db,Bin) || Bin <- L2 -- L1],
     
