@@ -2209,6 +2209,40 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	// If iteration started use offset from iter struct. Otherwise read last frame offset from wal structure.
 	if (iter->started)
 		iOffset = iter->iOffset;
+	else if (iter->evnumFrom == 0)
+	{
+		while (wal->prev != NULL)
+			wal = wal->prev;
+
+		wal->hdr.aSalt[0] = 123456789;
+		wal->hdr.aSalt[1] = 987654321;
+
+		rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
+		for(iOffset = WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
+		{
+			rc = sqlite3OsRead(wal->pWalFd, buffer, WAL_FRAME_HDRSIZE, iOffset);
+	        if( rc!=SQLITE_OK )
+	        {
+	        	return SQLITE_DONE;
+	        }
+	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
+	        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset,NULL, buffer);
+	        // DBG(("DECODED %llu %llu %d %d %d\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
+	        if(!rc || !pgno || actorIndex != conn->connindex)
+	        {
+	        	continue;
+	        }
+
+	        rc = SQLITE_OK;
+			iter->iOffset = iOffset;
+			iter->walIndex = wal->walIndex;
+			iter->started = 1;
+    	}
+    	if (iOffset+szFrame > nSize)
+    	{
+    		
+    	}
+	}
 	else
 	{
 		// Find first frame of evnum.
