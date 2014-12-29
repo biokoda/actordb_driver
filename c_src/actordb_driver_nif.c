@@ -1344,7 +1344,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
             else
             {
                 dofinalize = 1;
-                rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
+                rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &statement, &readpoint);
                 if(rc != SQLITE_OK)
                 {
                     errat = "prepare";
@@ -1411,7 +1411,8 @@ do_exec_script(db_command *cmd, db_thread *thread)
     // Call a rollback.
     if (rc > 0 && pagesPre != thread->walFile->mxFrame)
     {
-
+        sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
+        sqlite3_step(statement);
     }
 
     // enif_release_resource(cmd->conn);
