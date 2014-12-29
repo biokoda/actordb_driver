@@ -35,6 +35,7 @@
          all_tunnel_call/3,
          checkpoint_lock/4,
          inject_page/4,
+         inject_page/5,
          wal_rewind/4
 ]).
 
@@ -51,6 +52,9 @@ checkpoint_lock(_,_,_,_) ->
     exit(nif_library_not_loaded).
 
 inject_page(_,_,_,_) ->
+    exit(nif_library_not_loaded).
+
+inject_page(_,_,_,_,_) ->
     exit(nif_library_not_loaded).
 
 store_prepared_table(_,_) ->
