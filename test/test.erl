@@ -41,7 +41,7 @@ replication_test() ->
     L = get_pages(Db),
     file:copy("t1.db","t2.db"),
     {ok,Db2} = actordb_driver:open("t2.db"),
-    [actordb_driver:inject_page(Db2,Bin) || Bin <- L],
+    [ok = actordb_driver:inject_page(Db2,Bin) || Bin <- L],
     {ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
     
     % Now insert into second db, copy new pages back into first db

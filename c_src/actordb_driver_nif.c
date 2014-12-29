@@ -1093,7 +1093,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 
     rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
 
-    if (rc == SQLITE_OK)
+    if (rc != SQLITE_OK)
         return atom_false;
     return atom_ok;
 }
