@@ -1075,19 +1075,31 @@ do_inject_page(db_command *cmd, db_thread *thread)
     Wal *pWalIn = cmd->conn->wal;
     PgHdr page;
     ErlNifBinary bin;
+    ErlNifBinary binhead;
+    u8 *head;
     u32 commit;
     int rc;
 
     memset(&page,0,sizeof(PgHdr));
     enif_inspect_binary(cmd->env,cmd->arg,&bin);
+    if (cmd->arg1)
+    {
+        enif_inspect_binary(cmd->env,cmd->arg,&binhead);
+        head = binhead.data;
+        page.pData = bin.data;
+    }
+    else
+    {
+        head = bin.data;
+        page.pData = bin.data+WAL_FRAME_HDRSIZE;
+    }
+        
 
-    // skip header in data as it will be created when writing
-    page.pData = bin.data + WAL_FRAME_HDRSIZE;
-    page.pgno = sqlite3Get4byte(bin.data);
-    commit = sqlite3Get4byte(&bin.data[4]);
+    page.pgno = sqlite3Get4byte(head);
+    commit = sqlite3Get4byte(&head[4]);
 
-    cmd->conn->writeNumber = readUInt64(&bin.data[8]);
-    cmd->conn->writeTermNumber = readUInt64(&bin.data[16]);
+    cmd->conn->writeNumber = readUInt64(&head[8]);
+    cmd->conn->writeTermNumber = readUInt64(&head[16]);
     if (cmd->conn->wal)
         cmd->conn->wal->init = 0;
 
@@ -2560,7 +2572,7 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     void *item;
      
-    if(argc != 4) 
+    if(argc != 4 && argc != 5) 
         return enif_make_badarg(env);  
     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
         return enif_make_badarg(env);
@@ -2584,6 +2596,8 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = enif_make_copy(cmd->env, argv[1]);
     cmd->pid = pid;
     cmd->arg = enif_make_copy(cmd->env,argv[3]);
+    if (argc == 5)
+        cmd->arg1 = enif_make_copy(cmd->env,argv[4]);
     cmd->connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
@@ -2896,6 +2910,7 @@ static ErlNifFunc nif_funcs[] = {
     {"iterate_wal",4,iterate_wal},
     {"page_size",0,page_size},
     {"inject_page",4,inject_page},
+    {"inject_page",5,inject_page},
     {"wal_rewind",4,drv_wal_rewind}
 };
 
