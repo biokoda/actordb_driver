@@ -474,7 +474,7 @@ destruct_connection(ErlNifEnv *env, void *arg)
     void *item;
     db_command *cmd;
     conn_resource *res = (conn_resource*)arg;
-    
+
     // Send unlock first if it exists
     if (res->checkpointLock > 0)
     {
@@ -561,8 +561,8 @@ do_open(db_command *cmd, db_thread *thread)
     if(!res) 
         return make_error_tuple(cmd->env, "no_memory");
 
-    cmd->conn = sqlite3HashFind(&thread->walHash,filename+thread->pathlen+1);
-    if (cmd->conn == NULL || filename[thread->pathlen+1] == ':')
+    pActorIndex = sqlite3HashFind(&thread->walHash,filename+thread->pathlen+1);
+    if (pActorIndex == NULL || filename[thread->pathlen+1] == ':')
     {
         for (i = 0; i < thread->nconns; i++)
         {
@@ -615,7 +615,7 @@ do_open(db_command *cmd, db_thread *thread)
     }
     else
     {
-        cmd->connindex = cmd->conn - thread->conns;
+        cmd->connindex = *pActorIndex;
     }
     
     res->thread = thread->index;
@@ -1539,6 +1539,7 @@ do_checkpoint_lock(db_command *cmd,db_thread *thread)
 {
     int lock;
     enif_get_int(cmd->env,cmd->arg,&lock);
+
     if (lock > 0)
         cmd->conn->checkpointLock++;
     else
@@ -1554,7 +1555,7 @@ do_close(db_command *cmd,db_thread *thread)
     db_connection *conn = cmd->conn;
     int i = 0;
     int *pActorPos;
-    DBG(("DOCLOSE\r\n"));
+    // DBG(("DOCLOSE\r\n"));
     
     conn->nErlOpen--;
     
