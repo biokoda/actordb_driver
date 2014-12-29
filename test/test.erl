@@ -58,12 +58,21 @@ replication_test() ->
     actordb_driver:wal_rewind(Db,4),
     {ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
+
+    file:copy("t2.db","t3.db"),
+    % 0 means return all pages in wal for connection
+    Pages2 = get_pages(Db2,0),
+    {ok,Db3} = actordb_driver:open("t3.db"),
+    [actordb_driver:inject_page(Db3,Bin) || Bin <- Pages2],
+    {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
     ok.
 get_pages(Db) ->
 	get_pages(Db,1).
 get_pages(Db,Iter) ->
 	case actordb_driver:iterate_wal(Db,Iter) of
 		{ok,Iter2,Bin,1} ->
+            % <<_:36/binary,Name:20/binary,_/binary>> = Bin,
+            % ?debugFmt("Inject page ~s",[Name]),
     		[Bin|get_pages(Db,Iter2)];
     	done ->
     		[]

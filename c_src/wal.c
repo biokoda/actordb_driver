@@ -684,12 +684,14 @@ static int walDecodeFrame(
   int nativeCksum;                /* True for native byte-order checksums */
   u32 aCksum[2] = {0, 0};
   u32 pgno;                       /* Page number of the frame */
+  char zeroFrame = 0;
 
   /* A frame is only valid if the salt values in the frame-header
   ** match the salt values in the wal-header. 
   */
   if( memcmp(aSalt, &aFrame[128], 8)!=0 ){
   	int i;
+  	zeroFrame = 1;
   	for (i = 0; i < WAL_FRAME_HDRSIZE; i++)
   	{
   		if (i >= 32 && i <= 36)
@@ -711,7 +713,7 @@ static int walDecodeFrame(
   ** and the frame-data matches the checksum in the last 8 
   ** bytes of this frame-header.
   */
-  if (aData != NULL)
+  if (aData != NULL && zeroFrame == 0)
   {
     nativeCksum = (bigEndCksum==SQLITE_BIGENDIAN);
     walChecksumBytes(nativeCksum, aFrame, 136, aCksum, aCksum);
@@ -2192,6 +2194,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	int rc = SQLITE_OK;
 	u32 iOffset;
 	Wal *wal = conn->wal;
+	Wal *tmpWal = NULL;
 	u64 curEvnum = 0, curTerm = 0;
 	char found = 0;
 	i64 nSize = 0;
@@ -2209,40 +2212,54 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	// If iteration started use offset from iter struct. Otherwise read last frame offset from wal structure.
 	if (iter->started)
 		iOffset = iter->iOffset;
+	// iterate over all frames in wal for connection. Start with oldest wal file.
 	else if (iter->evnumFrom == 0)
 	{
 		while (wal->prev != NULL)
 			wal = wal->prev;
 
-		wal->hdr.aSalt[0] = 123456789;
-		wal->hdr.aSalt[1] = 987654321;
-
-		rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
-		for(iOffset = WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
+		while (!found)
 		{
-			rc = sqlite3OsRead(wal->pWalFd, buffer, WAL_FRAME_HDRSIZE, iOffset);
-	        if( rc!=SQLITE_OK )
-	        {
-	        	return SQLITE_DONE;
-	        }
-	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
-	        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset,NULL, buffer);
-	        // DBG(("DECODED %llu %llu %d %d %d\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
-	        if(!rc || !pgno || actorIndex != conn->connindex)
-	        {
-	        	continue;
-	        }
+			wal->hdr.aSalt[0] = 123456789;
+			wal->hdr.aSalt[1] = 987654321;
 
-	        rc = SQLITE_OK;
-			iter->iOffset = iOffset;
-			iter->walIndex = wal->walIndex;
-			iter->started = 1;
-    	}
-    	if (iOffset+szFrame > nSize)
-    	{
-    		
-    	}
+			rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
+			for(iOffset = WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
+			{
+				rc = sqlite3OsRead(wal->pWalFd, buffer, WAL_FRAME_HDRSIZE, iOffset);
+		        if( rc!=SQLITE_OK )
+		        {
+		        	return SQLITE_DONE;
+		        }
+		        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
+		        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset, NULL, buffer);
+		        // DBG(("DECODED %llu %llu %d %d %d\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
+		        if(!rc || !pgno || actorIndex != conn->connindex)
+		        {
+		        	continue;
+		        }
+
+		        rc = SQLITE_OK;
+				iter->iOffset = iOffset;
+				iter->walIndex = wal->walIndex;
+				iter->started = 1;
+				found = 1;
+				break;
+	    	}
+	    	if (iOffset+szFrame > nSize)
+	    	{
+	    		// if first wal is current, we have not found any frames in wal for connection
+	    		if (conn->wal == wal)
+	    			return SQLITE_DONE;
+	    		// Move to next wal. Start with first and move back until previous wal is current one.
+	    		tmpWal = conn->wal;
+	    		while (tmpWal->prev != wal)
+	    			tmpWal = tmpWal->prev;
+	    		wal = tmpWal;
+	    	}
+		}
 	}
+	// iterate from some evnum on. Start from the end and move back until reaching evnum.
 	else
 	{
 		// Find first frame of evnum.
