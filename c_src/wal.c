@@ -1396,6 +1396,7 @@ int read_thread_wal(db_thread *thread)
             sqlite3WalEndWriteTransaction(curConn->wal);
         }
 
+        curConn->wal->prevFrameOffset = prevFrameOffset;
         rc = walIndexAppend(curConn->wal, iFrame, pgno);
         if( rc!=SQLITE_OK ) break;
 
@@ -2080,6 +2081,11 @@ int wal_rewind(db_connection *conn, u64 evnum)
 
 	while (wal != NULL)
 	{
+		if (wal->prevFrameOffset == 0)
+		{
+			wal = wal->prev;
+			continue;
+		}
 		// recreate index
 		walIndexClose(wal, 0);
 		memset(&wal->hdr,0,sizeof(WalIndexHdr));
