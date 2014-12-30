@@ -170,6 +170,8 @@ struct db_thread
 
     wal_file *walFile;
     sqlite3_vfs *vfs;
+
+    void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
 };
 int g_nthreads;
 
@@ -315,7 +317,6 @@ static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned 
 static ERL_NIF_TERM push_command(int thread, void *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 // int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
-void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 void *command_create(int threadnum);
 static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);

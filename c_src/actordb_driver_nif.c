@@ -45,7 +45,7 @@
 #include "wal.c"
 
 
-
+void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 static ERL_NIF_TERM 
 make_atom(ErlNifEnv *env, const char *atom_name) 
 {
@@ -2851,6 +2851,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
         g_threads[i].conns = malloc(sizeof(db_connection)*1024);
         memset(g_threads[i].conns,0,sizeof(db_connection)*1024);
         g_threads[i].nconns = 1024;
+        g_threads[i].wal_page_hook = wal_page_hook;
 
         if(enif_thread_create("db_connection", &(g_threads[i].tid), thread_func, &(g_threads[i]), NULL) != 0) 
         {

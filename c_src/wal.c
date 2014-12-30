@@ -1204,6 +1204,7 @@ int read_thread_wal(db_thread *thread)
     walInfo->bigEndCksum = SQLITE_BIGENDIAN;
     walInfo->aSalt[0] = 123456789;
     walInfo->aSalt[1] = 987654321;
+    walInfo->prev = NULL;
     pWalFd = NULL;
 
     // We have a valid wal file structure.
@@ -1328,9 +1329,9 @@ int read_thread_wal(db_thread *thread)
             db_connection *newcons = malloc(newsize);
             memset(newcons,0,newsize);
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
+            thread->conns = newcons;
             thread->nconns = actorIndex*1.3;
           }
-          	
           curConn = &thread->conns[actorIndex];
           if (curConn->db == NULL)
           {
@@ -1389,8 +1390,10 @@ int read_thread_wal(db_thread *thread)
         
         if (curConn->lastWriteThreadNum != threadWriteNum && curConn->wal->dirty)
         {
+        	sqlite3WalBeginWriteTransaction(curConn->wal);
         	// previous transaction was not finished, we must undo index for it
             sqlite3WalUndo(curConn->wal, NULL, NULL);
+            sqlite3WalEndWriteTransaction(curConn->wal);
         }
 
         rc = walIndexAppend(curConn->wal, iFrame, pgno);
@@ -1433,8 +1436,10 @@ int read_thread_wal(db_thread *thread)
       	curConn = &thread->conns[i];
       	if (curConn->wal->dirty)
       	{
+      		sqlite3WalBeginWriteTransaction(curConn->wal);
       		// we have an unfinished transaction and we reached end of wal
       		sqlite3WalUndo(curConn->wal, NULL, NULL);
+      		sqlite3WalEndWriteTransaction(curConn->wal);
       		curConn->wal->dirty = 0;
       	}
       	// If conn had and wals in current file, it has an open read transaction
@@ -2916,7 +2921,8 @@ static int walWriteOneFrame(
   if( rc ) return rc;
   /* Write the page data */
   rc = walWriteToLog(p, pData, p->szPage, iOffset+sizeof(aFrame));
-  wal_page_hook(p->pWal->thread,pData,p->szPage,aFrame,WAL_FRAME_HDRSIZE);
+  if (p->pWal->thread->wal_page_hook)
+  	p->pWal->thread->wal_page_hook(p->pWal->thread,pData,p->szPage,aFrame,WAL_FRAME_HDRSIZE);
   return rc;
 }
 
