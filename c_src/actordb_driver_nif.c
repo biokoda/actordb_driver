@@ -463,6 +463,7 @@ command_create(int threadnum)
     cmd->stmt = NULL;
     cmd->connindex = -1;
     cmd->p = NULL;
+    cmd->conn = NULL;
 
     return item;
 }
@@ -616,6 +617,8 @@ do_open(db_command *cmd, db_thread *thread)
     else
     {
         cmd->connindex = *pActorIndex;
+        cmd->conn = &thread->conns[cmd->connindex];
+        thread->curConn = cmd->conn;
     }
     
     res->thread = thread->index;
