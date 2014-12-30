@@ -3477,7 +3477,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
         iMax == pWal->thread->walFile->mxFrame)
     {
       pWal->thread->walFile->mxFrame = pWal->thread->walFile->lastCommit;
-      assert(iMax > pWal->hdr.mxFrame);
+      assert(iMax == pWal->hdr.mxFrame);
     }
     // pWal->thread->curConn->nPages -= (iMax - pWal->hdr.mxFrame);
   }

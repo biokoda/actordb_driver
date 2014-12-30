@@ -1087,7 +1087,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
     enif_inspect_binary(cmd->env,cmd->arg,&bin);
     if (cmd->arg1)
     {
-        enif_inspect_binary(cmd->env,cmd->arg,&binhead);
+        enif_inspect_binary(cmd->env,cmd->arg1,&binhead);
         head = binhead.data;
         page.pData = bin.data;
     }
