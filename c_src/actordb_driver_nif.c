@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -43,6 +43,7 @@
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
 // Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
+
 
 
 void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
@@ -479,6 +480,7 @@ destruct_connection(ErlNifEnv *env, void *arg)
     // Send unlock first if it exists
     if (res->checkpointLock > 0)
     {
+        DBG((g_log,"destruct with checkpoint lock, conn=%d, thread=%d\n",res->connindex,res->thread));
         item = command_create(res->thread);
         cmd = queue_get_item_data(item);
          
@@ -542,7 +544,7 @@ do_open(db_command *cmd, db_thread *thread)
     char filename[MAX_PATHNAME];
     unsigned int size;
     int rc;
-    ERL_NIF_TERM error;
+    ERL_NIF_TERM result;
     conn_resource *res;
     int i;
     int *pActorIndex;
@@ -596,10 +598,10 @@ do_open(db_command *cmd, db_thread *thread)
             
         if(rc != SQLITE_OK) 
         {
-            error = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
+            result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
             sqlite3_close(cmd->conn->db);
             cmd->conn = NULL;
-            return error;
+            return result;
         }
 
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
@@ -620,13 +622,17 @@ do_open(db_command *cmd, db_thread *thread)
         cmd->conn = &thread->conns[cmd->connindex];
         thread->curConn = cmd->conn;
     }
+
+    DBG((g_log,"thread=%d open=%s conn=%d.\n",thread->index,filename,cmd->connindex));
     
     res->thread = thread->index;
     res->connindex = cmd->connindex;
     cmd->conn->nErlOpen++;
     cmd->conn->connindex = cmd->connindex;
 
-    return enif_make_resource(cmd->env, res);
+    result = enif_make_resource(cmd->env, res);
+    enif_release_resource(res);
+    return result;
 }
 
 static ERL_NIF_TERM
@@ -1020,18 +1026,21 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
     char activeWal;
     ErlNifBinary bin;
     ERL_NIF_TERM tBin;
+    ERL_NIF_TERM res;
     int rc;
     u64 evnumFrom;
     iterate_resource *iter;
     int nfilled = 0;
+    char dorel = 0;
 
     if (!enif_get_resource(cmd->env, cmd->arg, iterate_type, (void **) &iter))
     {
+        dorel = 1;
         if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnumFrom))
             return enif_make_badarg(cmd->env);
 
         iter = enif_alloc_resource(iterate_type, sizeof(iterate_resource));
-        if(!iter) 
+        if(!iter)
             return make_error_tuple(cmd->env, "no_memory");
 
         memset(iter,0,sizeof(iterate_resource));
@@ -1041,6 +1050,12 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
         // Creating a iterator requires checkpoint lock.
         // On iterator destruct checkpoint will be released.
         cmd->conn->checkpointLock++;
+
+        res = enif_make_resource(cmd->env,iter);
+    }
+    else
+    {
+        res = cmd->arg;
     }
 
     enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
@@ -1053,9 +1068,11 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
     }
     else
     {
+        if (dorel)
+            enif_release_resource(iter);
         tBin = enif_make_binary(cmd->env,&bin);
         enif_release_binary(&bin);
-        return enif_make_tuple4(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,enif_make_resource(cmd->env,iter)), 
+        return enif_make_tuple4(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), 
                         tBin, enif_make_int(cmd->env,(int)activeWal));
     }
 }
@@ -1571,7 +1588,6 @@ do_close(db_command *cmd,db_thread *thread)
     db_connection *conn = cmd->conn;
     int i = 0;
     int *pActorPos;
-    // DBG(("DOCLOSE\r\n"));
     
     conn->nErlOpen--;
     
@@ -1603,8 +1619,18 @@ do_close(db_command *cmd,db_thread *thread)
             conn->staticPrepared[i] = NULL;
         }
     }
+    if (!conn->wal)
+    {
+        rc = sqlite3_close(conn->db);
+        if(rc != SQLITE_OK)
+        {
+            ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
+        }
+
+        memset(conn,0,sizeof(db_connection));
+    }
     // if it no longer has any frames in wal, it can actually be closed
-    if (conn->wal->prev == NULL && conn->wal->hdr.mxFrame == 0)
+    else if (conn->wal->prev == NULL && conn->wal->hdr.mxFrame == 0)
     {
         pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
         sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
@@ -1765,12 +1791,18 @@ thread_func(void *arg)
     data->alive = 1;
     sqlite3HashInit(&data->walHash);
 
-    read_thread_wal(data);
+    if (data->index >= 0)
+        read_thread_wal(data);
 
     while(1) 
     {
         void *item = queue_pop(data->commands);
         cmd = queue_get_item_data(item);
+
+        DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
+        #ifdef _TESTDBG_
+        fflush(g_log);
+        #endif
 
         if (cmd->type == cmd_stop)
         {
@@ -1791,6 +1823,11 @@ thread_func(void *arg)
             }
             queue_recycle(data->commands,item);
         }
+
+        DBG((g_log,"thread=%d DONE command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
+        #ifdef _TESTDBG_
+        fflush(g_log);
+        #endif
     }
     queue_destroy(data->commands);
 
@@ -2538,7 +2575,7 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     conn_resource *res;
     db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    void *item;    
      
     if(argc != 4) 
         return enif_make_badarg(env);  
@@ -2562,7 +2599,7 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = enif_make_copy(cmd->env, argv[1]);
     cmd->pid = pid;
     cmd->connindex = res->connindex;
-    cmd->arg = enif_make_copy(env,argv[3]);
+    cmd->arg = enif_make_copy(cmd->env,argv[3]);
 
     enif_consume_timeslice(env,500);
 
@@ -2766,6 +2803,17 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     int i = 0;
     const ERL_NIF_TERM *param;
     const ERL_NIF_TERM *param1;
+    char nodename[128];
+    ERL_NIF_TERM head, tail;
+
+    memset(nodename,0,128);
+    enif_get_list_cell(env,info,&head,&info);
+    enif_get_list_cell(env,info,&info,&tail);
+
+#ifdef _TESTDBG_
+    enif_get_string(env,head,nodename,128,ERL_NIF_LATIN1);
+    g_log = fopen(nodename, "a");
+#endif
 
 #ifdef _WIN32
     WSADATA wsd;
@@ -2792,7 +2840,11 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     // Paths will determine thread numbers. Every path has a thread.
     // {{Path1,Path2,Path3,...},{StaticSql1,StaticSql2,StaticSql3,...}}
     if (!enif_get_tuple(env,info,&i,&param))
+    {
+        DBG((g_log,"Param not tuple\n"));
         return -1;
+    }
+        
     if (i != 2)
         return -1;
 
@@ -2842,6 +2894,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
         printf("Unable to create esqlite3 thread\r\n");
         return -1;
     }
+    DBG((g_log,"Driver starting %d threads.\n",g_nthreads));
     
     for (i = 0; i < g_nthreads; i++)
     {

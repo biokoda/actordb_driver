@@ -12,6 +12,13 @@
 #define MAX_ACTOR_NAME 92
 #define WAL_LIMIT 1024*3 //*pagesize -> ~12MB
 
+FILE *g_log = 0;
+#if defined(_TESTDBG_)
+# define DBG(X)  fprintf X
+#else
+# define DBG(X)
+#endif
+
 #ifndef _TESTAPP_
 static ErlNifResourceType *db_connection_type = NULL;
 static ErlNifResourceType *db_backup_type = NULL;
@@ -148,7 +155,7 @@ struct db_thread
     // Unlike regular sqlite wal files, in actordb wal files can be intertwined.
     u32 threadNum;
     // Index in table od threads.
-    unsigned int index;
+    int index;
     // so currently executing connection data is accessible from wal callback
     db_connection *curConn; 
 
@@ -185,7 +192,7 @@ ErlNifMutex *g_dbcount_mutex = NULL;
 
 struct db_connection
 {
-    unsigned int thread;
+    int thread;
     // index in thread table of actors (thread->conns)
     int connindex;
     sqlite3 *db;
@@ -250,7 +257,7 @@ struct db_backup
 {
   sqlite3_backup *b;
   int pages_for_step;
-  unsigned int thread;
+  int thread;
   sqlite3 *dst;
   sqlite3 *src;
 };
@@ -258,25 +265,25 @@ struct db_backup
 
 typedef enum 
 {
-    cmd_unknown,
-    cmd_open,
-    cmd_exec_script,
-    cmd_close,
-    cmd_stop,
-    cmd_backup_init,
-    cmd_backup_step,
-    cmd_backup_finish,
-    cmd_interrupt,
-    cmd_tcp_connect,
-    cmd_set_socket,
-    cmd_tcp_reconnect,
-    cmd_bind_insert,
-    cmd_alltunnel_call,
-    cmd_store_prepared,
-    cmd_checkpoint_lock,
-    cmd_iterate_wal,
-    cmd_inject_page,
-    cmd_wal_rewind
+    cmd_unknown = 0,
+    cmd_open  = 1,
+    cmd_exec_script  = 2,
+    cmd_close  = 3,
+    cmd_stop  = 4,
+    cmd_backup_init  = 5,
+    cmd_backup_step  = 6,
+    cmd_backup_finish  = 7,
+    cmd_interrupt  = 8,
+    cmd_tcp_connect  = 9,
+    cmd_set_socket  = 10,
+    cmd_tcp_reconnect  = 11,
+    cmd_bind_insert  = 12,
+    cmd_alltunnel_call  = 13,
+    cmd_store_prepared  = 14,
+    cmd_checkpoint_lock  = 15,
+    cmd_iterate_wal  = 16,
+    cmd_inject_page  = 17,
+    cmd_wal_rewind  = 18
 } command_type;
 
 typedef struct 

@@ -126,7 +126,7 @@ init({_,_} =Threads) ->
         {error, bad_name} -> filename:join("priv", NifName);
         Dir -> filename:join(Dir, NifName)
     end,
-    case erlang:load_nif(NifFileName, Threads) of
+    case erlang:load_nif(NifFileName, ["drv_"++hd(string:tokens(atom_to_list(node()),"@"))++".txt",Threads]) of
         ok ->
             ok;
         {error,{upgrade,_}} ->
