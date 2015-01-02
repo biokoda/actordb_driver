@@ -1306,7 +1306,7 @@ int read_thread_wal(db_thread *thread)
         	DBG((g_log,"Frame INVALID! %s\r\n",filename));
         	break;
         }
-        DBG((g_log,"Decoded frame %d %d\n",pgno,actorIndex));
+        // DBG((g_log,"Decoded frame %d %d\n",pgno,actorIndex));
 
         // valid wal pages do not have pgno 0. They mighty occur when a DB wants to forget some writes
         //  when a replication conflict occurs.
