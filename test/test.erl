@@ -5,7 +5,7 @@ run_test_() ->
     [file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
     [file:delete(Fn) || Fn <- filelib:wildcard("*.db")],
     [fun lz4/0,
-     fun mem/0,
+     fun modes/0,
      fun repl/0,
      fun check/0].
 
@@ -33,8 +33,8 @@ lz4() ->
     Bin1 = actordb_driver:lz4_decompress(Compressed1,byte_size(Bin1),CompressedSize1),
     ok.
 
-mem() ->
-    ?debugFmt("mem",[]),
+modes() ->
+    ?debugFmt("modes",[]),
     Sql = <<"select name, sql from sqlite_master where type='table';",
                     "$PRAGMA cache_size=10;">>,
     {ok,Db,_} = actordb_driver:open(":memory:",1,Sql),
@@ -42,7 +42,14 @@ mem() ->
         "$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
         "$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db),
     {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
-    {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db).
+    {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db),
+    
+    {ok,Db1} = actordb_driver:open("deletemode.db",1,delete),
+    {ok,_} = actordb_driver:exec_script(<<"$CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT);",
+        "$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
+        "$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db1),
+    {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db1),
+    {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db1).
 
 repl() ->
     ?debugFmt("repl",[]),

@@ -4,8 +4,8 @@
 -module(actordb_driver_nif).
 
 -export([init/1,
-         open/4, 
-         open/5,
+         open/5, 
+         open/6,
          exec_script/7, 
          exec_script/8,
          store_prepared_table/2,
@@ -142,9 +142,9 @@ init({_,_} =Threads) ->
 % wal_pages(_) ->
 %     exit(nif_library_not_loaded).
 
-open(_Ref, _Dest, _Filename,_ThreadNumber) ->
+open(_Ref, _Dest, _Filename,_ThreadNumber,_Mode) ->
     exit(nif_library_not_loaded).
-open(_Ref, _Dest, _Filename,_ThreadNumber,_Sql) ->
+open(_Ref, _Dest, _Filename,_ThreadNumber,_Sql,_Mode) ->
     exit(nif_library_not_loaded).
 
 

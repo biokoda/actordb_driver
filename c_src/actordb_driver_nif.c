@@ -553,6 +553,7 @@ do_open(db_command *cmd, db_thread *thread)
     conn_resource *res;
     int i;
     int *pActorIndex;
+    char mode[10];
 
     memset(filename,0,MAX_PATHNAME);
     memcpy(filename, thread->path, thread->pathlen);
@@ -619,8 +620,18 @@ do_open(db_command *cmd, db_thread *thread)
         *pActorIndex = i;
         sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorIndex);
 
-        // Always wal. If it was called as :memory: then this call will do nothing.
-        sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;",NULL,NULL,NULL);
+        enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
+        // if filename :memory: this call will have no effect
+        if (strcmp(mode,"wal") == 0)
+            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;",NULL,NULL,NULL);
+        else if (strcmp(mode,"off") == 0)
+            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=off;",NULL,NULL,NULL);
+        else if (strcmp(mode,"delete") == 0)
+            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=delete;",NULL,NULL,NULL);
+        else if (strcmp(mode,"truncate") == 0)
+            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=truncate;",NULL,NULL,NULL);
+        else if (strcmp(mode,"persist") == 0)
+            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=persist;",NULL,NULL,NULL);
     }
     else
     {
@@ -629,7 +640,7 @@ do_open(db_command *cmd, db_thread *thread)
         thread->curConn = cmd->conn;
     }
 
-    DBG((g_log,"thread=%d open=%s conn=%d.\n",thread->index,filename,cmd->connindex));
+    DBG((g_log,"thread=%d open=%s mode=%s conn=%d.\n",thread->index,filename,mode,cmd->connindex));
     
     res->thread = thread->index;
     res->connindex = cmd->connindex;
@@ -1697,11 +1708,11 @@ evaluate_command(db_command *cmd,db_thread *thread)
     case cmd_open:
     {
         ERL_NIF_TERM connres = do_open(cmd,thread);
-        if (cmd->conn != NULL && cmd->arg1 == 0)
+        if (cmd->conn != NULL && cmd->arg2 == 0)
             return enif_make_tuple2(cmd->env,atom_ok,connres);
         else if (cmd->conn == NULL)
             return connres;
-        else if (cmd->arg1 != 0)
+        else if (cmd->arg2 != 0)
         {
             cmd->arg = cmd->arg1;
             cmd->arg1 = 0;
@@ -1965,7 +1976,7 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     void *item;
     unsigned int thread;
  
-    if(!(argc == 4 || argc == 5)) 
+    if(!(argc == 5 || argc == 6)) 
 	    return enif_make_badarg(env);     
     if(!enif_is_ref(env, argv[0])) 
 	    return make_error_tuple(env, "invalid_ref");
@@ -1984,10 +1995,11 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = enif_make_copy(cmd->env, argv[0]);
     cmd->pid = pid;
     cmd->arg = enif_make_copy(cmd->env, argv[2]);
-    if (argc == 5)
-        cmd->arg1 = enif_make_copy(cmd->env, argv[4]);
-    else
-        cmd->arg1 = 0;
+    cmd->arg1 = enif_make_copy(cmd->env, argv[4]);
+    if (argc == 6)
+    {
+        cmd->arg2 = enif_make_copy(cmd->env, argv[5]);
+    }
 
     enif_consume_timeslice(env,500);
     // return enif_make_tuple2(env,push_command(conn->thread, item),db_conn);
@@ -2989,8 +3001,8 @@ on_unload(ErlNifEnv* env, void* priv_data)
 }
 
 static ErlNifFunc nif_funcs[] = {
-    {"open", 4, db_open},
     {"open", 5, db_open},
+    {"open", 6, db_open},
     {"close", 3, db_close},
     {"replicate_opts",2,replicate_opts},
     {"replicate_opts",3,replicate_opts},

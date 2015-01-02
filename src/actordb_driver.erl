@@ -4,7 +4,7 @@
 -module(actordb_driver).
 
 -export([init/1,noop/1,
-         open/1,open/2,open/3,
+         open/1,open/2,open/3,open/4,
          exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
          store_prepared_table/2,
          close/1,inject_page/2,inject_page/3,
@@ -20,20 +20,23 @@ init(Threads) ->
     actordb_driver_nif:init(Threads).
 
 open(Filename) ->
-    open(Filename,0).
-
+    open(Filename,0,wal).
 open(Filename,ThreadNumber) ->
+    open(Filename,ThreadNumber,wal).
+open(Filename,ThreadNumber,Mode) when Mode == wal; Mode == off; Mode == delete; Mode == persist; Mode == truncate ->
     Ref = make_ref(),
-    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber),
+    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode),
     case receive_answer(Ref) of
         {ok,Connection} ->
             {ok, {actordb_driver, make_ref(),Connection}};
         {error, _Msg}=Error ->
             Error
-    end.
-open(Filename,ThreadNumber,Sql) ->
+    end;
+open(Filename,ThreadNumber,Sql) when is_binary(Sql); is_list(Sql) ->
+    open(Filename,ThreadNumber,Sql,wal).
+open(Filename,ThreadNumber,Sql,Mode) ->
     Ref = make_ref(),
-    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Sql),
+    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Sql,Mode),
     case receive_answer(Ref) of
         {ok,Connection,Res} ->
             {ok, {actordb_driver, make_ref(),Connection},Res};
