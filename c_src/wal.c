@@ -1179,6 +1179,7 @@ int read_thread_wal(db_thread *thread)
       continue;
     
     snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,ent->d_name);
+    DBG((g_log,"Reading %s\n",filename));
     pWalFd = sqlite3MallocZero(thread->vfs->szOsFile);
     rc = sqlite3OsOpen(thread->vfs, filename, pWalFd, (SQLITE_OPEN_TRANSIENT_DB|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
     if (rc != SQLITE_OK || flags&SQLITE_OPEN_READONLY || read_wal_hdr(thread->vfs,pWalFd,&walInfo) != SQLITE_OK)
@@ -1305,6 +1306,7 @@ int read_thread_wal(db_thread *thread)
         	DBG((g_log,"Frame INVALID! %s\r\n",filename));
         	break;
         }
+        DBG((g_log,"Decoded frame %d %d\n",pgno,actorIndex));
 
         // valid wal pages do not have pgno 0. They mighty occur when a DB wants to forget some writes
         //  when a replication conflict occurs.
@@ -1393,7 +1395,11 @@ int read_thread_wal(db_thread *thread)
 
         curConn->wal->prevFrameOffset = prevFrameOffset;
         rc = walIndexAppend(curConn->wal, iFrame, pgno);
-        if( rc!=SQLITE_OK ) break;
+        if( rc!=SQLITE_OK )
+        {
+        	DBG((g_log, "index append failed %d\n",rc));
+        	break;
+        }
 
         /* If nTruncate is non-zero, this is a commit record. */
         if( nTruncate )
@@ -3481,15 +3487,14 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
         rc = xUndo(pUndoCtx, walFramePgno(pWal, iFrame));
       }
     }
+
     if( iMax!=pWal->hdr.mxFrame ) walCleanupHash(pWal);
     // If we can move back thread wal do so (no writes to other actors came after it)
     if (pWal->walIndex == pWal->thread->walFile->walIndex &&
         iMax == pWal->thread->walFile->mxFrame)
     {
       pWal->thread->walFile->mxFrame = pWal->thread->walFile->lastCommit;
-      assert(iMax == pWal->hdr.mxFrame);
     }
-    // pWal->thread->curConn->nPages -= (iMax - pWal->hdr.mxFrame);
   }
   return rc;
 }

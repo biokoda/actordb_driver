@@ -239,6 +239,7 @@ struct conn_resource
   int thread;
   int connindex;
   char checkpointLock;
+  char dodelete;
 };
 
 struct iterate_resource

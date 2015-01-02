@@ -72,6 +72,7 @@ void do_print(db_thread *thread)
     while (wal->prev)
         wal = wal->prev;
 
+    DBG((g_log,"walfd %d\n",wal->pWalFd));
 
     while (1)
     {
@@ -93,7 +94,7 @@ void do_print(db_thread *thread)
             }
             if (!pgno)
             {
-                printf("Zeroed out frame\n");
+                printf("%u Zeroed out frame\n",iOffset);
                 continue;
             }
             printf("%u Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
@@ -118,9 +119,16 @@ int main(int argc, char* argv[])
 	memset(&clcmd,0,sizeof(db_command));
     memset(&thread,0,sizeof(thread));
 
+    // g_log = stdout;
+
     if (argc != 3)
     {
         printf("Call: tool print /path/to/wal/folder\n");
+        return 1;
+    }
+    else if (strcmp(argv[1],"print") != 0)
+    {
+        printf("Invalid command\n");
         return 1;
     }
 
@@ -130,7 +138,6 @@ int main(int argc, char* argv[])
     {
         do_print(&thread);
     }
-
     
     close_conns(&thread);
     free(thread.conns);

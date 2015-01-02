@@ -79,6 +79,8 @@ int main()
     char pgDone = 0, pgLast = 0;
     iterate_resource iter;
 
+    g_log = stdout;
+
     memset(&iter,0,sizeof(iter));
     memset(buf,0,sizeof(buf));
     memset(buf1,0,sizeof(buf1));

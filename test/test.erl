@@ -1,21 +1,40 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
--define(INIT,
-    [begin file:delete(Fn) end || Fn <- filelib:wildcard("wal.*")],
-    [file:delete(Fn) || Fn <- filelib:wildcard("*.db")],
-    actordb_driver:init({{"."},{}})).
-% ?debugFmt("Deleting ~s",[Fn]),
 
-lz4_test() ->
-    ?INIT,
+run_test_() ->
+    [file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
+    [file:delete(Fn) || Fn <- filelib:wildcard("*.db")],
+    [fun lz4/0,
+     fun mem/0,
+     fun repl/0,
+     fun check/0].
+
+check() ->
+    ?debugFmt("Reload and checking result of repl",[]),
+    garbage_collect(),
+    code:delete(actordb_driver_nif),
+    code:purge(actordb_driver_nif),
+    false = code:is_loaded(actordb_driver_nif),
+    actordb_driver:init({{"."},{}}),
+    Sql = "select name, sql from sqlite_master where type='table';",
+    {ok,_Db,{ok,[[{columns,_},{rows,[]}]]}} = actordb_driver:open("t1.db",1,Sql),
+    {ok,Db2} = actordb_driver:open("t2.db"),
+    {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
+    {ok,Db3} = actordb_driver:open("t3.db"),
+    {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
+    ok.
+
+lz4() ->
+    actordb_driver:init({{"."},{}}),
+    ?debugFmt("lz4",[]),
     Bin1 = binary:copy(<<"SELECT * FROM WTF;">>,2),
     {Compressed1,CompressedSize1} = actordb_driver:lz4_compress(Bin1),
     % ?debugFmt("Compressed ~p size ~p ",[byte_size(Compressed),CompressedSize]),
     Bin1 = actordb_driver:lz4_decompress(Compressed1,byte_size(Bin1),CompressedSize1),
     ok.
 
-mem_test() ->
-    ?INIT,
+mem() ->
+    ?debugFmt("mem",[]),
     Sql = <<"select name, sql from sqlite_master where type='table';",
                     "$PRAGMA cache_size=10;">>,
     {ok,Db,_} = actordb_driver:open(":memory:",1,Sql),
@@ -25,8 +44,8 @@ mem_test() ->
     {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
     {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db).
 
-replication_test() ->
-    ?INIT,
+repl() ->
+    ?debugFmt("repl",[]),
     {ok,Db} = actordb_driver:open("t1.db"),
     % exec_script(Sql,  {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
     {ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",Db,10000,1,1,<<>>),
@@ -65,7 +84,20 @@ replication_test() ->
     {ok,Db3} = actordb_driver:open("t3.db"),
     [actordb_driver:inject_page(Db3,Bin) || Bin <- Pages2],
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
-    ok.
+    delete(Db).
+    % repl1(Db);
+% repl1(Db) ->
+
+delete(undefined) ->
+    garbage_collect(),
+    timer:sleep(100),
+    ?assertMatch({error,enoent},file:read_file_info("t1.db"));
+    % {ok,Db} = actordb_driver:open("t1.db"),
+delete(Db) ->
+    actordb_driver:delete_actor(Db),
+    delete(undefined).
+
+
 get_pages(Db) ->
 	get_pages(Db,1).
 get_pages(Db,Iter) ->

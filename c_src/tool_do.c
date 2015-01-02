@@ -43,10 +43,7 @@ void do_close(db_command *cmd,db_thread *thread)
     free(pActorPos);
 
     rc = sqlite3_close(conn->db);
-    if(rc != SQLITE_OK)
-    {
-        
-    }
+    assert(rc == SQLITE_OK);
     // sqlite3HashClear(&cmd->conn->walPages);
 
     memset(conn,0,sizeof(db_connection));

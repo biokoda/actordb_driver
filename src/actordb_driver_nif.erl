@@ -36,8 +36,12 @@
          checkpoint_lock/4,
          inject_page/4,
          inject_page/5,
-         wal_rewind/4
+         wal_rewind/4,
+         delete_actor/1
 ]).
+
+delete_actor(_) ->
+    exit(nif_library_not_loaded).
 
 wal_rewind(_,_,_,_) ->
     exit(nif_library_not_loaded).

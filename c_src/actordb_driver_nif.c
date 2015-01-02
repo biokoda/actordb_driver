@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -498,6 +498,11 @@ destruct_connection(ErlNifEnv *env, void *arg)
     cmd->type = cmd_close;
     cmd->connindex = res->connindex;
     cmd->ref = 0;
+    if (res->dodelete)
+    {
+        DBG((g_log,"destruct with delete conn=%d, thread=%d\n",res->connindex,res->thread));
+        cmd->arg = enif_make_ref(cmd->env);
+    }
 
     push_command(res->thread, item);
 }
@@ -563,6 +568,7 @@ do_open(db_command *cmd, db_thread *thread)
     res = enif_alloc_resource(db_connection_type, sizeof(conn_resource));
     if(!res) 
         return make_error_tuple(cmd->env, "no_memory");
+    memset(res,0,sizeof(conn_resource));
 
     pActorIndex = sqlite3HashFind(&thread->walHash,filename+thread->pathlen+1);
     if (pActorIndex == NULL || filename[thread->pathlen+1] == ':')
@@ -1436,15 +1442,17 @@ do_exec_script(db_command *cmd, db_thread *thread)
                                             results);
         }
         dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
+        DBG((g_log,"Finalizing statement? %d\n",(int)dofinalize));
         statement = NULL;
     }
 
     // Pages have been written to wal, but we are returning error. 
     // Call a rollback.
-    if (rc > 0 && pagesPre != thread->walFile->mxFrame)
+    if (rc > 0 && rc < 100 && pagesPre != thread->walFile->mxFrame)
     {
         sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
         sqlite3_step(statement);
+        sqlite3_finalize(statement);
     }
 
     // enif_release_resource(cmd->conn);
@@ -1590,11 +1598,10 @@ do_close(db_command *cmd,db_thread *thread)
     int *pActorPos;
     
     conn->nErlOpen--;
-    
     // DB no longer open in erlang code.
-    if (conn->nErlOpen <= 0) //!conn->nPages
+    if (conn->nErlOpen <= 0)
     {
-        if (!conn->packetPrefix.size)
+        if (conn->packetPrefix.size)
             enif_release_binary(&conn->packetPrefix);
 
         if (conn->prepared != NULL)
@@ -1619,11 +1626,30 @@ do_close(db_command *cmd,db_thread *thread)
             conn->staticPrepared[i] = NULL;
         }
     }
-    if (!conn->wal)
+    if (cmd->arg && enif_is_ref(cmd->env,cmd->arg))
+    {
+        char filename[MAX_PATHNAME];
+
+        DBG((g_log,"Deleting actor\n"));
+
+        wal_rewind(cmd->conn,0);
+        rc = sqlite3_close(conn->db);
+        if(rc != SQLITE_OK)
+        {
+            DBG((g_log,"Error closing %d, erlopen=%d\n",rc,conn->nErlOpen));
+            return make_error_tuple(cmd->env,"sqlite3_close in do_close");
+        }
+        snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,conn->dbpath);
+        remove(filename);
+        memset(conn,0,sizeof(db_connection));
+        return ret;
+    }
+    else if (!conn->wal)
     {
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
+            DBG((g_log,"Error closing %d\n",rc));
             ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
         }
 
@@ -1642,10 +1668,15 @@ do_close(db_command *cmd,db_thread *thread)
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
-            ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
+            DBG((g_log,"Error closing %d\n",rc));
+            return make_error_tuple(cmd->env,"sqlite3_close in do_close");
         }
 
         memset(conn,0,sizeof(db_connection));
+    }
+    else
+    {
+        DBG((g_log,"Not closing yet\n"));
     }
 
 
@@ -1824,12 +1855,17 @@ thread_func(void *arg)
             queue_recycle(data->commands,item);
         }
 
-        DBG((g_log,"thread=%d DONE command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
+        DBG((g_log,"thread=%d command done.\n",data->index));
         #ifdef _TESTDBG_
         fflush(g_log);
         #endif
     }
     queue_destroy(data->commands);
+
+    DBG((g_log,"thread=%d stopping.\n",data->index));
+    #ifdef _TESTDBG_
+    fflush(g_log);
+    #endif
 
     for (i = 0; i < data->nconns; i++)
     {
@@ -2648,6 +2684,21 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM 
+delete_actor(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    conn_resource *res;
+
+    if(argc != 1) 
+        return enif_make_badarg(env);  
+    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+        return enif_make_badarg(env);
+
+    res->dodelete = 1;
+        
+    return atom_ok;
+}
+
+static ERL_NIF_TERM 
 drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
@@ -2970,7 +3021,8 @@ static ErlNifFunc nif_funcs[] = {
     {"page_size",0,page_size},
     {"inject_page",4,inject_page},
     {"inject_page",5,inject_page},
-    {"wal_rewind",4,drv_wal_rewind}
+    {"wal_rewind",4,drv_wal_rewind},
+    {"delete_actor",1,delete_actor},
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);
