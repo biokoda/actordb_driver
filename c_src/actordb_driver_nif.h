@@ -198,7 +198,7 @@ struct db_connection
     sqlite3 *db;
     struct Wal *wal;
     // Hash walPages;
-    char dbpath[MAX_ACTOR_NAME];
+    char *dbpath;
     // Is db open from erlang. It may just be open in driver.
     char nErlOpen;
     char checkpointLock;
@@ -223,7 +223,7 @@ struct db_connection
     ErlNifBinary packetVarPrefix;
     #endif
 
-    sqlite3_stmt *staticPrepared[MAX_STATIC_SQLS];
+    sqlite3_stmt **staticPrepared;
     sqlite3_stmt **prepared;
     int *prepVersions;
 

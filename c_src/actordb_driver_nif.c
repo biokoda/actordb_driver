@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -613,6 +613,7 @@ do_open(db_command *cmd, db_thread *thread)
 
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
+        cmd->conn->dbpath = malloc(MAX_ACTOR_NAME);
         memset(cmd->conn->dbpath,0,MAX_ACTOR_NAME);
         enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
@@ -1257,6 +1258,12 @@ do_exec_script(db_command *cmd, db_thread *thread)
                     if (readpoint[skip+1] == 's')
                         skip = 1;
 
+                    if (cmd->conn->staticPrepared == NULL)
+                    {
+                        cmd->conn->staticPrepared = malloc(sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
+                        memset(cmd->conn->staticPrepared,0,sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
+                    }
+
                     if (cmd->conn->staticPrepared[i] == NULL)
                     {
                         rc = sqlite3_prepare_v2(cmd->conn->db, (char *)g_static_sqls[i], -1, &(cmd->conn->staticPrepared[i]), NULL);
@@ -1636,6 +1643,8 @@ do_close(db_command *cmd,db_thread *thread)
             sqlite3_finalize(conn->staticPrepared[i]);
             conn->staticPrepared[i] = NULL;
         }
+        free(conn->staticPrepared);
+        conn->staticPrepared = NULL;
     }
     if (cmd->arg && enif_is_ref(cmd->env,cmd->arg))
     {
@@ -1652,6 +1661,11 @@ do_close(db_command *cmd,db_thread *thread)
         }
         snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,conn->dbpath);
         remove(filename);
+
+        pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
+        sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
+        free(pActorPos);
+        free(conn->dbpath);
         memset(conn,0,sizeof(db_connection));
         return ret;
     }
@@ -1663,7 +1677,7 @@ do_close(db_command *cmd,db_thread *thread)
             DBG((g_log,"Error closing %d\n",rc));
             ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
         }
-
+        free(conn->dbpath);
         memset(conn,0,sizeof(db_connection));
     }
     // if it no longer has any frames in wal, it can actually be closed
@@ -1682,7 +1696,7 @@ do_close(db_command *cmd,db_thread *thread)
             DBG((g_log,"Error closing %d\n",rc));
             return make_error_tuple(cmd->env,"sqlite3_close in do_close");
         }
-
+        free(conn->dbpath);
         memset(conn,0,sizeof(db_connection));
     }
     else

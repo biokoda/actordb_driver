@@ -41,6 +41,7 @@ void do_close(db_command *cmd,db_thread *thread)
     pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
     sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
     free(pActorPos);
+    free(conn->dbpath);
 
     rc = sqlite3_close(conn->db);
     assert(rc == SQLITE_OK);
@@ -87,6 +88,7 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
         }
         size = strlen(name);
 
+        cmd->conn->dbpath = malloc(MAX_ACTOR_NAME);
         memset(cmd->conn->dbpath,0,MAX_ACTOR_NAME);
         sprintf(cmd->conn->dbpath,"%s",name);
 

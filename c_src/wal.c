@@ -1118,6 +1118,7 @@ int checkpoint_continue(db_thread *thread)
 	        	pActorPos = sqlite3HashFind(&thread->walHash,curConn->dbpath);
 		        sqlite3HashInsert(&thread->walHash, curConn->dbpath, NULL);
 		        free(pActorPos);
+		        free(curConn->dbpath);
 		        memset(curConn,0,sizeof(db_connection));
 	        }
 		}
@@ -1322,12 +1323,12 @@ int read_thread_wal(db_thread *thread)
         {
           if (thread->nconns <= actorIndex)
           {
-            int newsize = sizeof(db_connection)*(actorIndex*1.3);
+            int newsize = sizeof(db_connection)*(actorIndex*1.5);
             db_connection *newcons = malloc(newsize);
             memset(newcons,0,newsize);
             memcpy(newcons,thread->conns,thread->nconns*sizeof(db_connection));
             thread->conns = newcons;
-            thread->nconns = actorIndex*1.3;
+            thread->nconns = actorIndex*1.5;
           }
           curConn = &thread->conns[actorIndex];
           if (curConn->db == NULL)
@@ -1343,6 +1344,7 @@ int read_thread_wal(db_thread *thread)
             	rc = SQLITE_ERROR;
             	break;
             }
+            curConn->dbpath = malloc(MAX_ACTOR_NAME);
             memset(curConn->dbpath,0,MAX_ACTOR_NAME);
             strcpy(curConn->dbpath,filename+thread->pathlen+1);
 
