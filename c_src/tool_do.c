@@ -32,10 +32,15 @@ void do_close(db_command *cmd,db_thread *thread)
     }
     free(conn->prepared);
     conn->prepared = NULL;
-    for (i = 0; i < MAX_STATIC_SQLS; i++)
+
+    if (conn->staticPrepared)
     {
-        sqlite3_finalize(conn->staticPrepared[i]);
-        conn->staticPrepared[i] = NULL;
+        for (i = 0; i < MAX_STATIC_SQLS; i++)
+        {
+            sqlite3_finalize(conn->staticPrepared[i]);
+            conn->staticPrepared[i] = NULL;
+        }
+        free(conn->staticPrepared);
     }
 
     pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
@@ -104,6 +109,7 @@ void do_open(char *name, db_command *cmd, db_thread *thread)
     else
     {
         cmd->connindex = *pActorPos;
+        cmd->conn = &thread->conns[cmd->connindex];
     }
     
     cmd->conn->nErlOpen++;
