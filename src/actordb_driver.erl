@@ -36,7 +36,7 @@ open(Filename,ThreadNumber,Sql) when is_binary(Sql); is_list(Sql) ->
     open(Filename,ThreadNumber,Sql,wal).
 open(Filename,ThreadNumber,Sql,Mode) ->
     Ref = make_ref(),
-    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Sql,Mode),
+    ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode,Sql),
     case receive_answer(Ref) of
         {ok,Connection,Res} ->
             {ok, {actordb_driver, make_ref(),Connection},Res};

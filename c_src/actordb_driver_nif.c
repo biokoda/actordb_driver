@@ -559,6 +559,8 @@ do_open(db_command *cmd, db_thread *thread)
     memcpy(filename, thread->path, thread->pathlen);
     filename[thread->pathlen] = '/';
 
+    enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
+
     // DB can actually already be opened in thread->conns
     // Check there with filename first.
     size = enif_get_string(cmd->env, cmd->arg, filename+thread->pathlen+1, MAX_PATHNAME-thread->pathlen-1, ERL_NIF_LATIN1);
@@ -610,29 +612,29 @@ do_open(db_command *cmd, db_thread *thread)
             cmd->conn = NULL;
             return result;
         }
-
-        cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
-
         cmd->conn->dbpath = malloc(MAX_ACTOR_NAME);
         memset(cmd->conn->dbpath,0,MAX_ACTOR_NAME);
         enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
-        pActorIndex = malloc(sizeof(int));
-        *pActorIndex = i;
-        sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorIndex);
+        if (filename[thread->pathlen+1] != ':')
+        {
+            cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
+            pActorIndex = malloc(sizeof(int));
+            *pActorIndex = i;
+            sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorIndex);
 
-        enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
-        // if filename :memory: this call will have no effect
-        if (strcmp(mode,"wal") == 0)
-            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;",NULL,NULL,NULL);
-        else if (strcmp(mode,"off") == 0)
-            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=off;",NULL,NULL,NULL);
-        else if (strcmp(mode,"delete") == 0)
-            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=delete;",NULL,NULL,NULL);
-        else if (strcmp(mode,"truncate") == 0)
-            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=truncate;",NULL,NULL,NULL);
-        else if (strcmp(mode,"persist") == 0)
-            sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=persist;",NULL,NULL,NULL);
+            // if filename :memory: this call will have no effect
+            if (strcmp(mode,"wal") == 0)
+                sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;",NULL,NULL,NULL);
+            else if (strcmp(mode,"off") == 0)
+                sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=off;",NULL,NULL,NULL);
+            else if (strcmp(mode,"delete") == 0)
+                sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=delete;",NULL,NULL,NULL);
+            else if (strcmp(mode,"truncate") == 0)
+                sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=truncate;",NULL,NULL,NULL);
+            else if (strcmp(mode,"persist") == 0)
+                sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=persist;",NULL,NULL,NULL);
+        }
     }
     else
     {
@@ -650,6 +652,7 @@ do_open(db_command *cmd, db_thread *thread)
 
     result = enif_make_resource(cmd->env, res);
     enif_release_resource(res);
+
     return result;
 }
 
@@ -1731,8 +1734,9 @@ evaluate_command(db_command *cmd,db_thread *thread)
             return connres;
         else if (cmd->arg2 != 0)
         {
-            cmd->arg = cmd->arg1;
+            cmd->arg = cmd->arg2;
             cmd->arg1 = 0;
+            cmd->arg2 = 0;
             return enif_make_tuple3(cmd->env,atom_ok,connres,do_exec_script(cmd,thread));
         }
     }
