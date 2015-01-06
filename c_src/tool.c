@@ -51,12 +51,12 @@ void do_print(db_thread *thread)
     wal_file *tmpWal;
     int rc;
     i64 nSize = 0;
-    u32 iOffset;
+    i64 iOffset;
     u8 buf[1024*10];
     char filename[512];
     u64 curEvnum, curTerm;
     u32 threadWriteNum;
-    u32 prevFrameOffset;
+    i64 prevFrameOffset;
     u32 pgno;
     u32 nTruncate;
     u32 actorIndex;
@@ -89,15 +89,15 @@ void do_print(db_thread *thread)
                             &curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset, buf+WAL_FRAME_HDRSIZE, buf);
             if(!rc)
             {
-                printf("Error (%d) decoding frame at=%d\n",rc,iOffset);
+                printf("Error (%d) decoding frame at=%lld\n",rc,iOffset);
                 continue;
             }
             if (!pgno)
             {
-                printf("%u Zeroed out frame\n",iOffset);
+                printf("%lld Zeroed out frame\n",iOffset);
                 continue;
             }
-            printf("%u Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
+            printf("%lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
                 iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
         }
 
