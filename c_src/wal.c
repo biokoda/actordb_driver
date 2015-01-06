@@ -672,7 +672,7 @@ static int walDecodeFrame(
   u64  *writeNumber,              /* OUT: writeNumber */
   u64  *writeTermNumber,          /* OUT: writeTermNumber */
   u32  *threadWriteNum,
-  u32  *prevFrameOffset,
+  i64  *prevFrameOffset,
   u8 *aData,                      /* Pointer to page data (for checksum) */
   u8 *aFrame                      /* Frame data */
 ){
@@ -1258,7 +1258,7 @@ int read_thread_wal(db_thread *thread)
     int szFrame;                  /* Number of bytes in buffer aFrame[] */
     u8 *aData;                    /* Pointer to data part of aFrame buffer */
     int iFrame;
-    int iOffset;
+    i64 iOffset;
     int isValid;
     db_connection *curConn = thread->curConn;
     u32 actorIndex;
@@ -1266,7 +1266,7 @@ int read_thread_wal(db_thread *thread)
     int i;
     int *pActorIndex;
     u32 threadWriteNum;
-    u32 prevFrameOffset;
+    i64 prevFrameOffset;
 
     rc = sqlite3OsFileSize(curWal->pWalFd, &nSize);
     if( rc!=SQLITE_OK )
@@ -2070,7 +2070,8 @@ static int walCheckpoint(
 int wal_rewind(db_connection *conn, u64 evnum)
 {
 	int rc = SQLITE_OK;
-	u32 iFrame, iOffset;
+	u32 iFrame;
+	i64 iOffset;
 	// WalIterator *iter = NULL;
 	Wal *wal = conn->wal;
 	u8 buffer[WAL_FRAME_HDRSIZE+SQLITE_DEFAULT_PAGE_SIZE];
@@ -2080,7 +2081,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 	i64 nSize = 0;
 	const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
 	u32 threadWriteNum;
-	u32 prevFrameOffset;
+	i64 prevFrameOffset;
 
 	while (wal != NULL)
 	{
@@ -2206,7 +2207,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	char *activeWal) 	// OUT: are we reading active wal file
 {
 	int rc = SQLITE_OK;
-	u32 iOffset;
+	i64 iOffset;
 	Wal *wal = conn->wal;
 	Wal *tmpWal = NULL;
 	u64 curEvnum = 0, curTerm = 0;
@@ -2214,16 +2215,16 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	i64 nSize = 0;
 	const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
 	u32 threadWriteNum;
-	u32 prevFrameOffset;
+	i64 prevFrameOffset;
 	u32 pgno;
 	u32 nTruncate;
 	u32 actorIndex;
-	u32 iPrevOffset;
+	i64 iPrevOffset;
 	char filename[MAX_ACTOR_NAME];
 	*nFilled = 0;
 	*activeWal = 0;
 
-	DBG((g_log,"iterate started=%d offset=%u\n",(int)iter->started,iter->iOffset));
+	DBG((g_log,"iterate started=%d offset=%lld\n",(int)iter->started,iter->iOffset));
 	fflush(g_log);
 
 	// If iteration started use offset from iter struct. Otherwise read last frame offset from wal structure.
@@ -2296,6 +2297,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	        		break;
 				}
 				iPrevOffset = iOffset;
+				iOffset = 0;
 				rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
 	        			&curEvnum,&curTerm,&threadWriteNum,&iOffset,NULL, buffer);
 				if(!rc || !pgno || actorIndex != conn->connindex)
@@ -2404,7 +2406,7 @@ int wal_iterate(db_connection *conn, int bufSize, char* buffer, char *done, char
 	int rc = SQLITE_OK;
 	u32 iDbpage;
 	u32 iFrame;
-	int iOffset;
+	i64 iOffset;
 	int szPage = walPagesize(conn->wal);
 	struct Wal *wal = conn->wal;
 

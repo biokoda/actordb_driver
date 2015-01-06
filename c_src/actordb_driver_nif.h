@@ -245,7 +245,7 @@ struct conn_resource
 struct iterate_resource
 {
   char started;
-  u32 iOffset;
+  i64 iOffset;
   u64 evnumFrom;
   u64 walIndex;
 
