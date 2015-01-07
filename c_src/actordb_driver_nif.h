@@ -10,7 +10,10 @@
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
-#define WAL_LIMIT 1024*3 //*pagesize -> ~12MB
+
+// in pages. So wal file in bytes is g_wal_size_limit*pagesize
+int g_wal_size_limit = 1024*3;
+
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)

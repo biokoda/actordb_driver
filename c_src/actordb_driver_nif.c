@@ -2940,14 +2940,22 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
         return -1;
     }
         
-    if (i != 2)
+    if (i != 3 && i != 2)
         return -1;
+
+    if (i == 3)
+    {
+        if (!enif_get_int(env,param[2],&g_wal_size_limit))
+            return -1;
+    }
+        
 
     if (!enif_get_tuple(env,param[0],&g_nthreads,&param1))
         return -1;
     
     if (!enif_get_tuple(env,param[1],&i,&param))
         return -1;
+
     if (i > MAX_STATIC_SQLS)
         return -1;
 

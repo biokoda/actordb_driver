@@ -15,7 +15,7 @@ check() ->
     code:delete(actordb_driver_nif),
     code:purge(actordb_driver_nif),
     false = code:is_loaded(actordb_driver_nif),
-    actordb_driver:init({{"."},{}}),
+    actordb_driver:init({{"."},{},100}),
     Sql = "select name, sql from sqlite_master where type='table';",
     {ok,_Db,{ok,[[{columns,_},{rows,[]}]]}} = actordb_driver:open("t1.db",1,Sql),
     {ok,Db2} = actordb_driver:open("t2.db"),
@@ -25,7 +25,7 @@ check() ->
     ok.
 
 lz4() ->
-    actordb_driver:init({{"."},{}}),
+    actordb_driver:init({{"."},{},100}),
     ?debugFmt("lz4",[]),
     Bin1 = binary:copy(<<"SELECT * FROM WTF;">>,2),
     {Compressed1,CompressedSize1} = actordb_driver:lz4_compress(Bin1),
