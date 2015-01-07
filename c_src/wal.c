@@ -2094,7 +2094,6 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		walIndexClose(wal, 0);
 		memset(&wal->hdr,0,sizeof(WalIndexHdr));
 		sqlite3WalBeginReadTransaction(wal,&rc);
-		sqlite3WalBeginWriteTransaction(wal);
 		rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
 
 		wal->dirty = 0;
@@ -2138,6 +2137,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 	        	rc = walIndexAppend(wal, iFrame, pgno);
 		        if (nTruncate)
 		        {
+		        	DBG((g_log,"rewind ok frame %lld, iframe=%d, walindex=%lld\n",curEvnum, iFrame,wal->walIndex));
 		        	WalCkptInfo *pInfo;
 		        	wal->dirty = 0;
 		        	wal->szPage = SQLITE_DEFAULT_PAGE_SIZE;
@@ -2146,6 +2146,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 					wal->hdr.szPage = (u16)((wal->szPage&0xff00) | (wal->szPage>>16));
 					conn->lastWriteThreadNum = threadWriteNum;
 
+					sqlite3WalBeginWriteTransaction(wal);
 					walIndexWriteHdr(wal);
 					pInfo = walCkptInfo(wal);
 					pInfo->nBackfill = 0;
@@ -2154,11 +2155,13 @@ int wal_rewind(db_connection *conn, u64 evnum)
 					wal->hdr.aSalt[1] = 987654321;
 					for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
 					if( wal->hdr.mxFrame ) pInfo->aReadMark[1] = wal->hdr.mxFrame;
+					sqlite3WalEndWriteTransaction(wal);
 		        }
 		        else
 		        	wal->dirty = 1;
 	        	continue;
 	        }
+	        DBG((g_log,"rewind zeroing frame %lld, iframe=%d walindex=%lld\n",curEvnum,iFrame,wal->walIndex));
 
 			if (curEvnum == evnum)
 			{
@@ -2173,6 +2176,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 			rc = sqlite3OsWrite(wal->pWalFd, buffer, szFrame, iOffset);
 			if (rc != SQLITE_OK)
 			{
+				DBG((g_log,"Can not write rewind\n"));
 				break;
 			}
     	}
@@ -2181,8 +2185,19 @@ int wal_rewind(db_connection *conn, u64 evnum)
     		sqlite3WalUndo(wal, NULL, NULL);
     		wal->dirty = 0;
     	}
-
-    	sqlite3WalEndWriteTransaction(wal);
+    	{
+    		WalCkptInfo *pInfo;
+    		sqlite3WalBeginWriteTransaction(wal);
+	    	walIndexWriteHdr(wal);
+	    	pInfo = walCkptInfo(wal);
+			pInfo->nBackfill = 0;
+			pInfo->aReadMark[0] = 0;
+			wal->hdr.aSalt[0] = 123456789;
+			wal->hdr.aSalt[1] = 987654321;
+			for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
+			if( wal->hdr.mxFrame ) pInfo->aReadMark[1] = wal->hdr.mxFrame;
+			sqlite3WalEndWriteTransaction(wal);
+    	}
     	sqlite3WalEndReadTransaction(wal);
 
     	wal->init = 0;
@@ -2190,6 +2205,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		// Nothing has been done.
 		if (movedOver > 0 && found == 0)
 			break;
+		movedOver = 0;
 
 		if (found != 2)
 		{
@@ -3583,6 +3599,7 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   int cnt = 0;                    /* Number of TryBeginRead attempts */
 
   do{
+  	// DBG((g_log,"Start read transaction\n"));
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
   // DBG((g_log,"START READ TRANSACTION result=%d, changed %d\r\n",rc,*pChanged));
@@ -3590,6 +3607,7 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );
   testcase( rc==SQLITE_OK );
+
   return rc;
 }
 

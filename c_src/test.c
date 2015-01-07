@@ -79,7 +79,7 @@ int main()
     char pgDone = 0, pgLast = 0;
     iterate_resource iter;
 
-    // g_wal_size_limit = 100;
+    g_wal_size_limit = 100;
     g_log = stdout;
 
     memset(&iter,0,sizeof(iter));
@@ -224,6 +224,7 @@ int main()
 
     for (j = 0; j < 1000; j++)
     {
+        printf("Check %d\n",j);
         char str[10];
         char *res[] = {str,buf1};
         
