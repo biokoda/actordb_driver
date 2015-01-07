@@ -3063,7 +3063,7 @@ int sqlite3WalFrames(
   if (!(*pWal)->dirty)
   {
   	  // Do we need to create new wal file?
-	  if ((*pWal)->thread->walFile->mxFrame > 1024)
+	  if ((*pWal)->thread->walFile->mxFrame > 1024*3)
 	  {
 	  	char filename[MAX_PATHNAME];
 	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,(*pWal)->thread->walFile->walIndex+1);
