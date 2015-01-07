@@ -2205,7 +2205,6 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		// Nothing has been done.
 		if (movedOver > 0 && found == 0)
 			break;
-		movedOver = 0;
 
 		if (found != 2)
 		{
@@ -3356,6 +3355,8 @@ int sqlite3WalReadFrame(
   sz = (sz&0xfe00) + ((sz&0x0001)<<16);
   testcase( sz<=32768 );
   testcase( sz>=65536 );
+
+  DBG((g_log,"Wal read frame %lld, %lld\n",walIndex,pWal->walIndex));
 
   // Wal always points to first wal, but reads are always from last to first.
   // So if walIndex different, it must be one of the next ones.

@@ -60,6 +60,7 @@ void do_print(db_thread *thread)
     u32 pgno;
     u32 nTruncate;
     u32 actorIndex;
+    u32 iFrame = 0;
     const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
     u32 aSalt[2];
 
@@ -79,6 +80,7 @@ void do_print(db_thread *thread)
         rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
         for(iOffset = WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
         {
+            iFrame++;
             rc = sqlite3OsRead(wal->pWalFd, buf, WAL_FRAME_HDRSIZE+SQLITE_DEFAULT_PAGE_SIZE, iOffset);
             if( rc!=SQLITE_OK )
             {
@@ -97,9 +99,10 @@ void do_print(db_thread *thread)
                 printf("%lld Zeroed out frame\n",iOffset);
                 continue;
             }
-            printf("%lld %lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
-                wal->walIndex,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
+            printf("%lld %d %lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
+                wal->walIndex,iFrame,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
         }
+        iFrame = 0;
 
         if (thread->walFile == wal)
             break;
