@@ -97,16 +97,17 @@ void do_print(db_thread *thread)
                 printf("%lld Zeroed out frame\n",iOffset);
                 continue;
             }
-            printf("%lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
-                iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
+            printf("%lld %lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
+                wal->walIndex,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
         }
 
         if (thread->walFile == wal)
             break;
         // Move to next wal. Start with first and move back until previous wal is current one.
-        tmpWal = wal;
+        tmpWal = thread->walFile;
         while (tmpWal->prev != wal)
             tmpWal = tmpWal->prev;
+        wal = tmpWal;
     }
 }
 
@@ -131,6 +132,7 @@ int main(int argc, char* argv[])
         printf("Invalid command\n");
         return 1;
     }
+    
 
 	// INIT THREAD
     reset(&thread, argv[2]);

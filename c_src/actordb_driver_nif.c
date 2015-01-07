@@ -841,6 +841,8 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
             break;
         }
 
+        DBG((g_log,"Connecting to port %s:%d\n",thread->control->addresses[pos],thread->control->ports[pos]));
+
         memset(&addr,0,sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
@@ -2043,22 +2045,31 @@ replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     }
     conn = &g_threads[res->thread].conns[res->connindex];
 
-    if (argc == 3)
-    {
-        if (!enif_get_int(env,argv[2],&(conn->doReplicate)))
-            return enif_make_badarg(env);
-    }
-    else
-        conn->doReplicate = 1;
-
+    if (!enif_inspect_iolist_as_binary(env, argv[1], &bin))
+        return enif_make_badarg(env);
+    
     if (!conn->packetPrefix.size)
         enif_release_binary(&conn->packetPrefix);
 
-    if (!enif_inspect_iolist_as_binary(env, argv[1], &bin))
-        return enif_make_badarg(env);
-
-    enif_alloc_binary(bin.size,&(conn->packetPrefix));
-    memcpy(conn->packetPrefix.data,bin.data,bin.size);
+    if (bin.size > 0)
+    {
+        if (argc == 3)
+        {
+            if (!enif_get_int(env,argv[2],&(conn->doReplicate)))
+                return enif_make_badarg(env);
+        }
+        else
+            conn->doReplicate = 1;
+        enif_alloc_binary(bin.size,&(conn->packetPrefix));
+        memcpy(conn->packetPrefix.data,bin.data,bin.size);
+    }
+    else
+    {
+        conn->packetPrefix.data = NULL;
+        conn->packetPrefix.size = 0;
+        conn->doReplicate = 0;
+    }
+    
 
     enif_consume_timeslice(env,500);
     return atom_ok;

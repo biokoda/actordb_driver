@@ -1480,7 +1480,7 @@ wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs)
     rc = sqlite3OsOpen(vfs, filename, pWalFd, (SQLITE_OPEN_TRANSIENT_DB|SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE), &flags);
     if (rc != SQLITE_OK)
     {
-      DBG((g_log,"Can not open wal file %s\r\n",filename));fflush(stdout);
+      DBG((g_log,"Can not open wal file %s\r\n",filename));
       sqlite3_free(pWalFd);
       return NULL;
     }
@@ -2224,8 +2224,8 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	*nFilled = 0;
 	*activeWal = 0;
 
-	DBG((g_log,"iterate started=%d offset=%lld\n",(int)iter->started,iter->iOffset));
-	fflush(g_log);
+	// DBG((g_log,"iterate started=%d offset=%lld\n",(int)iter->started,iter->iOffset));
+	// fflush(g_log);
 
 	// If iteration started use offset from iter struct. Otherwise read last frame offset from wal structure.
 	if (iter->started)
@@ -2251,7 +2251,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 		        }
 		        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
 		        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset, NULL, buffer);
-		        // DBG((g_log,"DECODED %llu %llu %d %d %d\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
+		        // DBG((g_log,"Finding initial pos %llu %llu %d %d %lld\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
 		        if(!rc || !pgno || actorIndex != conn->connindex)
 		        {
 		        	continue;
@@ -2336,7 +2336,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	if (wal == NULL)
 		return SQLITE_DONE;
 
-	// DBG((g_log,"FOUND ON %llu, %d\r\n",iter->walIndex, iter->iOffset));
+	// DBG((g_log,"FOUND ON %llu, %lld\r\n",iter->walIndex, iter->iOffset));
 	// fflush(g_log);
 
 	while (((*nFilled)+SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE) <= bufSize)
@@ -2351,13 +2351,13 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	        }
 	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
 	        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset,buffer+(*nFilled)+WAL_FRAME_HDRSIZE, buffer+(*nFilled));
-	        // DBG((g_log,"DECODED %llu %llu %d %d %d\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
+	        // DBG((g_log,"Decode finding next %llu %llu %d %d %lld\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
 	        // fflush(g_log);
 	        if(!rc || !pgno || actorIndex != conn->connindex)
 	        {
 	        	continue;
 	        }
-	  //       DBG((g_log,"Done? %d %d\n",(*nFilled)+szFrame,bufSize));
+	        // DBG((g_log,"Done? %d %d\n",(*nFilled)+szFrame,bufSize));
 			// fflush(g_log);
 
 	        rc = SQLITE_OK;
@@ -2387,7 +2387,6 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
     	iter->iOffset = WAL_HDRSIZE;
     	iter->walIndex = wal->walIndex;
 	}
-	// DBG((g_log,"Done iter %d\n",(int)conn->wal));
 	// fflush(g_log);
 
 	*activeWal = iter->walIndex == conn->wal->walIndex;
@@ -2982,6 +2981,7 @@ int sqlite3WalOpen(
 		pRet = malloc(sizeof(Wal));
 		memset(pRet,0,sizeof(Wal));
 		thread->curConn->wal = pRet;
+		pRet->walIndex = thread->walFile->walIndex;
 	}
 	curWal = pRet;
 	walFile = thread->walFile;
@@ -3063,7 +3063,7 @@ int sqlite3WalFrames(
   if (!(*pWal)->dirty)
   {
   	  // Do we need to create new wal file?
-	  if ((*pWal)->thread->walFile->mxFrame > 1024*3)
+	  if ((*pWal)->thread->walFile->mxFrame > 1024)
 	  {
 	  	char filename[MAX_PATHNAME];
 	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,(*pWal)->thread->walFile->walIndex+1);
@@ -3268,7 +3268,8 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    // DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d\r\n",pWal->walIndex,pgno, iLast));
+    DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
+    	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -3316,8 +3317,8 @@ int sqlite3WalFindFrame(
     {
     	return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
     }
-    // else
-    // 	DBG((g_log,"Found result %d\r\n",iRead));
+    else
+    	DBG((g_log,"Found result %d\r\n",iRead));
 
     *walIndex = pWal->walIndex;
     *piRead = iRead;
