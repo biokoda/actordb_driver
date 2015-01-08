@@ -3079,14 +3079,14 @@ int sqlite3WalFrames(
   if (!(*pWal)->dirty)
   {
   	  // Do we need to create new wal file?
-	  if ((*pWal)->thread->walFile->mxFrame > g_wal_size_limit)
+	  if (thrWalFile->mxFrame > g_wal_size_limit)
 	  {
 	  	char filename[MAX_PATHNAME];
-	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,(*pWal)->thread->walFile->walIndex+1);
+	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,thrWalFile->walIndex+1);
 	  	DBG((g_log,"Creating new wal!\r\n"));
 	  	wal_file *nw = new_wal_file(filename,(*pWal)->thread->vfs);
-	  	nw->walIndex = (*pWal)->thread->walFile->walIndex+1;
-	  	nw->prev = (*pWal)->thread->walFile;
+	  	nw->walIndex = thrWalFile->walIndex+1;
+	  	nw->prev = thrWalFile;
 	  	(*pWal)->thread->walFile = nw;
 	  	thrWalFile = nw;
 	  }
@@ -3484,6 +3484,7 @@ int sqlite3WalCheckpoint(
 int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 {
   int rc = SQLITE_OK;
+  wal_file *thrWalFile = pWal->thread->walFile;
   // DBG((g_log,"sqlite3WalUndo, mxframe %d, threadmax %d\r\n",pWal->hdr.mxFrame, pWal->thread->walFile->mxFrame));
   if( ALWAYS(pWal->writeLock) )
   {
@@ -3498,10 +3499,14 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 
     if (xUndo != NULL)
     {
+      while (thrWalFile->prev != NULL && thrWalFile->walIndex != pWal->walIndex)
+	  {
+	  	thrWalFile = thrWalFile->prev;
+	  }
       // We now have multiple dbs in wal. We cant rely on mxFrame+1 because it might belong to another db.
       // Use last commit number.
       // This means that when a write fails, it must be rollbacked immediately. Before another db might write to wal.
-      for(iFrame=pWal->thread->walFile->lastCommit+1;  // pWal->hdr.mxFrame+1
+      for(iFrame=thrWalFile->lastCommit+1;  // pWal->hdr.mxFrame+1
         ALWAYS(rc==SQLITE_OK) && iFrame<=iMax;
         iFrame++
       ){
@@ -3523,10 +3528,10 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 
     if( iMax!=pWal->hdr.mxFrame ) walCleanupHash(pWal);
     // If we can move back thread wal do so (no writes to other actors came after it)
-    if (pWal->walIndex == pWal->thread->walFile->walIndex &&
-        iMax == pWal->thread->walFile->mxFrame)
+    if (pWal->walIndex == thrWalFile->walIndex &&
+        iMax == thrWalFile->mxFrame)
     {
-      pWal->thread->walFile->mxFrame = pWal->thread->walFile->lastCommit;
+      thrWalFile->mxFrame = thrWalFile->lastCommit;
     }
   }
   return rc;
