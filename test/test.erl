@@ -66,7 +66,9 @@ repl() ->
     % Create copy of base db file, read wal pages, inject wal pages for second db file and read data
     L = get_pages(Db),
     file:copy("t1.db","t2.db"),
-    {ok,Db2} = actordb_driver:open("t2.db"),
+    Sql = <<"select name, sql from sqlite_master where type='table';",
+                    "$PRAGMA cache_size=10;">>,
+    {ok,Db2,_} = actordb_driver:open("t2.db",0,Sql,wal),
     [ok = actordb_driver:inject_page(Db2,Bin) || Bin <- L],
     {ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
     
@@ -88,7 +90,7 @@ repl() ->
     file:copy("t2.db","t3.db"),
     % 0 means return all pages in wal for connection
     Pages2 = get_pages(Db2,0),
-    {ok,Db3} = actordb_driver:open("t3.db"),
+    {ok,Db3,_} = actordb_driver:open("t3.db",0,Sql,wal),
     [actordb_driver:inject_page(Db3,Bin) || Bin <- Pages2],
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
     delete(Db).

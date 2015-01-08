@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1121,7 +1121,8 @@ do_inject_page(db_command *cmd, db_thread *thread)
     ErlNifBinary binhead;
     u8 *head;
     u32 commit;
-    int rc;
+    int rc = SQLITE_OK,i;
+    sqlite3 *db = cmd->conn->db;
 
     memset(&page,0,sizeof(PgHdr));
     enif_inspect_binary(cmd->env,cmd->arg,&bin);
@@ -1146,7 +1147,23 @@ do_inject_page(db_command *cmd, db_thread *thread)
     if (cmd->conn->wal)
         cmd->conn->wal->init = 0;
 
-    rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+    for(i=0; i<db->nDb; i++)
+    {
+        Btree *pBt = db->aDb[i].pBt;
+        if( pBt ){
+            Pager *pPager = sqlite3BtreePager(pBt);
+            if (pPager->pWal)
+            {
+                page.pPager = pPager;
+                rc = pagerWalFrames(pPager,&page,commit,commit);
+            }
+            else
+            {
+                rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+            }
+            break;
+        }
+    }
 
     if (rc != SQLITE_OK)
         return atom_false;
