@@ -3283,8 +3283,8 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
-    	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
+    // DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
+    // 	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -3332,8 +3332,8 @@ int sqlite3WalFindFrame(
     {
     	return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
     }
-    else
-    	DBG((g_log,"Found result %d\r\n",iRead));
+    // else
+    // 	DBG((g_log,"Found result frame=%d\r\n",iRead));
 
     *walIndex = pWal->walIndex;
     *piRead = iRead;
@@ -3356,7 +3356,7 @@ int sqlite3WalReadFrame(
   testcase( sz<=32768 );
   testcase( sz>=65536 );
 
-  DBG((g_log,"Wal read frame %lld, %lld\n",walIndex,pWal->walIndex));
+  // DBG((g_log,"Wal read frame %lld, %lld\n",walIndex,pWal->walIndex));
 
   // Wal always points to first wal, but reads are always from last to first.
   // So if walIndex different, it must be one of the next ones.
@@ -3571,8 +3571,12 @@ int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 
 /* If the WAL is not empty, return the size of the database. */
 Pgno sqlite3WalDbsize(Wal *pWal){
-  if( pWal && ALWAYS(pWal->readLock>=0) ){
-    return pWal->hdr.nPage;
+	// && ALWAYS(pWal->readLock>=0)
+  if( pWal ){
+  	if (pWal->hdr.nPage == 0 && pWal->prev != NULL)
+  		return sqlite3WalDbsize(pWal->prev);
+  	else
+  		return pWal->hdr.nPage;
   }
   return 0;
 }

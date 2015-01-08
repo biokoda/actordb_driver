@@ -224,7 +224,6 @@ int main()
 
     for (j = 0; j < 1000; j++)
     {
-        printf("Check %d\n",j);
         char str[10];
         char *res[] = {str,buf1};
         
