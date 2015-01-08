@@ -3068,6 +3068,7 @@ int sqlite3WalFrames(
   i64 iOffset;                    /* Next byte to write in WAL file */
   WalWriter w;                    /* The writer */
   // db_connection *con = (*pWal)->thread->curConn;
+  wal_file *thrWalFile = (*pWal)->thread->walFile;
   
   assert( pList );
   /* If this frame set completes a transaction, then nTruncate>0.  If
@@ -3087,10 +3088,11 @@ int sqlite3WalFrames(
 	  	nw->walIndex = (*pWal)->thread->walFile->walIndex+1;
 	  	nw->prev = (*pWal)->thread->walFile;
 	  	(*pWal)->thread->walFile = nw;
+	  	thrWalFile = nw;
 	  }
 
 	  // Do we need to create a new wal structure for newer file?
-	  if ((*pWal)->thread->walFile->walIndex > (*pWal)->walIndex)
+	  if (thrWalFile->walIndex > (*pWal)->walIndex)
 	  {
 	  	// DBG((g_log,"Opening into new wal %d\r\n",(*pWal)->thread->curConn->connindex));
 	    Wal *newWal;
@@ -3099,8 +3101,8 @@ int sqlite3WalFrames(
 	    sqlite3WalEndReadTransaction(*pWal);
 	    sqlite3WalEndWriteTransaction(*pWal);
 	    newWal->prev = *pWal;
-	    newWal->pWalFd = (*pWal)->thread->walFile->pWalFd;
-	    newWal->walIndex = (*pWal)->thread->walFile->walIndex;
+	    newWal->pWalFd = thrWalFile->pWalFd;
+	    newWal->walIndex = thrWalFile->walIndex;
 	    newWal->init = 0;
 	    
 	    (*pWal)->thread->curConn->wal = newWal;
@@ -3110,8 +3112,16 @@ int sqlite3WalFrames(
 	    sqlite3WalBeginWriteTransaction(*pWal);
 	  }
   }
+  else
+  {
+  	while (thrWalFile->prev != NULL && thrWalFile->walIndex != (*pWal)->walIndex)
+  	{
+  		DBG((g_log,"Moving walfile back nowon=%lld, lookingfor=%lld\n",thrWalFile->walIndex,(*pWal)->walIndex));
+  		thrWalFile = thrWalFile->prev;
+  	}
+  }
 
-  iFrame = (*pWal)->thread->walFile->mxFrame;
+  iFrame = thrWalFile->mxFrame;
 
   (*pWal)->szPage = szPage;
   if( iFrame==0 ){
@@ -3121,7 +3131,7 @@ int sqlite3WalFrames(
     sqlite3Put4byte(&aWalHdr[0], (WAL_MAGIC | SQLITE_BIGENDIAN));
     sqlite3Put4byte(&aWalHdr[4], WAL_MAX_VERSION);
     sqlite3Put4byte(&aWalHdr[8], szPage);
-    writeUInt64(&aWalHdr[12], (*pWal)->thread->walFile->walIndex);
+    writeUInt64(&aWalHdr[12], thrWalFile->walIndex);
     // if( (*pWal)->nCkpt==0 )
     // {
       (*pWal)->hdr.aSalt[0] = 123456789;
@@ -3237,7 +3247,7 @@ int sqlite3WalFrames(
   ** guarantees that there are no other writers, and no data that may
   ** be in use by existing readers is being overwritten.
   */
-  iFrame = (*pWal)->thread->walFile->mxFrame;
+  iFrame = thrWalFile->mxFrame;
   for(p=pList; p && rc==SQLITE_OK; p=p->pDirty){
     iFrame++;
     rc = walIndexAppend(*pWal, iFrame, p->pgno);
@@ -3254,12 +3264,12 @@ int sqlite3WalFrames(
     testcase( szPage<=32768 );
     testcase( szPage>=65536 );
     (*pWal)->hdr.mxFrame = iFrame;
-    (*pWal)->thread->walFile->mxFrame = iFrame;
+    thrWalFile->mxFrame = iFrame;
     if( isCommit ){
       (*pWal)->dirty = 0;
       (*pWal)->hdr.iChange++;
       (*pWal)->hdr.nPage = nTruncate;
-      (*pWal)->thread->walFile->lastCommit = iFrame;
+      thrWalFile->lastCommit = iFrame;
     }
     else
     	(*pWal)->dirty = 1;
@@ -3284,8 +3294,8 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
-    	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
+    // DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
+    // 	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -3333,8 +3343,8 @@ int sqlite3WalFindFrame(
     {
     	return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
     }
-    else
-    	DBG((g_log,"Found result frame=%d\r\n",iRead));
+    // else
+    // 	DBG((g_log,"Found result frame=%d\r\n",iRead));
 
     *walIndex = pWal->walIndex;
     *piRead = iRead;
@@ -3357,7 +3367,7 @@ int sqlite3WalReadFrame(
   testcase( sz<=32768 );
   testcase( sz>=65536 );
 
-  DBG((g_log,"Wal read frame %lld, %lld\n",walIndex,pWal->walIndex));
+  // DBG((g_log,"Wal read frame %lld, %lld\n",walIndex,pWal->walIndex));
 
   // Wal always points to first wal, but reads are always from last to first.
   // So if walIndex different, it must be one of the next ones.
@@ -3608,7 +3618,7 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   	// DBG((g_log,"Start read transaction\n"));
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
-  DBG((g_log,"START READ TRANSACTION result=%d, changed %d, conn=%d\r\n",rc,*pChanged,pWal->thread->curConn->connindex));
+  // DBG((g_log,"START READ TRANSACTION result=%d, changed %d, conn=%d\r\n",rc,*pChanged,pWal->thread->curConn->connindex));
   testcase( (rc&0xff)==SQLITE_BUSY );
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );
