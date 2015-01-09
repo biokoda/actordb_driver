@@ -1121,48 +1121,54 @@ do_inject_page(db_command *cmd, db_thread *thread)
     ErlNifBinary binhead;
     u8 *head;
     u32 commit;
-    int rc = SQLITE_OK,i;
+    int rc = SQLITE_OK,i,j;
     sqlite3 *db = cmd->conn->db;
 
-    memset(&page,0,sizeof(PgHdr));
     enif_inspect_binary(cmd->env,cmd->arg,&bin);
-    if (cmd->arg1)
-    {
-        enif_inspect_binary(cmd->env,cmd->arg1,&binhead);
-        head = binhead.data;
-        page.pData = bin.data;
-    }
-    else
-    {
-        head = bin.data;
-        page.pData = bin.data+WAL_FRAME_HDRSIZE;
-    }
-        
+    memset(&page,0,sizeof(PgHdr));
 
-    page.pgno = sqlite3Get4byte(head);
-    commit = sqlite3Get4byte(&head[4]);
-
-    cmd->conn->writeNumber = readUInt64(&head[8]);
-    cmd->conn->writeTermNumber = readUInt64(&head[16]);
-    if (cmd->conn->wal)
-        cmd->conn->wal->init = 0;
-
-    for(i=0; i<db->nDb; i++)
+    for (j = 0; j < bin.size; j += WAL_FRAME_HDRSIZE+SQLITE_DEFAULT_PAGE_SIZE)
     {
-        Btree *pBt = db->aDb[i].pBt;
-        if( pBt ){
-            Pager *pPager = sqlite3BtreePager(pBt);
-            if (pPager->pWal)
-            {
-                page.pPager = pPager;
-                rc = pagerWalFrames(pPager,&page,commit,commit);
-            }
-            else
-            {
-                rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
-            }
-            break;
+        if (cmd->arg1)
+        {
+            enif_inspect_binary(cmd->env,cmd->arg1,&binhead);
+            head = binhead.data;
+            page.pData = bin.data;
         }
+        else
+        {
+            head = bin.data + j;
+            page.pData = bin.data + WAL_FRAME_HDRSIZE + j;
+        }
+            
+
+        page.pgno = sqlite3Get4byte(head);
+        commit = sqlite3Get4byte(&head[4]);
+
+        cmd->conn->writeNumber = readUInt64(&head[8]);
+        cmd->conn->writeTermNumber = readUInt64(&head[16]);
+        if (cmd->conn->wal)
+            cmd->conn->wal->init = 0;
+
+        for(i=0; i<db->nDb; i++)
+        {
+            Btree *pBt = db->aDb[i].pBt;
+            if( pBt ){
+                Pager *pPager = sqlite3BtreePager(pBt);
+                if (pPager->pWal)
+                {
+                    page.pPager = pPager;
+                    rc = pagerWalFrames(pPager,&page,commit,commit);
+                }
+                else
+                {
+                    rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+                }
+                break;
+            }
+        }
+        if (cmd->arg1)
+            break;
     }
 
     if (rc != SQLITE_OK)

@@ -44,15 +44,18 @@
 #include "wal.c"
 #include "tool_do.c"
 
+#define NINSERTS 100
+
 
 void check_large(db_thread *thread, db_command *clcmd, char *buf, char* buf1)
 {
     int i,j,rc;
-    for (i = 0; i < 3; i++)
+    for (i = 0; thread->conns[i].db != NULL; i++)
     {
         thread->curConn = clcmd->conn = &thread->conns[i];
-        for (j = 0; j < 1000; j++)
+        for (j = 0; j < NINSERTS; j++)
         {
+            printf("check_large %d %d\n",i,j);
             char str[10];
             char *res[] = {str,buf1};
             
@@ -178,7 +181,7 @@ int main()
     // Test checkpoints
     printf("Insert multiple wal file amount of data\r\n");
     // insert a lot of data
-    for (i = 0; i < 1000; i++)
+    for (i = 0; i < NINSERTS; i++)
     {
         for (j = 0; j < ndbs; j++)
         {
@@ -189,15 +192,49 @@ int main()
             assert(SQLITE_OK == rc);
         }
     }
+    
+    do_open("copy1.db",&clcmd,&thread);
+    thread.curConn = clcmd.conn = &thread.conns[3];
+    rc = do_exec("select name, sql from sqlite_master where type='table';$PRAGMA cache_size=10;",&clcmd,&thread,NULL); 
+    do_open("copy2.db",&clcmd,&thread);
+    thread.curConn = clcmd.conn = &thread.conns[4];
+    rc = do_exec("select name, sql from sqlite_master where type='table';$PRAGMA cache_size=10;",&clcmd,&thread,NULL); 
 
-    iter.evnumFrom = 500;
+    iter.evnumFrom = 0;
     for (i = 0;; i++)
     {
+        PgHdr page;
+        u32 commit;
+
+        memset(&page,0,sizeof(PgHdr));
+        printf("ITERATE %d\n",i);fflush(stdout);
+
         // wal_iterate(&thread.conns[0],4096+WAL_FRAME_HDRSIZE,pgBuf,&pgDone,&pgLast);
         if (wal_iterate_from(&thread.conns[0], &iter, 4096+WAL_FRAME_HDRSIZE, (u8*)pgBuf, &j, &pgLast) == SQLITE_DONE)
             break;
+
+        page.pData = pgBuf + WAL_FRAME_HDRSIZE;
+        page.pgno = sqlite3Get4byte((u8*)pgBuf);
+        commit = sqlite3Get4byte((u8*)&pgBuf[4]);
+
+        for (j = 3; j < 5; j++)
+        {
+            thread.curConn = clcmd.conn = &thread.conns[j];
+            thread.curConn->writeNumber = readUInt64((u8*)&pgBuf[8]);
+            thread.curConn->writeTermNumber = readUInt64((u8*)&pgBuf[16]);
+            // rc = sqlite3WalFrames(&clcmd.conn->wal,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+            Btree *pBt = thread.curConn->db->aDb[0].pBt;
+            if( pBt ){
+                Pager *pPager = sqlite3BtreePager(pBt);
+                assert(pPager->pWal != NULL);
+                page.pPager = pPager;
+                rc = pagerWalFrames(pPager,&page,commit,commit);
+                pPager->pWal->init = 0;
+            }
+        }
     }
-    assert(i > 500);
+    check_large(&thread, &clcmd, buf, buf1);
+
     printf("Reset\r\n");
     // Close everything
     reset(&thread,".");
@@ -206,38 +243,38 @@ int main()
     check_large(&thread, &clcmd, buf, buf1);
     
 
-    printf("Checkpointing\r\n");
-    while (checkpoint_continue(&thread))
-    {
-    }
+    // printf("Checkpointing\r\n");
+    // while (checkpoint_continue(&thread))
+    // {
+    // }
 
-    // we are now left with the last 2 wal files. Close everything and reopen.
-    // All the data must still be there
-    reset(&thread,".");
+    // // we are now left with the last 2 wal files. Close everything and reopen.
+    // // All the data must still be there
+    // reset(&thread,".");
 
-    printf("Verifying data\r\n");
-    check_large(&thread, &clcmd, buf, buf1);
+    // printf("Verifying data\r\n");
+    // check_large(&thread, &clcmd, buf, buf1);
     
-    printf("Do rewind on first db\r\n");
-    thread.curConn = clcmd.conn = &thread.conns[0];
-    printf("REWIND result=%d\r\n",wal_rewind(clcmd.conn,995));
+    // printf("Do rewind on first db\r\n");
+    // thread.curConn = clcmd.conn = &thread.conns[0];
+    // printf("REWIND result=%d\r\n",wal_rewind(clcmd.conn,995));
 
-    for (j = 0; j < 1000; j++)
-    {
-        char str[10];
-        char *res[] = {str,buf1};
+    // for (j = 0; j < 1000; j++)
+    // {
+    //     char str[10];
+    //     char *res[] = {str,buf1};
         
-        sprintf(str,"%d",j+10);
-        sprintf(buf,"select id from tab where id=%d;",j+10);
-        rc = do_exec1(buf,&clcmd,&thread,res,0); 
-        if (j >= 995)
-        {
-            // must return error, because we supplied result to check against but none was returned
-            assert(SQLITE_OK != rc);
-        }
-        else
-            assert(SQLITE_OK == rc);
-    }
+    //     sprintf(str,"%d",j+10);
+    //     sprintf(buf,"select id from tab where id=%d;",j+10);
+    //     rc = do_exec1(buf,&clcmd,&thread,res,0); 
+    //     if (j >= 995)
+    //     {
+    //         // must return error, because we supplied result to check against but none was returned
+    //         assert(SQLITE_OK != rc);
+    //     }
+    //     else
+    //         assert(SQLITE_OK == rc);
+    // }
 
     printf("Tests succeeded\r\n");
     close_conns(&thread);

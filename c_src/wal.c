@@ -3294,8 +3294,8 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    // DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
-    // 	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
+    DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
+    	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -3343,8 +3343,8 @@ int sqlite3WalFindFrame(
     {
     	return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
     }
-    // else
-    // 	DBG((g_log,"Found result frame=%d\r\n",iRead));
+    else
+    	DBG((g_log,"Found result frame=%d\r\n",iRead));
 
     *walIndex = pWal->walIndex;
     *piRead = iRead;
@@ -3367,7 +3367,7 @@ int sqlite3WalReadFrame(
   testcase( sz<=32768 );
   testcase( sz>=65536 );
 
-  // DBG((g_log,"Wal read frame %lld, %lld\n",walIndex,pWal->walIndex));
+  DBG((g_log,"Wal read frame %lld, %lld\n",walIndex,pWal->walIndex));
 
   // Wal always points to first wal, but reads are always from last to first.
   // So if walIndex different, it must be one of the next ones.
@@ -3589,6 +3589,7 @@ int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 Pgno sqlite3WalDbsize(Wal *pWal){
 	// && ALWAYS(pWal->readLock>=0)
   if( pWal ){
+  	// DBG((g_log,"DBSIZE %u\n",pWal->hdr.nPage));
   	if (pWal->hdr.nPage == 0 && pWal->prev != NULL)
   		return sqlite3WalDbsize(pWal->prev);
   	else
@@ -3623,7 +3624,8 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   	// DBG((g_log,"Start read transaction\n"));
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
-  // DBG((g_log,"START READ TRANSACTION result=%d, changed %d, conn=%d\r\n",rc,*pChanged,pWal->thread->curConn->connindex));
+
+  DBG((g_log,"START READ TRANSACTION wal=%lld result=%d, changed %d, conn=%d\r\n",pWal->walIndex,rc,*pChanged,pWal->thread->curConn->connindex));
   testcase( (rc&0xff)==SQLITE_BUSY );
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );
