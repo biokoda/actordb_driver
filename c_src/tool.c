@@ -96,11 +96,11 @@ void do_print(db_thread *thread)
             }
             if (!pgno)
             {
-                printf("%lld Zeroed out frame\n",iOffset);
+                printf("wal=%lld frame=%d offset=%lld zeroed out\n",wal->walIndex,iFrame,iOffset);
                 continue;
             }
-            printf("%d %lld %d %lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
-                (int)buf[WAL_FRAME_HDRSIZE],wal->walIndex,iFrame,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
+            printf("wal=%lld frame=%d offset=%lld name=%s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
+                wal->walIndex,iFrame,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
         }
         iFrame = 0;
 
