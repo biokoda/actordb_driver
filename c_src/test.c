@@ -243,38 +243,38 @@ int main()
     check_large(&thread, &clcmd, buf, buf1);
     
 
-    // printf("Checkpointing\r\n");
-    // while (checkpoint_continue(&thread))
-    // {
-    // }
+    printf("Checkpointing\r\n");
+    while (checkpoint_continue(&thread))
+    {
+    }
 
-    // // we are now left with the last 2 wal files. Close everything and reopen.
-    // // All the data must still be there
-    // reset(&thread,".");
+    // we are now left with the last 2 wal files. Close everything and reopen.
+    // All the data must still be there
+    reset(&thread,".");
 
-    // printf("Verifying data\r\n");
-    // check_large(&thread, &clcmd, buf, buf1);
+    printf("Verifying data\r\n");
+    check_large(&thread, &clcmd, buf, buf1);
     
-    // printf("Do rewind on first db\r\n");
-    // thread.curConn = clcmd.conn = &thread.conns[0];
-    // printf("REWIND result=%d\r\n",wal_rewind(clcmd.conn,995));
+    printf("Do rewind on first db\r\n");
+    thread.curConn = clcmd.conn = &thread.conns[3];
+    printf("REWIND result=%d\r\n",wal_rewind(clcmd.conn,NINSERTS-5));
 
-    // for (j = 0; j < 1000; j++)
-    // {
-    //     char str[10];
-    //     char *res[] = {str,buf1};
+    for (j = 0; j < 1000; j++)
+    {
+        char str[10];
+        char *res[] = {str,buf1};
         
-    //     sprintf(str,"%d",j+10);
-    //     sprintf(buf,"select id from tab where id=%d;",j+10);
-    //     rc = do_exec1(buf,&clcmd,&thread,res,0); 
-    //     if (j >= 995)
-    //     {
-    //         // must return error, because we supplied result to check against but none was returned
-    //         assert(SQLITE_OK != rc);
-    //     }
-    //     else
-    //         assert(SQLITE_OK == rc);
-    // }
+        sprintf(str,"%d",j+10);
+        sprintf(buf,"select id from tab where id=%d;",j+10);
+        rc = do_exec1(buf,&clcmd,&thread,res,0); 
+        if (j >= NINSERTS-5)
+        {
+            // must return error, because we supplied result to check against but none was returned
+            assert(SQLITE_OK != rc);
+        }
+        else
+            assert(SQLITE_OK == rc);
+    }
 
     printf("Tests succeeded\r\n");
     close_conns(&thread);

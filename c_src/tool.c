@@ -99,8 +99,8 @@ void do_print(db_thread *thread)
                 printf("%lld Zeroed out frame\n",iOffset);
                 continue;
             }
-            printf("%lld %d %lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
-                wal->walIndex,iFrame,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
+            printf("%d %lld %d %lld Frame for %s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
+                (int)buf[WAL_FRAME_HDRSIZE],wal->walIndex,iFrame,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
         }
         iFrame = 0;
 
