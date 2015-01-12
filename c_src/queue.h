@@ -24,6 +24,7 @@ void queue_set_item_data(void* item, void *ndata);
 void queue_recycle(queue *queue,void* item);
 
 void* queue_get_item(queue *queue);
+int queue_size(queue *queue);
 
 // int queue_send(queue *queue, void* item);
 // void* queue_receive(queue *);

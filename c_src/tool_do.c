@@ -207,6 +207,7 @@ void reset(db_thread *thread, char *path)
 {
 	db_connection *conns = thread->conns;
 	int nconns = thread->nconns;
+    u32 wnum = thread->threadNum;
 
 	// if empty thread info, this is init so create space for 100 connections
 	if (conns == NULL)
@@ -226,6 +227,7 @@ void reset(db_thread *thread, char *path)
     thread->pathlen = strlen(thread->path);
     thread->nconns = nconns;
     thread->conns = conns;
+    thread->threadNum = wnum;
 
     // read wal
     read_thread_wal(thread);

@@ -55,7 +55,7 @@ void check_large(db_thread *thread, db_command *clcmd, char *buf, char* buf1)
         thread->curConn = clcmd->conn = &thread->conns[i];
         for (j = 0; j < NINSERTS; j++)
         {
-            printf("check_large %d %d\n",i,j);
+            // printf("check_large %d %d\n",i,j);
             char str[10];
             char *res[] = {str,buf1};
             
@@ -79,8 +79,9 @@ int main()
     char buf[1024*10];
     char buf1[1024*10];
     char pgBuf[4096+WAL_FRAME_HDRSIZE];
-    char pgDone = 0, pgLast = 0;
-    iterate_resource iter;
+    char pgDone[2] = {0,0}, pgLast = 0;
+    iterate_resource iter[2];
+    u32 wnum;
 
     g_wal_size_limit = 100;
     g_log = stdout;
@@ -112,6 +113,7 @@ int main()
     {
         do_open(dbnames[i],&clcmd,&thread);
         thread.curConn = clcmd.conn = &thread.conns[i];
+        thread.threadNum++;
         do_exec("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",&clcmd,&thread,NULL);
         sprintf(buf,"INSERT INTO tab VALUES (%s,'%s');",initvals[i][0],initvals[i][1]);
         do_exec(buf,&clcmd,&thread,NULL);
@@ -139,6 +141,7 @@ int main()
     printf("TRY FAILED SAVEPOINT\n");
     // start savepoint
     thread.curConn = clcmd.conn = &thread.conns[0];
+    thread.threadNum++;
     rc = do_exec("SAVEPOINT 'adb';",&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
     
@@ -162,6 +165,7 @@ int main()
     assert(SQLITE_OK == rc);
 
     // write to id 2, which must succeed
+    thread.threadNum++;
     sprintf(buf,"INSERT INTO tab VALUES (%s,'%s');",initvals[3][0],initvals[3][1]);
     rc = do_exec(buf,&clcmd,&thread,NULL);
     assert(SQLITE_OK == rc);
@@ -185,6 +189,7 @@ int main()
     {
         for (j = 0; j < ndbs; j++)
         {
+            thread.threadNum++;
             thread.curConn = clcmd.conn = &thread.conns[j];
             clcmd.conn->writeNumber = clcmd.conn->writeTermNumber = i;
             sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
@@ -200,38 +205,67 @@ int main()
     thread.curConn = clcmd.conn = &thread.conns[4];
     rc = do_exec("select name, sql from sqlite_master where type='table';$PRAGMA cache_size=10;",&clcmd,&thread,NULL); 
 
-    iter.evnumFrom = 0;
-    for (i = 0;; i++)
+    for (i = 0; pgDone[0]+pgDone[1] < 2 ; i++)
     {
         PgHdr page;
         u32 commit;
+        u32 wnum1;
 
         memset(&page,0,sizeof(PgHdr));
-        printf("ITERATE %d\n",i);fflush(stdout);
 
         // wal_iterate(&thread.conns[0],4096+WAL_FRAME_HDRSIZE,pgBuf,&pgDone,&pgLast);
-        if (wal_iterate_from(&thread.conns[0], &iter, 4096+WAL_FRAME_HDRSIZE, (u8*)pgBuf, &j, &pgLast) == SQLITE_DONE)
-            break;
-
-        page.pData = pgBuf + WAL_FRAME_HDRSIZE;
-        page.pgno = sqlite3Get4byte((u8*)pgBuf);
-        commit = sqlite3Get4byte((u8*)&pgBuf[4]);
 
         for (j = 3; j < 5; j++)
         {
+            if (pgDone[j-3])
+                continue;
+            printf("ITERATE %d %d\n",i,j);fflush(stdout);
+            if (wal_iterate_from(&thread.conns[j-3], &iter[j-3], 4096+WAL_FRAME_HDRSIZE, (u8*)pgBuf, &rc, &pgLast) == SQLITE_DONE)
+            {
+                pgDone[j-3] = 1;
+                continue;
+            }
+
+            page.pData = pgBuf + WAL_FRAME_HDRSIZE;
+            page.pgno = sqlite3Get4byte((u8*)pgBuf);
+            commit = sqlite3Get4byte((u8*)&pgBuf[4]);
+
+            wnum = thread.threadNum;
             thread.curConn = clcmd.conn = &thread.conns[j];
             thread.curConn->writeNumber = readUInt64((u8*)&pgBuf[8]);
             thread.curConn->writeTermNumber = readUInt64((u8*)&pgBuf[16]);
-            // rc = sqlite3WalFrames(&clcmd.conn->wal,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+            wnum1 = sqlite3Get4byte((u8*)&pgBuf[28]);
+
             Btree *pBt = thread.curConn->db->aDb[0].pBt;
-            if( pBt ){
-                Pager *pPager = sqlite3BtreePager(pBt);
-                assert(pPager->pWal != NULL);
-                page.pPager = pPager;
-                rc = pagerWalFrames(pPager,&page,commit,commit);
-                pPager->pWal->init = 0;
+            assert(pBt != NULL);
+            Pager *pPager = sqlite3BtreePager(pBt);
+            assert(pPager->pWal != NULL);
+
+            if (!thread.curConn->wal->writeLock)
+            {
+                sqlite3WalBeginReadTransaction(thread.curConn->wal, &rc);
+                sqlite3WalBeginWriteTransaction(thread.curConn->wal);
             }
+
+            if (wnum1 != thread.curConn->lastWriteThreadNum && thread.curConn->wal->dirty)
+            {
+                printf("Calling undo for uncommited write\n");
+                pagerRollbackWal(pPager);
+            }
+            
+            thread.threadNum = wnum1;
+            
+            page.pPager = pPager;
+            rc = pagerWalFrames(pPager,&page,commit,commit);
+            pPager->pWal->init = 0;
+            thread.threadNum = wnum;
         }
+    }
+    for (i = 3; j < 5; j++)
+    {
+        thread.curConn = clcmd.conn = &thread.conns[j];
+        sqlite3WalEndReadTransaction(thread.curConn->wal);
+        sqlite3WalEndWriteTransaction(thread.curConn->wal);
     }
     check_large(&thread, &clcmd, buf, buf1);
 

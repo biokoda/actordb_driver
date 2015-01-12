@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1115,14 +1115,25 @@ do_wal_rewind(db_command *cmd, db_thread *thread)
 static ERL_NIF_TERM
 do_inject_page(db_command *cmd, db_thread *thread)
 {
-    Wal *pWalIn = cmd->conn->wal;
     PgHdr page;
     ErlNifBinary bin;
     ErlNifBinary binhead;
     u8 *head;
     u32 commit;
-    int rc = SQLITE_OK,i,j;
+    int rc = SQLITE_OK,j;
     sqlite3 *db = cmd->conn->db;
+    u32 wnum = thread->threadNum;
+    Btree *pBt = NULL;
+    Pager *pPager = NULL;
+
+    if (db->nDb <= 0)
+        return atom_false;
+    pBt = db->aDb[0].pBt;
+    if(!pBt)
+        return atom_false;
+    pPager = sqlite3BtreePager(pBt);
+    if (!pPager)
+        return atom_false;
 
     enif_inspect_binary(cmd->env,cmd->arg,&bin);
     memset(&page,0,sizeof(PgHdr));
@@ -1140,33 +1151,26 @@ do_inject_page(db_command *cmd, db_thread *thread)
             head = bin.data + j;
             page.pData = bin.data + WAL_FRAME_HDRSIZE + j;
         }
-            
 
         page.pgno = sqlite3Get4byte(head);
         commit = sqlite3Get4byte(&head[4]);
 
         cmd->conn->writeNumber = readUInt64(&head[8]);
         cmd->conn->writeTermNumber = readUInt64(&head[16]);
+        thread->threadNum = sqlite3Get4byte(&head[28]);
+
+        if (!cmd->conn->wal->writeLock)
+        {
+            sqlite3WalBeginReadTransaction(cmd->conn->wal, &rc);
+            sqlite3WalBeginWriteTransaction(cmd->conn->wal);
+        }
+             
+        page.pPager = pPager;
+        rc = pagerWalFrames(pPager,&page,commit,commit);
+        thread->threadNum = wnum;
         if (cmd->conn->wal)
             cmd->conn->wal->init = 0;
-
-        for(i=0; i<db->nDb; i++)
-        {
-            Btree *pBt = db->aDb[i].pBt;
-            if( pBt ){
-                Pager *pPager = sqlite3BtreePager(pBt);
-                if (pPager->pWal)
-                {
-                    page.pPager = pPager;
-                    rc = pagerWalFrames(pPager,&page,commit,commit);
-                }
-                else
-                {
-                    rc = sqlite3WalFrames(&pWalIn,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
-                }
-                break;
-            }
-        }
+        
         if (cmd->arg1)
             break;
     }
@@ -1206,6 +1210,12 @@ do_exec_script(db_command *cmd, db_thread *thread)
 
     if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
+
+    if (cmd->conn->wal && cmd->conn->wal->writeLock)
+    {
+        sqlite3WalEndWriteTransaction(cmd->conn->wal);
+        sqlite3WalEndReadTransaction(cmd->conn->wal);
+    }
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
         return make_error_tuple(cmd->env, "not iolist");
@@ -1916,6 +1926,15 @@ thread_func(void *arg)
         #ifdef _TESTDBG_
         fflush(g_log);
         #endif
+
+        // while (data->index >= 0 && queue_size(data->commands) == 0 && checkpoint_continue(data) == 1)
+        // {
+        //     DBG((g_log,"Do checkpoint\n"));
+        //     #ifdef _TESTDBG_
+        //     fflush(g_log);
+        //     #endif
+        //     break;
+        // }
     }
     queue_destroy(data->commands);
 

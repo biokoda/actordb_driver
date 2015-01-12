@@ -1061,6 +1061,9 @@ int checkpoint_continue(db_thread *thread)
 	db_connection *curConn;
 	int *pActorPos;
 
+	if (thread->walFile == NULL)
+		return 0;
+
 	// No prev wal files, we don't have anything to do.
 	if (thread->walFile->prev == NULL)
 		return 0;
@@ -1364,6 +1367,7 @@ int read_thread_wal(db_thread *thread)
 		    curConn->wal_configured = SQLITE_OK == sqlite3_wal_data(curConn->db,(void*)thread);
 
 		    sqlite3WalBeginReadTransaction(curConn->wal,&rc);
+		    sqlite3WalBeginWriteTransaction(curConn->wal);
 		    pActorIndex = malloc(sizeof(int));
 		    *pActorIndex = actorIndex;
             sqlite3HashInsert(&thread->walHash, curConn->dbpath, pActorIndex);
@@ -1382,6 +1386,7 @@ int read_thread_wal(db_thread *thread)
 		    tmpWal->readLock = -1;
 		    tmpWal->walIndex = curWal->walIndex;
 		    sqlite3WalBeginReadTransaction(tmpWal,&rc);
+		    sqlite3WalBeginWriteTransaction(tmpWal);
 		    // We are moving from oldest to youngest wal. So new one in front.
 		    tmpWal->prev = curConn->wal;
 		    curConn->wal = tmpWal;
@@ -1390,14 +1395,15 @@ int read_thread_wal(db_thread *thread)
         
         if (curConn->lastWriteThreadNum != threadWriteNum && curConn->wal->dirty)
         {
-        	sqlite3WalBeginWriteTransaction(curConn->wal);
         	// previous transaction was not finished, we must undo index for it
             sqlite3WalUndo(curConn->wal, NULL, NULL);
-            sqlite3WalEndWriteTransaction(curConn->wal);
+            curConn->wal->hdr.aSalt[0] = 123456789;
+			curConn->wal->hdr.aSalt[1] = 987654321;
         }
 
         curConn->wal->prevFrameOffset = prevFrameOffset;
         rc = walIndexAppend(curConn->wal, iFrame, pgno);
+        curConn->lastWriteThreadNum = threadWriteNum;
         if( rc!=SQLITE_OK )
         {
         	DBG((g_log, "index append failed %d\n",rc));
@@ -1417,7 +1423,7 @@ int read_thread_wal(db_thread *thread)
           testcase( curWal->szPage<=32768 );
           testcase( curWal->szPage>=65536 );
 
-          sqlite3WalBeginWriteTransaction(curConn->wal);
+          
           walIndexWriteHdr(curConn->wal);
           pInfo = walCkptInfo(curConn->wal);
           pInfo->nBackfill = 0;
@@ -1425,12 +1431,12 @@ int read_thread_wal(db_thread *thread)
           for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
           if( curConn->wal->hdr.mxFrame ) pInfo->aReadMark[1] = curConn->wal->hdr.mxFrame;
       	  sqlite3WalEndWriteTransaction(curConn->wal);
+      	  sqlite3WalBeginWriteTransaction(curConn->wal);
         }
         else
         {
         	curConn->wal->dirty = 1;
         }
-        curConn->lastWriteThreadNum = threadWriteNum;
       }
 
       for (i = 0; i < thread->nconns; i++)
@@ -1441,13 +1447,14 @@ int read_thread_wal(db_thread *thread)
       	curConn = &thread->conns[i];
       	if (curConn->wal->dirty)
       	{
-      		sqlite3WalBeginWriteTransaction(curConn->wal);
       		// we have an unfinished transaction and we reached end of wal
       		sqlite3WalUndo(curConn->wal, NULL, NULL);
-      		sqlite3WalEndWriteTransaction(curConn->wal);
       		curConn->wal->dirty = 0;
+      		curConn->wal->hdr.aSalt[0] = 123456789;
+			curConn->wal->hdr.aSalt[1] = 987654321;
       	}
       	// If conn had and wals in current file, it has an open read transaction
+      	sqlite3WalEndWriteTransaction(curConn->wal);
       	sqlite3WalEndReadTransaction(curConn->wal);
       	// necessary to cause clear page cache on first read/write to DB. 
       	curConn->wal->init = 0;
@@ -2095,6 +2102,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		walIndexClose(wal, 0);
 		memset(&wal->hdr,0,sizeof(WalIndexHdr));
 		sqlite3WalBeginReadTransaction(wal,&rc);
+		sqlite3WalBeginWriteTransaction(wal);
 		rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
 
 		wal->dirty = 0;
@@ -2134,8 +2142,11 @@ int wal_rewind(db_connection *conn, u64 evnum)
 		        {
 		        	// previous transaction was not finished, we must undo index for it
 		            sqlite3WalUndo(wal, NULL, NULL);
+		            wal->hdr.aSalt[0] = 123456789;
+					wal->hdr.aSalt[1] = 987654321;
 		        }
 	        	rc = walIndexAppend(wal, iFrame, pgno);
+	        	conn->lastWriteThreadNum = threadWriteNum;
 		        if (nTruncate)
 		        {
 		        	DBG((g_log,"rewind ok frame %lld, iframe=%d, walindex=%lld\n",curEvnum, iFrame,wal->walIndex));
@@ -2147,7 +2158,6 @@ int wal_rewind(db_connection *conn, u64 evnum)
 					wal->hdr.szPage = (u16)((wal->szPage&0xff00) | (wal->szPage>>16));
 					conn->lastWriteThreadNum = threadWriteNum;
 
-					sqlite3WalBeginWriteTransaction(wal);
 					walIndexWriteHdr(wal);
 					pInfo = walCkptInfo(wal);
 					pInfo->nBackfill = 0;
@@ -2157,13 +2167,13 @@ int wal_rewind(db_connection *conn, u64 evnum)
 					for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
 					if( wal->hdr.mxFrame ) pInfo->aReadMark[1] = wal->hdr.mxFrame;
 					sqlite3WalEndWriteTransaction(wal);
+					sqlite3WalBeginWriteTransaction(wal);
 		        }
 		        else
 		        	wal->dirty = 1;
 	        	continue;
 	        }
 	        DBG((g_log,"rewind zeroing frame %lld, iframe=%d walindex=%lld\n",curEvnum,iFrame,wal->walIndex));
-
 			if (curEvnum == evnum)
 			{
 				found = 2;
@@ -2188,7 +2198,6 @@ int wal_rewind(db_connection *conn, u64 evnum)
     	}
     	{
     		WalCkptInfo *pInfo;
-    		sqlite3WalBeginWriteTransaction(wal);
 	    	walIndexWriteHdr(wal);
 	    	pInfo = walCkptInfo(wal);
 			pInfo->nBackfill = 0;
@@ -2198,7 +2207,9 @@ int wal_rewind(db_connection *conn, u64 evnum)
 			for(i=1; i<WAL_NREADER; i++) pInfo->aReadMark[i] = READMARK_NOT_USED;
 			if( wal->hdr.mxFrame ) pInfo->aReadMark[1] = wal->hdr.mxFrame;
 			sqlite3WalEndWriteTransaction(wal);
+			sqlite3WalBeginWriteTransaction(wal);
     	}
+    	sqlite3WalEndWriteTransaction(wal);
     	sqlite3WalEndReadTransaction(wal);
 
     	wal->init = 0;
@@ -3123,6 +3134,7 @@ int sqlite3WalFrames(
 
   iFrame = thrWalFile->mxFrame;
 
+  (*pWal)->thread->curConn->lastWriteThreadNum = (*pWal)->thread->threadNum;
   (*pWal)->szPage = szPage;
   if( iFrame==0 ){
     u8 aWalHdr[WAL_HDRSIZE];      /* Buffer to assemble wal-header in */

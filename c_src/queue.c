@@ -151,6 +151,15 @@ queue_push(queue *queue, void *item)
     return 1;
 }
 
+int queue_size(queue *queue)
+{
+    int r = 0;
+    enif_mutex_lock(queue->lock);
+    r = queue->length;
+    enif_mutex_unlock(queue->lock);
+    return r;
+}
+
 void*
 queue_pop(queue *queue)
 {
