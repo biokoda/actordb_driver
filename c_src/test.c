@@ -83,6 +83,7 @@ int main()
     iterate_resource iter[2];
     u32 wnum;
 
+    // Very small ~400K wal files. With more wal files more things can go wrong
     g_wal_size_limit = 100;
     g_log = stdout;
 

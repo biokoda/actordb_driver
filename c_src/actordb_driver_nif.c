@@ -531,6 +531,8 @@ destruct_iterate(ErlNifEnv *env, void *arg)
     db_command *cmd;
     iterate_resource *res = (iterate_resource*)arg;
 
+    DBG((g_log,"Destruct iterate conn=%d.\n",res->connindex));
+
     item = command_create(res->thread);
     cmd = queue_get_item_data(item);
      
@@ -1226,7 +1228,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
         enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->writeNumber));
         enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
     }
-
+    // DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
     end = (char*)bin.data + bin.size;
     readpoint = (char*)bin.data;
     results = enif_make_list(cmd->env,0);
@@ -1637,6 +1639,8 @@ do_checkpoint_lock(db_command *cmd,db_thread *thread)
     int lock;
     enif_get_int(cmd->env,cmd->arg,&lock);
 
+    DBG((g_log,"Checkpoint lock now %d, lockin=%d, conn=%d.\n",cmd->conn->checkpointLock,lock,cmd->conn->connindex));
+
     if (lock > 0)
         cmd->conn->checkpointLock++;
     else
@@ -1927,14 +1931,19 @@ thread_func(void *arg)
         fflush(g_log);
         #endif
 
-        // while (data->index >= 0 && queue_size(data->commands) == 0 && checkpoint_continue(data) == 1)
-        // {
-        //     DBG((g_log,"Do checkpoint\n"));
-        //     #ifdef _TESTDBG_
-        //     fflush(g_log);
-        //     #endif
-        //     break;
-        // }
+        while (data->index >= 0 && queue_size(data->commands) == 0 && checkpoint_continue(data) == 1)
+        {
+            DBG((g_log,"Do checkpoint\n"));
+            #ifdef _TESTDBG_
+            fflush(g_log);
+            #endif
+            break;
+        }
+
+        DBG((g_log,"thread=%d checkpoint done.\n",data->index));
+        #ifdef _TESTDBG_
+        fflush(g_log);
+        #endif
     }
     queue_destroy(data->commands);
 

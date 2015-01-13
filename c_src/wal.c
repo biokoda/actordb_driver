@@ -1092,7 +1092,7 @@ int checkpoint_continue(db_thread *thread)
 			conWal = conWal->prev;
 		}	
 
-		DBG((g_log,"Checkpoint actor %d for wal %llu, lock=%d\r\n",i, wFile->walIndex,(int)conWal));
+		DBG((g_log,"Checkpoint actor %d for wal %llu, lock=%d\r\n",i, wFile->walIndex,thread->conns[i].checkpointLock));
 
 		if (conWal == NULL)
 			continue;
@@ -1100,7 +1100,6 @@ int checkpoint_continue(db_thread *thread)
 			return 0;
 		if (conWal->walIndex == wFile->walIndex)
 		{
-			assert(conWal->prev == NULL);
 			// just call api function. It will call sqlite3WalCheckpoint, which will move to last
 			// wal file in linked list and checkpoint that.
 			rc = sqlite3_wal_checkpoint_v2(thread->conns[i].db,NULL,SQLITE_CHECKPOINT_FULL,NULL,NULL);
