@@ -1078,7 +1078,6 @@ int checkpoint_continue(db_thread *thread)
 		nextToLast = wFile;
 		wFile = wFile->prev;
 	}
-		
 
 	for (i = wFile->checkpointPos; i < thread->nconns; i++, wFile->checkpointPos++)
 	{
@@ -1092,7 +1091,7 @@ int checkpoint_continue(db_thread *thread)
 			conWal = conWal->prev;
 		}	
 
-		DBG((g_log,"Checkpoint actor %d for wal %llu, lock=%d\r\n",i, wFile->walIndex,thread->conns[i].checkpointLock));
+		DBG((g_log,"Checkpoint wal=%llu, lock=%d, conn=%d.\r\n",wFile->walIndex,thread->conns[i].checkpointLock,i));
 
 		if (conWal == NULL)
 			continue;
@@ -1103,13 +1102,16 @@ int checkpoint_continue(db_thread *thread)
 			// just call api function. It will call sqlite3WalCheckpoint, which will move to last
 			// wal file in linked list and checkpoint that.
 			rc = sqlite3_wal_checkpoint_v2(thread->conns[i].db,NULL,SQLITE_CHECKPOINT_FULL,NULL,NULL);
-			assert(rc == SQLITE_OK);
+			if (rc != SQLITE_OK)
+			{
+				DBG((g_log,"Unable to checkpoint %d\n",rc));fflush(stdout);
+			}
 			break;
 		}
 		// db no longer open in erlang and has no frames in wal. It can be closed.
 		else if (curConn->nErlOpen == 0 && curConn->wal->prev == NULL && curConn->wal->hdr.mxFrame == 0)
 		{
-			DBG((g_log,"Closing actor %d\n",i));
+			// DBG((g_log,"Closing actor %d\n",i));
 	        rc = sqlite3_close(curConn->db);
 	        if(rc != SQLITE_OK)
 	        {
@@ -3474,7 +3476,6 @@ int sqlite3WalCheckpoint(
     memset(&pWal->hdr, 0, sizeof(WalIndexHdr));
   }
 
-
   sqlite3WalEndWriteTransaction(pWal);
   walUnlockExclusive(pWal, WAL_CKPT_LOCK, 1);
   pWal->ckptLock = 0;
@@ -3638,11 +3639,11 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   int cnt = 0;                    /* Number of TryBeginRead attempts */
 
   do{
-  	// DBG((g_log,"Start read transaction\n"));
+  	// DBG((g_log,"Start read transaction %d\n",pWal->readLock));
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
 
-  // DBG((g_log,"START READ TRANSACTION wal=%lld result=%d, changed %d, conn=%d\r\n",pWal->walIndex,rc,*pChanged,pWal->thread->curConn->connindex));
+  DBG((g_log,"START READ TRANSACTION wal=%lld result=%d, changed %d\r\n",pWal->walIndex,rc,*pChanged));
   testcase( (rc&0xff)==SQLITE_BUSY );
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );

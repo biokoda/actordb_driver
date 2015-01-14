@@ -1174,6 +1174,12 @@ do_inject_page(db_command *cmd, db_thread *thread)
         thread->threadNum = wnum;
         if (cmd->conn->wal)
             cmd->conn->wal->init = 0;
+
+        // if (commit)
+        // {
+        //     sqlite3WalEndWriteTransaction(cmd->conn->wal);
+        //     sqlite3WalEndReadTransaction(cmd->conn->wal);
+        // }
         
         if (cmd->arg1)
             break;
@@ -1231,7 +1237,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
         enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->writeNumber));
         enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
     }
-    // DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
+    DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
     end = (char*)bin.data + bin.size;
     readpoint = (char*)bin.data;
     results = enif_make_list(cmd->env,0);
@@ -1503,7 +1509,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
                                             results);
         }
         dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
-        DBG((g_log,"Finalizing statement? %d\n",(int)dofinalize));
+        // DBG((g_log,"Finalizing statement? %d\n",(int)dofinalize));
         statement = NULL;
     }
 
@@ -1906,9 +1912,6 @@ thread_func(void *arg)
         cmd = queue_get_item_data(item);
 
         DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
-        #ifdef _TESTDBG_
-        fflush(g_log);
-        #endif
 
         if (cmd->type == cmd_stop)
         {
@@ -1931,30 +1934,18 @@ thread_func(void *arg)
         }
 
         DBG((g_log,"thread=%d command done.\n",data->index));
-        #ifdef _TESTDBG_
-        fflush(g_log);
-        #endif
 
         while (data->index >= 0 && queue_size(data->commands) == 0 && checkpoint_continue(data) == 1)
         {
             DBG((g_log,"Do checkpoint\n"));
-            #ifdef _TESTDBG_
-            fflush(g_log);
-            #endif
             break;
         }
 
         DBG((g_log,"thread=%d checkpoint done.\n",data->index));
-        #ifdef _TESTDBG_
-        fflush(g_log);
-        #endif
     }
     queue_destroy(data->commands);
 
     DBG((g_log,"thread=%d stopping.\n",data->index));
-    #ifdef _TESTDBG_
-    fflush(g_log);
-    #endif
 
     for (i = 0; i < data->nconns; i++)
     {

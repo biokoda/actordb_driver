@@ -17,7 +17,7 @@ int g_wal_size_limit = 1024*3;
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
-# define DBG(X)  fprintf X
+# define DBG(X)  fprintf X ;fflush(g_log);
 #else
 # define DBG(X)
 #endif
