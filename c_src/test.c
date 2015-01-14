@@ -86,6 +86,7 @@ int main()
     char pgDone[2] = {0,0}, pgLast = 0;
     iterate_resource iter[2];
     u32 wnum;
+    char haveCheck = 0;
 
     // Very small ~400K wal files. With more wal files more things can go wrong
     g_wal_size_limit = 100;
@@ -267,6 +268,15 @@ int main()
             rc = pagerWalFrames(pPager,&page,commit,commit);
             pPager->pWal->init = 0;
             thread.threadNum = wnum;
+
+            if (commit && haveCheck == 0 && pgDone[0]+pgDone[1] == 1)
+            {
+                printf("Checkpointing\r\n");
+                while (checkpoint_continue(&thread))
+                {
+                }
+                haveCheck = 1;
+            }
         }
     }
     for (i = 3; j < 5; j++)
@@ -288,7 +298,8 @@ int main()
         }
     }
 
-    printf("Checkpointing\r\n");
+    check_large(&thread, &clcmd, buf, buf1);
+
     while (checkpoint_continue(&thread))
     {
     }

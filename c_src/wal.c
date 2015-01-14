@@ -1099,6 +1099,12 @@ int checkpoint_continue(db_thread *thread)
 			return 0;
 		if (conWal->walIndex == wFile->walIndex)
 		{
+			DBG((g_log,"Doing Wlock=%d dirty=%d\n",conWal->writeLock,(int)conWal->dirty));
+			// if (conWal->writeLock)
+	  //       {
+	  //       	sqlite3WalEndWriteTransaction(conWal);
+	  //           sqlite3WalEndReadTransaction(conWal);
+	  //       }
 			// just call api function. It will call sqlite3WalCheckpoint, which will move to last
 			// wal file in linked list and checkpoint that.
 			rc = sqlite3_wal_checkpoint_v2(thread->conns[i].db,NULL,SQLITE_CHECKPOINT_FULL,NULL,NULL);

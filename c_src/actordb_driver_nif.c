@@ -1221,12 +1221,25 @@ do_exec_script(db_command *cmd, db_thread *thread)
     if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
-    if (cmd->conn->wal && cmd->conn->wal->writeLock)
-    {
-        DBG((g_log,"Ending write transaction\n"));
-        sqlite3WalEndWriteTransaction(cmd->conn->wal);
-        sqlite3WalEndReadTransaction(cmd->conn->wal);
-    }
+    // if (cmd->conn->wal && cmd->conn->wal->writeLock)
+    // {
+    //     DBG((g_log,"Ending write transaction\n"));
+    //     sqlite3WalEndWriteTransaction(cmd->conn->wal);
+    //     sqlite3WalEndReadTransaction(cmd->conn->wal);
+    // }
+    // else if (cmd->conn->wal)
+    // {
+    //     Wal *tmpWal = cmd->conn->wal->prev;
+    //     while (tmpWal != NULL)
+    //     {
+    //         if (tmpWal->writeLock)
+    //         {
+    //             sqlite3WalEndWriteTransaction(tmpWal);
+    //             sqlite3WalEndReadTransaction(tmpWal);
+    //         }
+    //         tmpWal = tmpWal->prev;
+    //     }
+    // }
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
         return make_error_tuple(cmd->env, "not iolist");
