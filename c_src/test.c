@@ -50,19 +50,23 @@
 void check_large(db_thread *thread, db_command *clcmd, char *buf, char* buf1)
 {
     int i,j,rc;
+    u64 wn;
     for (i = 0; thread->conns[i].db != NULL; i++)
     {
         thread->curConn = clcmd->conn = &thread->conns[i];
-        for (j = 0; j < NINSERTS; j++)
+        wn = clcmd->conn->writeNumber - 1;
+        // for (j = 0; j < NINSERTS; j++)
+        while (wn > 11)
         {
-            // printf("check_large %d %d\n",i,j);
+            // printf("check_large %d %lld\n",i,wn);
             char str[10];
             char *res[] = {str,buf1};
             
-            sprintf(str,"%d",j+10);
-            sprintf(buf,"select * from tab where id=%d;",j+10);
+            sprintf(str,"%lld",wn);
+            sprintf(buf,"select * from tab where id=%lld;",wn);
             rc = do_exec(buf,clcmd,thread,res); 
             assert(SQLITE_OK == rc);
+            wn--;
         }
     }
 }
@@ -115,6 +119,8 @@ int main()
         do_open(dbnames[i],&clcmd,&thread);
         thread.curConn = clcmd.conn = &thread.conns[i];
         thread.threadNum++;
+        clcmd.conn->writeNumber = clcmd.conn->writeTermNumber = ++clcmd.conn->writeNumber;
+        clcmd.conn->writeNumber += 10;
         do_exec("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",&clcmd,&thread,NULL);
         sprintf(buf,"INSERT INTO tab VALUES (%s,'%s');",initvals[i][0],initvals[i][1]);
         do_exec(buf,&clcmd,&thread,NULL);
@@ -150,7 +156,7 @@ int main()
     // write more than a pages worth of valid insert (which should force some data to disk)
     for (i = 2; i < 1000; i++)
     {
-        sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
+        sprintf(buf,"insert into tab values (%d,'%s');",100000+i,buf1);
         rc = do_exec(buf,&clcmd,&thread,NULL); 
         assert(SQLITE_OK == rc);
     }
@@ -192,8 +198,9 @@ int main()
         {
             thread.threadNum++;
             thread.curConn = clcmd.conn = &thread.conns[j];
-            clcmd.conn->writeNumber = clcmd.conn->writeTermNumber = i;
-            sprintf(buf,"insert into tab values (%d,'%s');",i+10,buf1);
+            printf("%d %d %lld\n",i,j,clcmd.conn->writeNumber);
+            clcmd.conn->writeNumber = clcmd.conn->writeTermNumber = ++clcmd.conn->writeNumber;
+            sprintf(buf,"insert into tab values (%lld,'%s');",clcmd.conn->writeNumber,buf1);
             rc = do_exec(buf,&clcmd,&thread,NULL); 
             assert(SQLITE_OK == rc);
         }
@@ -220,7 +227,7 @@ int main()
         {
             if (pgDone[j-3])
                 continue;
-            printf("ITERATE %d %d\n",i,j);fflush(stdout);
+            // printf("ITERATE %d %d\n",i,j);fflush(stdout);
             if (wal_iterate_from(&thread.conns[j-3], &iter[j-3], 4096+WAL_FRAME_HDRSIZE, (u8*)pgBuf, &rc, &pgLast) == SQLITE_DONE)
             {
                 pgDone[j-3] = 1;
@@ -268,6 +275,24 @@ int main()
         sqlite3WalEndReadTransaction(thread.curConn->wal);
         sqlite3WalEndWriteTransaction(thread.curConn->wal);
     }
+    for (i = 0; i < 50; i++)
+    {
+        for (j = 0; j < ndbs; j++)
+        {
+            thread.threadNum++;
+            thread.curConn = clcmd.conn = &thread.conns[j];
+            clcmd.conn->writeNumber = clcmd.conn->writeTermNumber = ++clcmd.conn->writeNumber;
+            sprintf(buf,"insert into tab values (%lld,'%s');",clcmd.conn->writeNumber,buf1);
+            rc = do_exec(buf,&clcmd,&thread,NULL); 
+            assert(SQLITE_OK == rc);
+        }
+    }
+
+    printf("Checkpointing\r\n");
+    while (checkpoint_continue(&thread))
+    {
+    }
+
     check_large(&thread, &clcmd, buf, buf1);
 
     printf("Reset\r\n");
@@ -276,12 +301,7 @@ int main()
     printf("Check data\r\n");
     // Check if all still there
     check_large(&thread, &clcmd, buf, buf1);
-    
-
-    printf("Checkpointing\r\n");
-    while (checkpoint_continue(&thread))
-    {
-    }
+        
 
     // we are now left with the last 2 wal files. Close everything and reopen.
     // All the data must still be there
@@ -291,18 +311,18 @@ int main()
     check_large(&thread, &clcmd, buf, buf1);
     
     printf("Do rewind on first db\r\n");
-    thread.curConn = clcmd.conn = &thread.conns[3];
-    printf("REWIND result=%d\r\n",wal_rewind(clcmd.conn,NINSERTS-5));
+    thread.curConn = clcmd.conn = &thread.conns[0];
+    printf("REWIND result=%d\r\n",wal_rewind(clcmd.conn,clcmd.conn->writeNumber-5));
 
-    for (j = 0; j < 1000; j++)
+    for (j = 20; j < clcmd.conn->writeNumber; j++)
     {
         char str[10];
         char *res[] = {str,buf1};
         
-        sprintf(str,"%d",j+10);
-        sprintf(buf,"select id from tab where id=%d;",j+10);
+        sprintf(str,"%d",j);
+        sprintf(buf,"select id from tab where id=%d;",j);
         rc = do_exec1(buf,&clcmd,&thread,res,0); 
-        if (j >= NINSERTS-5)
+        if (j >= clcmd.conn->writeNumber-5)
         {
             // must return error, because we supplied result to check against but none was returned
             assert(SQLITE_OK != rc);

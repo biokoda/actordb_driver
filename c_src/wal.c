@@ -1321,6 +1321,8 @@ int read_thread_wal(db_thread *thread)
 
         if (curConn != NULL && actorIndex == curConn->connindex && curConn->wal->walIndex == curWal->walIndex)
         {
+        	curConn->writeNumber = writeNumber;
+        	curConn->writeTermNumber = writeTermNumber;
         }
         else
         {
@@ -1334,6 +1336,8 @@ int read_thread_wal(db_thread *thread)
             thread->nconns = actorIndex*1.5;
           }
           curConn = &thread->conns[actorIndex];
+          curConn->writeNumber = writeNumber;
+          curConn->writeTermNumber = writeTermNumber;
           if (curConn->db == NULL)
           {
             rc = sqlite3_open(filename,&(curConn->db));

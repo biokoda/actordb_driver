@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -531,7 +531,9 @@ destruct_iterate(ErlNifEnv *env, void *arg)
     db_command *cmd;
     iterate_resource *res = (iterate_resource*)arg;
 
-    DBG((g_log,"Destruct iterate conn=%d.\n",res->connindex));
+    DBG((g_log,"Destruct iterate conn=%d, closed=%d.\n",res->connindex,(int)res->closed));
+    if (res->closed)
+        return;
 
     item = command_create(res->thread);
     cmd = queue_get_item_data(item);
@@ -644,13 +646,13 @@ do_open(db_command *cmd, db_thread *thread)
         cmd->conn = &thread->conns[cmd->connindex];
         thread->curConn = cmd->conn;
     }
-
-    DBG((g_log,"thread=%d open=%s mode=%s conn=%d.\n",thread->index,filename,mode,cmd->connindex));
-    
+        
     res->thread = thread->index;
     res->connindex = cmd->connindex;
     cmd->conn->nErlOpen++;
     cmd->conn->connindex = cmd->connindex;
+
+    DBG((g_log,"thread=%d open=%s mode=%s nopen=%d conn=%d.\n",thread->index,filename,mode,cmd->conn->nErlOpen,cmd->connindex));
 
     result = enif_make_resource(cmd->env, res);
     enif_release_resource(res);
@@ -1215,6 +1217,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 
     if (cmd->conn->wal && cmd->conn->wal->writeLock)
     {
+        DBG((g_log,"Ending write transaction\n"));
         sqlite3WalEndWriteTransaction(cmd->conn->wal);
         sqlite3WalEndReadTransaction(cmd->conn->wal);
     }
@@ -1643,7 +1646,7 @@ do_checkpoint_lock(db_command *cmd,db_thread *thread)
 
     if (lock > 0)
         cmd->conn->checkpointLock++;
-    else
+    else if (cmd->conn->checkpointLock > 0)
         cmd->conn->checkpointLock--;
     return atom_ok;
 }
@@ -1728,6 +1731,7 @@ do_close(db_command *cmd,db_thread *thread)
     // if it no longer has any frames in wal, it can actually be closed
     else if (conn->wal->prev == NULL && conn->wal->hdr.mxFrame == 0)
     {
+        DBG((g_log,"Closing %s\n",conn->dbpath));
         pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
         sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
         free(pActorPos);
@@ -2738,6 +2742,36 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM 
+iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    iterate_resource *iter;
+    db_command *cmd = NULL;
+    void *item;    
+     
+    if(argc != 1) 
+        return enif_make_badarg(env);  
+    if(!enif_get_resource(env, argv[0], iterate_type, (void **) &iter))
+        return enif_make_badarg(env);
+    
+    item = command_create(iter->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+    {
+        return make_error_tuple(env, "command_create_failed");
+    }
+
+    iter->closed = 1;
+    cmd->type = cmd_checkpoint_lock;
+    cmd->arg = enif_make_int(cmd->env, 0); 
+    cmd->connindex = iter->connindex;
+    cmd->ref = 0;
+
+    enif_consume_timeslice(env,500);
+
+    return push_command(iter->thread, item);
+}
+
+static ERL_NIF_TERM 
 inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
@@ -2958,7 +2992,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 
 #ifdef _TESTDBG_
     enif_get_string(env,head,nodename,128,ERL_NIF_LATIN1);
-    g_log = fopen(nodename, "a");
+    g_log = fopen(nodename, "w");
 #endif
 
 #ifdef _WIN32
@@ -3121,6 +3155,7 @@ static ErlNifFunc nif_funcs[] = {
     {"store_prepared_table",2,store_prepared_table},
     {"checkpoint_lock",4,checkpoint_lock},
     {"iterate_wal",4,iterate_wal},
+    {"iterate_close",1,iterate_close},
     {"page_size",0,page_size},
     {"inject_page",4,inject_page},
     {"inject_page",5,inject_page},
