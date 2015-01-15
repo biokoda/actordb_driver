@@ -3116,9 +3116,9 @@ int sqlite3WalFrames(
 	  // Do we need to create a new wal structure for newer file?
 	  if (thrWalFile->walIndex > (*pWal)->walIndex)
 	  {
-	  	// DBG((g_log,"Opening into new wal %d\r\n",(*pWal)->thread->curConn->connindex));
 	    Wal *newWal;
 	    int changed;
+	    DBG((g_log,"Opening into new wal %lld, curmxframe=%u\r\n",thrWalFile->walIndex,(*pWal)->hdr.mxFrame));
 	    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)(*pWal)->thread);
 	    sqlite3WalEndReadTransaction(*pWal);
 	    sqlite3WalEndWriteTransaction(*pWal);
@@ -3317,8 +3317,8 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    // DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
-    // 	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
+    DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
+    	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -3425,6 +3425,8 @@ int sqlite3WalCheckpoint(
   int eMode2 = eMode;             /* Mode to pass to walCheckpoint() */
   wal_file *wFile = pWalTop->thread->walFile;
 
+  DBG((g_log,"Wal checkpoint wfile=%lld, topwal=%lld\n",wFile->walIndex,pWalTop->walIndex));
+
   pWal = pWalTop;
   while (wFile->prev != NULL)
 	wFile = wFile->prev;
@@ -3434,6 +3436,8 @@ int sqlite3WalCheckpoint(
 
   assert(pWal->walIndex == wFile->walIndex);
 
+  DBG((g_log,"Wal checkpoint readlock=%d, mxframe=%u, dirty=%d, windex=%lld\n",
+  		pWal->readLock,pWal->hdr.mxFrame,(int)pWal->dirty,pWal->walIndex));
   int rch;
   if (pWal->readLock < 0)
   	sqlite3WalBeginReadTransaction(pWal,&rch);
@@ -3489,6 +3493,7 @@ int sqlite3WalCheckpoint(
   if (rc == SQLITE_OK && pWalTop != pWal)
   {
   	Wal *tmpWal = pWalTop;
+  	DBG((g_log,"Checkpoint done, closing walfile=%lld\n",pWal->walIndex));
     sqlite3WalClose(pWal, sync_flags, nBuf,zBuf);
     while (tmpWal->prev != pWal)
     	tmpWal = tmpWal->prev;
@@ -3498,8 +3503,16 @@ int sqlite3WalCheckpoint(
   {
   	pWal->pWalFd = pWal->thread->walFile->pWalFd;
   	pWal->walIndex = pWal->thread->walFile->walIndex;
+  	DBG((g_log,"Checkpoint done not closing wal file. Setting it to new=%lld, mx=%u\n",pWal->walIndex,pWal->hdr.mxFrame));
   	pWal->prevFrameOffset = 0;
   	pWal->dirty = 0;
+  	walIndexWriteHdr(pWal);
+  	pWal->hdr.aSalt[0] = 123456789;
+	pWal->hdr.aSalt[1] = 987654321;
+  }
+  else
+  {
+  	DBG((g_log,"Checkpoint invalid result? %d\n",rc));
   }
   return (rc==SQLITE_OK && eMode!=eMode2 ? SQLITE_BUSY : rc);
 }
@@ -3645,11 +3658,11 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
   int cnt = 0;                    /* Number of TryBeginRead attempts */
 
   do{
-  	// DBG((g_log,"Start read transaction %d\n",pWal->readLock));
+  	DBG((g_log,"Start read transaction lock=%d,mx=%u\n",pWal->readLock,pWal->hdr.mxFrame));
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
 
-  DBG((g_log,"START READ TRANSACTION wal=%lld result=%d, changed %d\r\n",pWal->walIndex,rc,*pChanged));
+  DBG((g_log,"START READ TRANSACTION wal=%lld result=%d, changed %d, mxframe=%u\r\n",pWal->walIndex,rc,*pChanged,pWal->hdr.mxFrame));
   testcase( (rc&0xff)==SQLITE_BUSY );
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );

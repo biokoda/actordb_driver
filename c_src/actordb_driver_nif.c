@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -477,6 +477,8 @@ destruct_connection(ErlNifEnv *env, void *arg)
     db_command *cmd;
     conn_resource *res = (conn_resource*)arg;
 
+    DBG((g_log,"destruct_connection\n"));
+
     // Send unlock first if it exists
     if (res->checkpointLock > 0)
     {
@@ -652,7 +654,7 @@ do_open(db_command *cmd, db_thread *thread)
     cmd->conn->nErlOpen++;
     cmd->conn->connindex = cmd->connindex;
 
-    DBG((g_log,"thread=%d open=%s mode=%s nopen=%d conn=%d.\n",thread->index,filename,mode,cmd->conn->nErlOpen,cmd->connindex));
+    DBG((g_log,"thread=%d name=%s mode=%s nopen=%d open conn=%d.\n",thread->index,filename,mode,cmd->conn->nErlOpen,cmd->connindex));
 
     result = enif_make_resource(cmd->env, res);
     enif_release_resource(res);
@@ -1168,6 +1170,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
             sqlite3WalBeginReadTransaction(cmd->conn->wal, &rc);
             sqlite3WalBeginWriteTransaction(cmd->conn->wal);
         }
+        DBG((g_log,"Inject into wal=%lld\n",cmd->conn->wal->walIndex));
              
         page.pPager = pPager;
         rc = pagerWalFrames(pPager,&page,commit,commit);
@@ -1250,6 +1253,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
         enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->writeNumber));
         enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
     }
+
     DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
     end = (char*)bin.data + bin.size;
     readpoint = (char*)bin.data;
@@ -2662,6 +2666,8 @@ checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     void *item;
     int lock;
+
+    DBG((g_log,"checkpoint_lock\n"));
      
     if(argc != 4) 
         return enif_make_badarg(env);  
@@ -2715,6 +2721,8 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     db_command *cmd = NULL;
     ErlNifPid pid;
     void *item;    
+
+    DBG((g_log,"iterate_wal\n"));
      
     if(argc != 4) 
         return enif_make_badarg(env);  
@@ -2751,6 +2759,8 @@ iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     iterate_resource *iter;
     db_command *cmd = NULL;
     void *item;    
+
+    DBG((g_log,"iterate_close\n"));
      
     if(argc != 1) 
         return enif_make_badarg(env);  
