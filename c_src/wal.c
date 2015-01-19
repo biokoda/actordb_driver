@@ -3126,7 +3126,16 @@ int sqlite3WalFrames(
 	    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)(*pWal)->thread);
 	    sqlite3WalEndReadTransaction(*pWal);
 	    sqlite3WalEndWriteTransaction(*pWal);
-	    newWal->prev = *pWal;
+
+	    if ((*pWal)->hdr.mxFrame == 0)
+	  	{
+	  		newWal->prev = (*pWal)->prev;
+	  		walIndexClose(*pWal, 0);
+			sqlite3_free((void *)(*pWal)->apWiData);
+			sqlite3_free(*pWal);
+	  	}
+	  	else
+	    	newWal->prev = *pWal;
 	    newWal->pWalFd = thrWalFile->pWalFd;
 	    newWal->walIndex = thrWalFile->walIndex;
 	    newWal->init = 0;
@@ -3517,11 +3526,10 @@ int sqlite3WalCheckpoint(
   	DBG((g_log,"Checkpoint done not closing wal file. Setting it to new=%lld, mx=%u\n",pWal->walIndex,pWal->hdr.mxFrame));
   	pWal->prevFrameOffset = 0;
   	pWal->dirty = 0;
-  	// memset(&pWal->hdr, 0, sizeof(WalIndexHdr));
-  	walIndexWriteHdr(pWal);
-  	pWal->hdr.aSalt[0] = 123456789;
-	pWal->hdr.aSalt[1] = 987654321;
-	pWal->hdr.szPage = SQLITE_DEFAULT_PAGE_SIZE;
+  	pWal->hdr.mxFrame = 0;
+  	memset(&pWal->hdr, 0, sizeof(WalIndexHdr));
+  	// walIndexWriteHdr(pWal);
+  	walIndexClose(pWal,0);
   }
   else
   {

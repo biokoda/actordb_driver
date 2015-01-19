@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -477,7 +477,7 @@ destruct_connection(ErlNifEnv *env, void *arg)
     db_command *cmd;
     conn_resource *res = (conn_resource*)arg;
 
-    DBG((g_log,"destruct_connection\n"));
+    DBG((g_log,"destruct_connection %d\n",res->connindex));
 
     // Send unlock first if it exists
     if (res->checkpointLock > 0)
@@ -1988,7 +1988,6 @@ thread_func(void *arg)
         cmd = queue_get_item_data(item);
 
         DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
-        fflush(g_log);
 
         if (cmd->type == cmd_stop)
         {

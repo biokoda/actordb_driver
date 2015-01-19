@@ -1,6 +1,7 @@
 #ifndef ACTORDB_DRIVER_NIF_H
 
 #include "dirent.h"
+#include <pthread.h>
 
 #define MAX_ATOM_LENGTH 255
 #define MAX_PATHNAME 512
