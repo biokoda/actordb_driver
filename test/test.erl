@@ -11,6 +11,7 @@ run_test_() ->
 
 check() ->
     ?debugFmt("Reload and checking result of repl",[]),
+    file:copy("drv_nonode.txt","prev_drv_nonode.txt"),
     garbage_collect(),
     code:delete(actordb_driver_nif),
     code:purge(actordb_driver_nif),
@@ -76,7 +77,7 @@ repl() ->
     L1 = get_pages(Db2),
     {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3, 'thirdthird');",Db2,10000,1,4,<<>>),
     L2 = get_pages(Db2),
-    [actordb_driver:inject_page(Db,Bin) || Bin <- L2 -- L1],
+    [ok = actordb_driver:inject_page(Db,Bin) || Bin <- L2 -- L1],
     
     % Check both
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
@@ -91,7 +92,7 @@ repl() ->
     % 0 means return all pages in wal for connection
     Pages2 = get_pages(Db2,0),
     {ok,Db3,_} = actordb_driver:open("t3.db",0,Sql,wal),
-    [actordb_driver:inject_page(Db3,Bin) || Bin <- Pages2],
+    [ok = actordb_driver:inject_page(Db3,Bin) || Bin <- Pages2],
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
     delete(Db).
     % repl1(Db);

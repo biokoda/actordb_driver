@@ -194,7 +194,7 @@ void close_conns(db_thread *thread)
     {
         if (thread->conns[i].db != NULL)
         {
-            clcmd.conn = &thread->conns[i];
+            thread->curConn = clcmd.conn = &thread->conns[i];
             // If no pages in wall, db will be closed
             do_close(&clcmd,thread);
             memset(&(thread->conns[i]),0,sizeof(db_connection));

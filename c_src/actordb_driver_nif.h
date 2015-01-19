@@ -235,6 +235,8 @@ struct db_connection
     // Pointer to wal structure that iterator belongs to.
     // Iterators move from oldest wal to youngest
     Wal* iterWal;
+
+    char needRestart;
 };
 
 struct conn_resource
@@ -336,6 +338,8 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i);
 #endif
 
+int reopen_db(db_connection *conn, db_thread *thread);
+void close_prepared(db_connection *conn);
 int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u8* buffer, int *nFilled,char *activeWal);
 SQLITE_API int sqlite3_wal_data(sqlite3 *db,void *pArg);
 int wal_rewind(db_connection *conn, u64 evnum);

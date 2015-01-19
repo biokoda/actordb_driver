@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -584,7 +584,7 @@ do_open(db_command *cmd, db_thread *thread)
     {
         for (i = 0; i < thread->nconns; i++)
         {
-            if (!thread->conns[i].db)
+            if (!thread->conns[i].db && !thread->conns[i].wal)
                 break;
         }
         // No free slots. Increase array size.
@@ -644,6 +644,7 @@ do_open(db_command *cmd, db_thread *thread)
     }
     else
     {
+        DBG((g_log,"Already open\n"));
         cmd->connindex = *pActorIndex;
         cmd->conn = &thread->conns[cmd->connindex];
         thread->curConn = cmd->conn;
@@ -654,7 +655,8 @@ do_open(db_command *cmd, db_thread *thread)
     cmd->conn->nErlOpen++;
     cmd->conn->connindex = cmd->connindex;
 
-    DBG((g_log,"thread=%d name=%s mode=%s nopen=%d open conn=%d.\n",thread->index,filename,mode,cmd->conn->nErlOpen,cmd->connindex));
+    DBG((g_log,"thread=%d name=%s mode=%s, rest=%d nopen=%d open conn=%d.\n",
+        thread->index,filename,mode,cmd->conn->needRestart, cmd->conn->nErlOpen,cmd->connindex));
 
     result = enif_make_resource(cmd->env, res);
     enif_release_resource(res);
@@ -1114,6 +1116,7 @@ do_wal_rewind(db_command *cmd, db_thread *thread)
 
     enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
     rc = wal_rewind(cmd->conn,evnum);
+    cmd->conn->needRestart = 1;
 
     return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
 }
@@ -1174,9 +1177,11 @@ do_inject_page(db_command *cmd, db_thread *thread)
              
         page.pPager = pPager;
         rc = pagerWalFrames(pPager,&page,commit,commit);
+        // rc = sqlite3WalFrames(&pPager->pWal,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
         thread->threadNum = wnum;
         if (cmd->conn->wal)
             cmd->conn->wal->init = 0;
+        cmd->conn->needRestart = 1;
 
         // if (commit)
         // {
@@ -1221,8 +1226,15 @@ do_exec_script(db_command *cmd, db_thread *thread)
     listTop = cmd->arg4;
     thread->threadNum++;
 
+    if (cmd->conn->needRestart)
+    {
+        if (!reopen_db(cmd->conn,thread))
+            return atom_false;
+    }
+
     if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
+
 
     // if (cmd->conn->wal && cmd->conn->wal->writeLock)
     // {
@@ -1680,7 +1692,6 @@ do_close(db_command *cmd,db_thread *thread)
     ERL_NIF_TERM ret = atom_ok;
     int rc;
     db_connection *conn = cmd->conn;
-    int i = 0;
     int *pActorPos;
     
     conn->nErlOpen--;
@@ -1690,32 +1701,7 @@ do_close(db_command *cmd,db_thread *thread)
         if (conn->packetPrefix.size)
             enif_release_binary(&conn->packetPrefix);
 
-        if (conn->prepared != NULL)
-        {
-            for (i = 0; i < MAX_PREP_SQLS; i++)
-            {
-                if (conn->prepared[i] != 0)
-                {
-                    sqlite3_finalize(conn->prepared[i]);
-                }
-                    
-                conn->prepared[i] = NULL;
-            }
-            free(conn->prepVersions);
-            conn->prepVersions = NULL;
-        }
-        free(conn->prepared);
-        conn->prepared = NULL;
-        if (conn->staticPrepared)
-        {
-            for (i = 0; i < MAX_STATIC_SQLS; i++)
-            {
-                sqlite3_finalize(conn->staticPrepared[i]);
-                conn->staticPrepared[i] = NULL;
-            }
-            free(conn->staticPrepared);
-        }
-        conn->staticPrepared = NULL;
+        close_prepared(conn);
     }
     if (cmd->arg && enif_is_ref(cmd->env,cmd->arg))
     {
@@ -1724,6 +1710,7 @@ do_close(db_command *cmd,db_thread *thread)
         DBG((g_log,"Deleting actor\n"));
 
         wal_rewind(cmd->conn,0);
+        conn->needRestart = 0;
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
@@ -1742,6 +1729,7 @@ do_close(db_command *cmd,db_thread *thread)
     }
     else if (!conn->wal)
     {
+        conn->needRestart = 0;
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
@@ -1762,6 +1750,7 @@ do_close(db_command *cmd,db_thread *thread)
         if (conn->walIter)
             walIteratorFree(conn->walIter);
 
+        conn->needRestart = 0;
         rc = sqlite3_close(conn->db);
         if(rc != SQLITE_OK)
         {
@@ -1773,11 +1762,73 @@ do_close(db_command *cmd,db_thread *thread)
     }
     else
     {
-        DBG((g_log,"Not closing yet\n"));
+        DBG((g_log,"Not closing yet, mx=%u, nopen=%d, needrestart=%d\n",conn->wal->hdr.mxFrame,conn->nErlOpen,conn->needRestart));
     }
 
-
     return ret;
+}
+
+void close_prepared(db_connection *conn)
+{
+    int i;
+    if (conn->prepared != NULL)
+    {
+        for (i = 0; i < MAX_PREP_SQLS; i++)
+        {
+            if (conn->prepared[i] != 0)
+            {
+                sqlite3_finalize(conn->prepared[i]);
+            }
+                
+            conn->prepared[i] = NULL;
+        }
+        free(conn->prepVersions);
+        conn->prepVersions = NULL;
+    }
+    free(conn->prepared);
+    conn->prepared = NULL;
+    if (conn->staticPrepared)
+    {
+        for (i = 0; i < MAX_STATIC_SQLS; i++)
+        {
+            sqlite3_finalize(conn->staticPrepared[i]);
+            conn->staticPrepared[i] = NULL;
+        }
+        free(conn->staticPrepared);
+    }
+    conn->staticPrepared = NULL;
+}
+
+
+int reopen_db(db_connection *conn, db_thread *thread)
+{
+    int rc;
+    char filename[MAX_PATHNAME];
+
+    DBG((g_log,"reopen conn=%d.\n",conn->connindex));
+
+    close_prepared(conn);
+    
+    rc = sqlite3_close(conn->db);
+    if(rc != SQLITE_OK)
+    {
+        DBG((g_log,"Unable to close %d\n",rc));
+        return 0;
+    }
+
+    snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,conn->dbpath);
+    rc = sqlite3_open(filename,&(conn->db));
+    if (rc != SQLITE_OK)
+    {
+        DBG((g_log,"Unable to reopen %s %d\n",filename,rc));
+        return 0;
+    }
+        
+    conn->wal_configured = conn->needRestart = 0;
+    conn->wal_configured = SQLITE_OK == sqlite3_wal_data(conn->db,(void*)thread);
+    rc = sqlite3_exec(conn->db,"select name, sql from sqlite_master where type='table';",NULL,NULL,NULL);
+    DBG((g_log,"reopen query result %d\n",rc));
+    return 1;
 }
 
 
@@ -1785,7 +1836,15 @@ static ERL_NIF_TERM
 evaluate_command(db_command *cmd,db_thread *thread)
 {
     if (cmd->connindex >= 0 && cmd->connindex < thread->nconns)
+    {
         cmd->conn = &thread->conns[cmd->connindex];
+        if (!cmd->conn->db)
+        {
+            DBG((g_log,"Received command on closed connection\n"));
+            return atom_false;
+        }
+    }
+        
 
     thread->curConn = cmd->conn;
 
@@ -1929,6 +1988,7 @@ thread_func(void *arg)
         cmd = queue_get_item_data(item);
 
         DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
+        fflush(g_log);
 
         if (cmd->type == cmd_stop)
         {
@@ -1950,15 +2010,25 @@ thread_func(void *arg)
             queue_recycle(data->commands,item);
         }
 
-        DBG((g_log,"thread=%d command done.\n",data->index));
+        DBG((g_log,"thread=%d command done 1.\n",data->index));
 
-        while (data->index >= 0 && queue_size(data->commands) == 0 && checkpoint_continue(data) == 1)
+        while (data->index >= 0 && queue_size(data->commands) == 0)
         {
-            DBG((g_log,"Do checkpoint\n"));
+            i = checkpoint_continue(data);
+            DBG((g_log,"Do checkpoint res=%d\n",i));
+            
+            if (i == 1)
+                continue;
+            else if (i == 2)
+            {
+                reopen_db(data->curConn,data);
+                continue;
+            }
+
             break;
         }
 
-        DBG((g_log,"thread=%d checkpoint done.\n",data->index));
+        DBG((g_log,"thread=%d command done 2.\n",data->index));
     }
     queue_destroy(data->commands);
 
@@ -1968,7 +2038,7 @@ thread_func(void *arg)
     {
         if (data->conns[i].db != NULL)
         {
-            clcmd.conn = &data->conns[i];
+            data->curConn = clcmd.conn = &data->conns[i];
             // data->conns[i].nPages = 0;
             do_close(&clcmd,data);
         }
@@ -2012,6 +2082,8 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifBinary bin;
     unsigned int offset = 0;
     char instr = 0;
+
+    DBG((g_log,"parse_helper\n"));
 
     if (argc != 2)
         return enif_make_badarg(env);
@@ -2061,6 +2133,8 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     void *item;
     unsigned int thread;
+
+    DBG((g_log,"db_open\n"));
  
     if(!(argc == 5 || argc == 6)) 
 	    return enif_make_badarg(env);     
@@ -2098,6 +2172,8 @@ replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     conn_resource *res;
     db_connection *conn;
     ErlNifBinary bin;
+
+    DBG((g_log,"replicate_opts\n"));
 
     if (!(argc == 2 || argc == 3))
         return enif_make_badarg(env);
@@ -2163,6 +2239,8 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     void *item;
 
+    DBG((g_log, "tcp_connect\n"));
+
     if (!(argc == 6 || argc == 7))
         return enif_make_badarg(env);
 
@@ -2203,6 +2281,8 @@ static ERL_NIF_TERM
 tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     db_command *cmd = NULL;
+
+    DBG((g_log, "tcp_reconnect\n"));
 
     void *item = command_create(-1);
     cmd = queue_get_item_data(item);
@@ -2254,6 +2334,8 @@ wal_checksum(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifBinary bin;
     int size;
 
+    DBG((g_log,"wal_checksum\n"));
+
     if (argc != 4)
         enif_make_badarg(env);
 
@@ -2284,6 +2366,8 @@ interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     // db_connection* conn;
     conn_resource *res;
     void *item;
+
+    DBG((g_log, "interrupt\n"));
 
     if(argc != 1) 
         return enif_make_badarg(env);  
@@ -2459,6 +2543,8 @@ lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int size;
     ERL_NIF_TERM termbin;
 
+    DBG((g_log, "lz4_compress\n"));
+
     if (argc != 1)
         return enif_make_badarg(env);
 
@@ -2483,6 +2569,8 @@ lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int sizeOriginal;
     int sizeReadNum;
     int rt;
+
+    DBG((g_log, "lz4_decompress\n"));
 
     if (argc != 2 && argc != 3)
         return enif_make_badarg(env);
@@ -2543,6 +2631,8 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int i;
     void *item;
 
+    DBG((g_log, "all_tunnel_call\n"));
+
     if (argc != 3)
         return enif_make_badarg(env);
 
@@ -2581,6 +2671,8 @@ store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int i;
     void *item;
 
+    DBG((g_log,"store_prepared_table\n"));
+
     if (argc != 2)
         return enif_make_badarg(env);
 
@@ -2616,6 +2708,8 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     db_command *cmd = NULL;
     ErlNifPid pid;
     void *item;
+
+    DBG((g_log,"exec_script %d\n",argc));
      
     if(argc != 7 && argc != 8) 
         return enif_make_badarg(env);  
@@ -2792,6 +2886,8 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     db_command *cmd = NULL;
     ErlNifPid pid;
     void *item;
+
+    DBG((g_log,"inject_page\n"))
      
     if(argc != 4 && argc != 5) 
         return enif_make_badarg(env);  
@@ -2830,6 +2926,7 @@ static ERL_NIF_TERM
 delete_actor(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
+    DBG((g_log,"delete_actor\n"));
 
     if(argc != 1) 
         return enif_make_badarg(env);  
@@ -2848,6 +2945,8 @@ drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     db_command *cmd = NULL;
     ErlNifPid pid;
     void *item;
+
+    DBG((g_log,"WAL REWIND\n"));
      
     if(argc != 4) 
         return enif_make_badarg(env);  
@@ -2888,6 +2987,8 @@ bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     db_command *cmd = NULL;
     ErlNifPid pid;
     void *item;
+
+    DBG((g_log,"bind_insert\n"));
 
     if(argc != 5) 
         return enif_make_badarg(env);  

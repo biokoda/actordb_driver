@@ -1,4 +1,4 @@
-/********** Begin file wal.c *********************************************/
+/********* Begin file wal.c *********************************************/
 /*
 ** 2010 February 1
 **
@@ -1051,6 +1051,7 @@ static int walIndexRecover(Wal *pWal)
 
 // Returns: 0 nothing to do
 // 			1 still have work to do
+//			2 current db needs to be restarted
 // 			-1 error
 int checkpoint_continue(db_thread *thread)
 {
@@ -1099,19 +1100,23 @@ int checkpoint_continue(db_thread *thread)
 			return 0;
 		if (conWal->walIndex == wFile->walIndex)
 		{
-			DBG((g_log,"Doing Wlock=%d dirty=%d\n",conWal->writeLock,(int)conWal->dirty));
-			// if (conWal->writeLock)
-	  //       {
-	  //       	sqlite3WalEndWriteTransaction(conWal);
-	  //           sqlite3WalEndReadTransaction(conWal);
-	  //       }
+			DBG((g_log,"Doing Wlock=%d dirty=%d, need restart=%d\n",conWal->writeLock,(int)conWal->dirty,(int)thread->conns[i].needRestart));
+
+			thread->curConn = curConn;
+
+			// if (thread->conns[i].needRestart)
+			// {
+			// 	return 2;
+			// }
+
 			// just call api function. It will call sqlite3WalCheckpoint, which will move to last
 			// wal file in linked list and checkpoint that.
 			rc = sqlite3_wal_checkpoint_v2(thread->conns[i].db,NULL,SQLITE_CHECKPOINT_FULL,NULL,NULL);
 			if (rc != SQLITE_OK)
 			{
-				DBG((g_log,"Unable to checkpoint %d\n",rc));fflush(stdout);
+				DBG((g_log,"Unable to checkpoint %d\n",rc));
 			}
+			// thread->conns[i].needRestart = 1;
 			break;
 		}
 		// db no longer open in erlang and has no frames in wal. It can be closed.
@@ -1346,12 +1351,13 @@ int read_thread_wal(db_thread *thread)
           curConn = &thread->conns[actorIndex];
           curConn->writeNumber = writeNumber;
           curConn->writeTermNumber = writeTermNumber;
-          if (curConn->db == NULL)
+          if (curConn->wal == NULL)
           {
             rc = sqlite3_open(filename,&(curConn->db));
             if (rc != SQLITE_OK)
             {
-              continue;
+              	DBG((g_log,"Unable top open db %s\n",filename));
+              	continue;
             }
             curPathLen = strlen(filename+thread->pathlen+1)+1;
             if (curPathLen >= MAX_ACTOR_NAME)
@@ -1452,7 +1458,7 @@ int read_thread_wal(db_thread *thread)
 
       for (i = 0; i < thread->nconns; i++)
       {
-      	if (!thread->conns[i].db)
+      	if (!thread->conns[i].wal)
       		continue;
 
       	curConn = &thread->conns[i];
@@ -2263,7 +2269,6 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	*activeWal = 0;
 
 	// DBG((g_log,"iterate started=%d offset=%lld\n",(int)iter->started,iter->iOffset));
-	// fflush(g_log);
 
 	// If iteration started use offset from iter struct. Otherwise read last frame offset from wal structure.
 	if (iter->started)
@@ -2375,7 +2380,6 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 		return SQLITE_DONE;
 
 	// DBG((g_log,"FOUND ON %llu, %lld\r\n",iter->walIndex, iter->iOffset));
-	// fflush(g_log);
 
 	while (((*nFilled)+SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE) <= bufSize)
 	{
@@ -2390,13 +2394,11 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
 	        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset,buffer+(*nFilled)+WAL_FRAME_HDRSIZE, buffer+(*nFilled));
 	        // DBG((g_log,"Decode finding next %llu %llu %d %d %lld\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
-	        // fflush(g_log);
 	        if(!rc || !pgno || actorIndex != conn->connindex)
 	        {
 	        	continue;
 	        }
 	        // DBG((g_log,"Done? %d %d\n",(*nFilled)+szFrame,bufSize));
-			// fflush(g_log);
 
 	        rc = SQLITE_OK;
 	        *nFilled += szFrame;
@@ -2425,7 +2427,6 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
     	iter->iOffset = WAL_HDRSIZE;
     	iter->walIndex = wal->walIndex;
 	}
-	// fflush(g_log);
 
 	*activeWal = iter->walIndex == conn->wal->walIndex;
 
@@ -3064,10 +3065,13 @@ int sqlite3WalClose(
 ){
     if (pWal)
     {
-      walIndexClose(pWal, 0);
-      sqlite3WalClose(pWal->prev,sync_flags,nBuf,zBuf);
-      sqlite3_free((void *)pWal->apWiData);
-      sqlite3_free(pWal);
+		if (!pWal->thread->curConn->needRestart)
+		{
+			walIndexClose(pWal, 0);
+			sqlite3WalClose(pWal->prev,sync_flags,nBuf,zBuf);
+			sqlite3_free((void *)pWal->apWiData);
+			sqlite3_free(pWal);
+      }
     }
     return SQLITE_OK;
 }
@@ -3325,7 +3329,7 @@ int sqlite3WalFindFrame(
         return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
       else
         *piRead = 0;
-      
+      DBG((g_log,"NO RESULT\n"));
       return SQLITE_OK;
     }
 
@@ -3343,7 +3347,10 @@ int sqlite3WalFindFrame(
         if (pWal->prev)
           return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
         else
-          return rc;
+        {
+        	DBG((g_log,"Hash get res %d\n",rc));
+        	return rc;
+        }
       }
 
       nCollide = HASHTABLE_NSLOT;
@@ -3357,6 +3364,7 @@ int sqlite3WalFindFrame(
         }
         if( (nCollide--)==0 )
         {
+        	DBG((g_log,"Find frame corrupt\n"));
           return SQLITE_CORRUPT_BKPT;
         }
       }
@@ -3366,8 +3374,8 @@ int sqlite3WalFindFrame(
     {
     	return sqlite3WalFindFrame(pWal->prev,pgno,piRead,walIndex);
     }
-    // else
-    // 	DBG((g_log,"Found result frame=%d\r\n",iRead));
+    else
+    	DBG((g_log,"Found result frame=%d\r\n",iRead));
 
     *walIndex = pWal->walIndex;
     *piRead = iRead;
@@ -3423,6 +3431,7 @@ int sqlite3WalCheckpoint(
   int rc = SQLITE_OK;
   int isChanged = 0;              /* True if a new wal-index header is loaded */
   int eMode2 = eMode;             /* Mode to pass to walCheckpoint() */
+  int rch;
   wal_file *wFile = pWalTop->thread->walFile;
 
   DBG((g_log,"Wal checkpoint wfile=%lld, topwal=%lld\n",wFile->walIndex,pWalTop->walIndex));
@@ -3438,10 +3447,11 @@ int sqlite3WalCheckpoint(
 
   DBG((g_log,"Wal checkpoint readlock=%d, mxframe=%u, dirty=%d, windex=%lld\n",
   		pWal->readLock,pWal->hdr.mxFrame,(int)pWal->dirty,pWal->walIndex));
-  int rch;
+
   if (pWal->readLock < 0)
   	sqlite3WalBeginReadTransaction(pWal,&rch);
   sqlite3WalBeginWriteTransaction(pWal);
+  rc = SQLITE_OK;
 
 
 //  rc = walLockExclusive(pWal, WAL_CKPT_LOCK, 1);
@@ -3495,6 +3505,7 @@ int sqlite3WalCheckpoint(
   	Wal *tmpWal = pWalTop;
   	DBG((g_log,"Checkpoint done, closing walfile=%lld\n",pWal->walIndex));
     sqlite3WalClose(pWal, sync_flags, nBuf,zBuf);
+    DBG((g_log,"Checkpoint closed\n"));
     while (tmpWal->prev != pWal)
     	tmpWal = tmpWal->prev;
     tmpWal->prev = NULL;
@@ -3506,9 +3517,11 @@ int sqlite3WalCheckpoint(
   	DBG((g_log,"Checkpoint done not closing wal file. Setting it to new=%lld, mx=%u\n",pWal->walIndex,pWal->hdr.mxFrame));
   	pWal->prevFrameOffset = 0;
   	pWal->dirty = 0;
+  	// memset(&pWal->hdr, 0, sizeof(WalIndexHdr));
   	walIndexWriteHdr(pWal);
   	pWal->hdr.aSalt[0] = 123456789;
 	pWal->hdr.aSalt[1] = 987654321;
+	pWal->hdr.szPage = SQLITE_DEFAULT_PAGE_SIZE;
   }
   else
   {
@@ -3808,4 +3821,4 @@ u64 readUInt64(u8* buf)
 
 #endif /* #ifndef SQLITE_OMIT_WAL */
 
-/************** End of wal.c *********************************************/
+/************** End of wal.c ********************************************/
