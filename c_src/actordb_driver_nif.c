@@ -1116,7 +1116,7 @@ do_wal_rewind(db_command *cmd, db_thread *thread)
 
     enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
     rc = wal_rewind(cmd->conn,evnum);
-    cmd->conn->needRestart = 1;
+    // cmd->conn->needRestart = 1;
 
     return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
 }
@@ -1181,13 +1181,13 @@ do_inject_page(db_command *cmd, db_thread *thread)
         thread->threadNum = wnum;
         if (cmd->conn->wal)
             cmd->conn->wal->init = 0;
-        cmd->conn->needRestart = 1;
+        // cmd->conn->needRestart = 1;
 
-        // if (commit)
-        // {
-        //     sqlite3WalEndWriteTransaction(cmd->conn->wal);
-        //     sqlite3WalEndReadTransaction(cmd->conn->wal);
-        // }
+        if (commit)
+        {
+            sqlite3WalEndWriteTransaction(cmd->conn->wal);
+            sqlite3WalEndReadTransaction(cmd->conn->wal);
+        }
         
         if (cmd->arg1)
             break;
@@ -1226,22 +1226,22 @@ do_exec_script(db_command *cmd, db_thread *thread)
     listTop = cmd->arg4;
     thread->threadNum++;
 
-    if (cmd->conn->needRestart)
-    {
-        if (!reopen_db(cmd->conn,thread))
-            return atom_false;
-    }
+    // if (cmd->conn->needRestart)
+    // {
+    //     if (!reopen_db(cmd->conn,thread))
+    //         return atom_false;
+    // }
 
     if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
 
-    // if (cmd->conn->wal && cmd->conn->wal->writeLock)
-    // {
-    //     DBG((g_log,"Ending write transaction\n"));
-    //     sqlite3WalEndWriteTransaction(cmd->conn->wal);
-    //     sqlite3WalEndReadTransaction(cmd->conn->wal);
-    // }
+    if (cmd->conn->wal && cmd->conn->wal->writeLock)
+    {
+        DBG((g_log,"Ending write transaction\n"));
+        sqlite3WalEndWriteTransaction(cmd->conn->wal);
+        sqlite3WalEndReadTransaction(cmd->conn->wal);
+    }
     // else if (cmd->conn->wal)
     // {
     //     Wal *tmpWal = cmd->conn->wal->prev;
