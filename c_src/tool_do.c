@@ -241,7 +241,6 @@ void cleanup(db_thread *thread)
         wFile = thread->walFile;
         thread->walFile = thread->walFile->prev;
         sqlite3OsCloseFree(wFile->pWalFd);
-        free(wFile->filename);
         free(wFile);
     }
 }
