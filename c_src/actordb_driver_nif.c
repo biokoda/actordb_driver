@@ -1986,6 +1986,7 @@ thread_func(void *arg)
     {
         void *item = queue_pop(data->commands);
         cmd = queue_get_item_data(item);
+        chkCounter++;
 
         DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
 
@@ -2011,7 +2012,7 @@ thread_func(void *arg)
 
         DBG((g_log,"thread=%d command done 1.\n",data->index));
 
-        while (data->index >= 0 && queue_size(data->commands) == 0)
+        while (data->index >= 0 && (queue_size(data->commands) == 0 || chkCounter > 3))
         {
             chkCounter = 0;
             i = checkpoint_continue(data);
