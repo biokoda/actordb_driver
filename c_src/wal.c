@@ -1507,7 +1507,8 @@ wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs)
       return NULL;
     }
 	
-    walFile = sqlite3MallocZero(sizeof(wal_file));
+    walFile = malloc(sizeof(wal_file));
+    memset(walFile,0,sizeof(wal_file));
     strncpy(walFile->filename,filename,MAX_PATHNAME);
     walFile->pWalFd = pWalFd;
     walFile->szPage = SQLITE_DEFAULT_PAGE_SIZE;
