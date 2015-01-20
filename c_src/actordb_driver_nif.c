@@ -1969,7 +1969,7 @@ make_answer(db_command *cmd, ERL_NIF_TERM answer)
 static void *
 thread_func(void *arg)
 {
-    int i,j;
+    int i,j,chkCounter = 0;
     db_thread* data = (db_thread*)arg;
     db_command *cmd;
     db_command clcmd;
@@ -2013,6 +2013,7 @@ thread_func(void *arg)
 
         while (data->index >= 0 && queue_size(data->commands) == 0)
         {
+            chkCounter = 0;
             i = checkpoint_continue(data);
             DBG((g_log,"Do checkpoint res=%d\n",i));
             
@@ -2063,7 +2064,6 @@ thread_func(void *arg)
         wFile = data->walFile;
         data->walFile = data->walFile->prev;
         sqlite3OsCloseFree(wFile->pWalFd);
-        free(wFile->filename);
         free(wFile);
     }
     

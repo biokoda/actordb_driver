@@ -1143,7 +1143,6 @@ int checkpoint_continue(db_thread *thread)
 	{
 		sqlite3OsCloseFree(wFile->pWalFd);
 		sqlite3OsDelete(thread->vfs,wFile->filename,0);
-		free(wFile->filename);
 		free(wFile);
 		nextToLast->prev = NULL;
 		// If there were more than 2 wal files, we still have work to do.
@@ -1209,9 +1208,7 @@ int read_thread_wal(db_thread *thread)
     }
     // DBG((g_log,"OPENED: %s/%s - %llu\r\n",thread->path,ent->d_name, walInfo->walIndex));
 
-    walInfo->filename = malloc(strlen(filename)+1);
-    memset(walInfo->filename,0,sizeof(strlen(filename)+1));
-    strcpy(walInfo->filename,filename);
+    strncpy(walInfo->filename,filename,MAX_PATHNAME);
     walInfo->pWalFd = pWalFd;
     walInfo->szPage = SQLITE_DEFAULT_PAGE_SIZE;
     walInfo->bigEndCksum = SQLITE_BIGENDIAN;
@@ -1511,9 +1508,7 @@ wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs)
     }
 	
     walFile = sqlite3MallocZero(sizeof(wal_file));
-    walFile->filename = malloc(strlen(filename)+1);
-    memset(walFile->filename,0,sizeof(strlen(filename)+1));
-    strcpy(walFile->filename,filename);
+    strncpy(walFile->filename,filename,MAX_PATHNAME);
     walFile->pWalFd = pWalFd;
     walFile->szPage = SQLITE_DEFAULT_PAGE_SIZE;
     walFile->bigEndCksum = SQLITE_BIGENDIAN;

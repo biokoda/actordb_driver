@@ -136,7 +136,7 @@ struct wal_file
   u32 lastCommit; // frame number of last commit. Used in sqlite3WalUndo
   u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
                      // once we reach the end of actor table, we are done.
-  char* filename;
+  char filename[MAX_PATHNAME];
 	wal_file *prev;
 };
 
