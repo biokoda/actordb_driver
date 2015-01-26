@@ -67,10 +67,12 @@ parse_helper(Bin,Offset) ->
 delete_actor({actordb_driver, _Ref, Connection}) ->
     actordb_driver_nif:delete_actor(Connection).
 
-replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix) ->
-    actordb_driver_nif:replicate_opts(Connection,PacketPrefix,1).
+replicate_opts(Con,PacketPrefix) ->
+    replicate_opts(Con,PacketPrefix,1).
 replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix,Type) ->
-    actordb_driver_nif:replicate_opts(Connection,PacketPrefix,Type).
+    Ref = make_ref(),
+    actordb_driver_nif:replicate_opts(Connection,Ref,self(),PacketPrefix,Type),
+    receive_answer(Ref).
 
 % replicate_status({actordb_driver, _Ref, Connection}) ->
 %     actordb_driver_nif:replicate_status(Connection).
