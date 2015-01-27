@@ -1366,8 +1366,7 @@ int read_thread_wal(db_thread *thread)
             memset(curConn->dbpath,0,MAX_ACTOR_NAME);
             strcpy(curConn->dbpath,filename+thread->pathlen+1);
 
-            curConn->wal = malloc(sizeof(struct Wal));
-            memset(curConn->wal,0,sizeof(struct Wal));
+            curConn->wal = sqlite3MallocZero(sizeof(struct Wal));
             curConn->connindex = actorIndex;
             curConn->wal->thread = thread;
 		    curConn->wal->pWalFd = curWal->pWalFd;
@@ -1390,8 +1389,7 @@ int read_thread_wal(db_thread *thread)
           //  at head of linked list.
           else if (curConn->wal->walIndex != curWal->walIndex)
           {
-          	Wal *tmpWal = malloc(sizeof(struct Wal));
-            memset(tmpWal,0,sizeof(struct Wal));
+          	Wal *tmpWal = sqlite3MallocZero(sizeof(struct Wal));
             tmpWal->thread = thread;
 		    tmpWal->pWalFd = curWal->pWalFd;
 		    tmpWal->exclusiveMode = WAL_HEAPMEMORY_MODE;
@@ -3007,8 +3005,7 @@ int sqlite3WalOpen(
 		
 	if (!pRet)
 	{
-		pRet = malloc(sizeof(Wal));
-		memset(pRet,0,sizeof(Wal));
+		pRet = sqlite3MallocZero(sizeof(Wal));
 		thread->curConn->wal = pRet;
 		pRet->walIndex = thread->walFile->walIndex;
 	}
