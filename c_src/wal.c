@@ -1100,14 +1100,18 @@ int checkpoint_continue(db_thread *thread)
 			return 0;
 		if (conWal->walIndex == wFile->walIndex)
 		{
-			DBG((g_log,"Doing Wlock=%d dirty=%d, need restart=%d\n",conWal->writeLock,(int)conWal->dirty,(int)thread->conns[i].needRestart));
+			DBG((g_log,"Doing Wlock=%d dirty=%d, need restart=%d, %s\n",
+				conWal->writeLock,(int)conWal->dirty,(int)thread->conns[i].needRestart,thread->conns[i].dbpath));
 
 			thread->curConn = curConn;
+			curConn->wal->init = 0;
 
 			// if (thread->conns[i].needRestart)
 			// {
 			// 	return 2;
 			// }
+			
+			rc = sqlite3_exec(thread->conns[i].db,"select name, sql from sqlite_master where type='table';",NULL,NULL,NULL);
 
 			// just call api function. It will call sqlite3WalCheckpoint, which will move to last
 			// wal file in linked list and checkpoint that.
