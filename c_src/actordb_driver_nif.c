@@ -1109,6 +1109,34 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
 }
 
 static ERL_NIF_TERM
+do_replicate_opts(db_command *cmd, db_thread *thread)
+{
+    ErlNifBinary bin;
+
+    if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
+        return enif_make_badarg(cmd->env);
+    
+    if (!cmd->conn->packetPrefix.size)
+        enif_release_binary(&cmd->conn->packetPrefix);
+
+    if (bin.size > 0)
+    {
+        if (!enif_get_int(cmd->env,cmd->arg1,&(cmd->conn->doReplicate)))
+            return enif_make_badarg(cmd->env);
+        enif_alloc_binary(bin.size,&(cmd->conn->packetPrefix));
+        memcpy(cmd->conn->packetPrefix.data,bin.data,bin.size);
+    }
+    else
+    {
+        cmd->conn->packetPrefix.data = NULL;
+        cmd->conn->packetPrefix.size = 0;
+        cmd->conn->doReplicate = 0;
+    }
+    return atom_ok;
+}
+
+
+static ERL_NIF_TERM
 do_wal_rewind(db_command *cmd, db_thread *thread)
 {
     int rc;
@@ -1700,7 +1728,6 @@ do_close(db_command *cmd,db_thread *thread)
     {
         if (conn->packetPrefix.size)
             enif_release_binary(&conn->packetPrefix);
-
         close_prepared(conn);
     }
     if (cmd->arg && enif_is_ref(cmd->env,cmd->arg))
@@ -1877,6 +1904,8 @@ evaluate_command(db_command *cmd,db_thread *thread)
         return do_backup_finish(cmd,thread);
     case cmd_backup_step:
         return do_backup_step(cmd,thread);
+    case cmd_replicate_opts:
+        return do_replicate_opts(cmd,thread);
     case cmd_inject_page:
         return do_inject_page(cmd,thread);
     case cmd_wal_rewind:
@@ -2169,51 +2198,42 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
+    db_command *cmd = NULL;
     conn_resource *res;
-    db_connection *conn;
-    ErlNifBinary bin;
+    ErlNifPid pid;
+    void *item;
 
     DBG((g_log,"replicate_opts\n"));
 
-    if (!(argc == 2 || argc == 3))
+    if (!(argc == 5))
         return enif_make_badarg(env);
 
     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
-    {
-        return enif_make_badarg(env);
-    }
-    conn = &g_threads[res->thread].conns[res->connindex];
-
-    if (!enif_inspect_iolist_as_binary(env, argv[1], &bin))
-        return enif_make_badarg(env);
+        return enif_make_badarg(env);    
+    if(!enif_is_ref(env, argv[1])) 
+        return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[2], &pid)) 
+        return make_error_tuple(env, "invalid_pid"); 
     
-    if (!conn->packetPrefix.size)
-        enif_release_binary(&conn->packetPrefix);
-
-    if (bin.size > 0)
-    {
-        if (argc == 3)
-        {
-            if (!enif_get_int(env,argv[2],&(conn->doReplicate)))
-                return enif_make_badarg(env);
-        }
-        else
-            conn->doReplicate = 1;
-        enif_alloc_binary(bin.size,&(conn->packetPrefix));
-        memcpy(conn->packetPrefix.data,bin.data,bin.size);
-    }
-    else
-    {
-        conn->packetPrefix.data = NULL;
-        conn->packetPrefix.size = 0;
-        conn->doReplicate = 0;
-    }
+    item = command_create(res->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+        return make_error_tuple(env, "command_create_failed");
+     
+    cmd->type = cmd_replicate_opts;
+    cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    cmd->pid = pid;
+    cmd->arg = enif_make_copy(cmd->env, argv[3]);
+    cmd->arg1 = enif_make_copy(cmd->env, argv[4]);
     
+    cmd->connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
-    return atom_ok;
+
+    return push_command(res->thread, item);
 }
 
+    
 // static ERL_NIF_TERM
 // replicate_status(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 // {
@@ -2713,9 +2733,9 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
      
     if(argc != 7 && argc != 8) 
         return enif_make_badarg(env);  
+    
     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
-        return enif_make_badarg(env);
-        
+        return enif_make_badarg(env);    
     if(!enif_is_ref(env, argv[1])) 
         return make_error_tuple(env, "invalid_ref");
     if(!enif_get_local_pid(env, argv[2], &pid)) 
@@ -3244,8 +3264,7 @@ static ErlNifFunc nif_funcs[] = {
     {"open", 5, db_open},
     {"open", 6, db_open},
     {"close", 3, db_close},
-    {"replicate_opts",2,replicate_opts},
-    {"replicate_opts",3,replicate_opts},
+    {"replicate_opts",5,replicate_opts},
     // {"replicate_status",1,replicate_status},
     {"exec_script", 7, exec_script},
     {"exec_script", 8, exec_script},

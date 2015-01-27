@@ -24,8 +24,7 @@
          tcp_connect/6,
          tcp_connect/7,
          tcp_reconnect/0,
-         replicate_opts/2,
-         replicate_opts/3,
+         replicate_opts/5,
          wal_header/1,
          wal_checksum/4,
          page_size/0,
@@ -86,10 +85,7 @@ wal_header(_) ->
 noop(_,_,_) ->
     exit(nif_library_not_loaded).
 
-replicate_opts(_,_) ->
-    exit(nif_library_not_loaded).
-
-replicate_opts(_,_,_) ->
+replicate_opts(_,_,_,_,_) ->
     exit(nif_library_not_loaded).
 
 tcp_connect(_,_,_,_,_,_) ->
