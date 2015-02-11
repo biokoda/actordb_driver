@@ -3137,7 +3137,7 @@ int sqlite3WalFrames(
 	    newWal->walIndex = thrWalFile->walIndex;
 	    newWal->init = 0;
 	    
-	    (*pWal)->thread->curConn->wal = newWal;
+	    newWal->thread->curConn->wal = newWal;
 	    *pWal = newWal;
 
 	    sqlite3WalBeginReadTransaction(*pWal,&changed);

@@ -2112,8 +2112,6 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     unsigned int offset = 0;
     char instr = 0;
 
-    DBG((g_log,"parse_helper\n"));
-
     if (argc != 2)
         return enif_make_badarg(env);
 
