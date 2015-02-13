@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+ #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1114,15 +1114,19 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
     ErlNifBinary bin;
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
-        return enif_make_badarg(cmd->env);
-    
+    {
+        if (!enif_inspect_binary(cmd->env,cmd->arg,&bin))
+            return make_error_tuple(cmd->env, "unrecognized iolist");
+    }
+        
+    DBG(("do_replicate_opts %d\n",cmd->conn->packetPrefix.size));
     if (!cmd->conn->packetPrefix.size)
         enif_release_binary(&cmd->conn->packetPrefix);
 
     if (bin.size > 0)
     {
         if (!enif_get_int(cmd->env,cmd->arg1,&(cmd->conn->doReplicate)))
-            return enif_make_badarg(cmd->env);
+            return make_error_tuple(cmd->env, "repltype_not_int");
         enif_alloc_binary(bin.size,&(cmd->conn->packetPrefix));
         memcpy(cmd->conn->packetPrefix.data,bin.data,bin.size);
     }
@@ -1201,7 +1205,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
             sqlite3WalBeginReadTransaction(cmd->conn->wal, &rc);
             sqlite3WalBeginWriteTransaction(cmd->conn->wal);
         }
-        DBG((g_log,"Inject into wal=%lld\n",cmd->conn->wal->walIndex));
+        DBG((g_log,"Inject into wal=%lld, commit=%u\n",cmd->conn->wal->walIndex,commit));
              
         page.pPager = pPager;
         rc = pagerWalFrames(pPager,&page,commit,commit);
@@ -1216,6 +1220,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
             sqlite3WalEndWriteTransaction(cmd->conn->wal);
             sqlite3WalEndReadTransaction(cmd->conn->wal);
         }
+        DBG((g_log,"Inject done wal=%lld, dirty=%d\n",cmd->conn->wal->walIndex,(int)cmd->conn->wal->dirty));
         
         if (cmd->arg1)
             break;
@@ -1253,6 +1258,8 @@ do_exec_script(db_command *cmd, db_thread *thread)
     int rowLen = 0;
     listTop = cmd->arg4;
     thread->threadNum++;
+    if (!thread->threadNum)
+        thread->threadNum++;
 
     // if (cmd->conn->needRestart)
     // {
@@ -2207,7 +2214,7 @@ replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
 
     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
-        return enif_make_badarg(env);    
+        return make_error_tuple(env, "invalid_connection");
     if(!enif_is_ref(env, argv[1])) 
         return make_error_tuple(env, "invalid_ref");
     if(!enif_get_local_pid(env, argv[2], &pid)) 

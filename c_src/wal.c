@@ -1126,7 +1126,7 @@ int checkpoint_continue(db_thread *thread)
 		// db no longer open in erlang and has no frames in wal. It can be closed.
 		else if (curConn->nErlOpen == 0 && curConn->wal->prev == NULL && curConn->wal->hdr.mxFrame == 0)
 		{
-			// DBG((g_log,"Closing actor %d\n",i));
+			DBG((g_log,"Closing actor %d\n",i));
 	        rc = sqlite3_close(curConn->db);
 	        if(rc != SQLITE_OK)
 	        {
@@ -3098,6 +3098,8 @@ int sqlite3WalFrames(
   ** nTruncate==0 then this frame set does not complete the transaction. */
   assert( (isCommit!=0)==(nTruncate!=0) );
 
+  DBG((g_log,"sqlite3WalFrames\r\n"));
+
   // Only move on to new wal files when this is beginning of a new write
   if (!(*pWal)->dirty)
   {
@@ -3404,7 +3406,7 @@ int sqlite3WalReadFrame(
   testcase( sz<=32768 );
   testcase( sz>=65536 );
 
-  // DBG((g_log,"Wal read frame walIndex=%lld, curWalIndex=%lld\n",walIndex,pWal->walIndex));
+  DBG((g_log,"Wal read frame walIndex=%lld, curWalIndex=%lld\n",walIndex,pWal->walIndex));
 
   // Wal always points to first wal, but reads are always from last to first.
   // So if walIndex different, it must be one of the next ones.
