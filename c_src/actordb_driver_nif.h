@@ -208,6 +208,7 @@ struct db_connection
     char checkpointLock;
 
     u32 lastWriteThreadNum;
+    u32 writeNumToIgnore;
     
     u64 writeNumber;
     u64 writeTermNumber;

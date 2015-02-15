@@ -1200,26 +1200,45 @@ do_inject_page(db_command *cmd, db_thread *thread)
         cmd->conn->writeTermNumber = readUInt64(&head[16]);
         thread->threadNum = sqlite3Get4byte(&head[28]);
 
-        if (!cmd->conn->wal->writeLock)
+        if (thread->threadNum != cmd->conn->writeNumToIgnore)
         {
-            sqlite3WalBeginReadTransaction(cmd->conn->wal, &rc);
-            sqlite3WalBeginWriteTransaction(cmd->conn->wal);
-        }
-        DBG((g_log,"Inject into wal=%lld, commit=%u\n",cmd->conn->wal->walIndex,commit));
-             
-        page.pPager = pPager;
-        rc = pagerWalFrames(pPager,&page,commit,commit);
-        // rc = sqlite3WalFrames(&pPager->pWal,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
-        thread->threadNum = wnum;
-        if (cmd->conn->wal)
-            cmd->conn->wal->init = 0;
-        // cmd->conn->needRestart = 1;
+            if (cmd->conn->writeNumToIgnore)
+                cmd->conn->writeNumToIgnore = 0;
 
-        if (commit)
-        {
-            sqlite3WalEndWriteTransaction(cmd->conn->wal);
-            sqlite3WalEndReadTransaction(cmd->conn->wal);
+            if (!cmd->conn->wal->writeLock)
+            {
+                sqlite3WalBeginReadTransaction(cmd->conn->wal, &rc);
+                sqlite3WalBeginWriteTransaction(cmd->conn->wal);
+            }
+            if (thread->threadNum != cmd->conn->lastWriteThreadNum && cmd->conn->wal->dirty)
+            {
+                sqlite3WalUndo(cmd->conn->wal, NULL, NULL);
+                cmd->conn->wal->hdr.aSalt[0] = 123456789;
+                cmd->conn->wal->hdr.aSalt[1] = 987654321;
+            }
+            DBG((g_log,"Inject into wal=%lld, commit=%u\n",cmd->conn->wal->walIndex,commit));
+                 
+            page.pPager = pPager;
+            rc = pagerWalFrames(pPager,&page,commit,commit);
+            // rc = sqlite3WalFrames(&pPager->pWal,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
+            if (cmd->conn->wal)
+                cmd->conn->wal->init = 0;
+
+            if (commit)
+            {
+                sqlite3WalEndWriteTransaction(cmd->conn->wal);
+                sqlite3WalEndReadTransaction(cmd->conn->wal);
+            }
         }
+        else
+        {
+            rc = SQLITE_ERROR;
+        }
+
+        thread->threadNum = wnum;
+        
+        // cmd->conn->needRestart = 1;
+        
         DBG((g_log,"Inject done wal=%lld, dirty=%d\n",cmd->conn->wal->walIndex,(int)cmd->conn->wal->dirty));
         
         if (cmd->arg1)
@@ -1274,6 +1293,13 @@ do_exec_script(db_command *cmd, db_thread *thread)
     if (cmd->conn->wal && cmd->conn->wal->writeLock)
     {
         DBG((g_log,"Ending write transaction\n"));
+        if (cmd->conn->wal->dirty)
+        {
+            cmd->conn->writeNumToIgnore = cmd->conn->lastWriteThreadNum;
+            sqlite3WalUndo(cmd->conn->wal, NULL, NULL);
+            cmd->conn->wal->hdr.aSalt[0] = 123456789;
+            cmd->conn->wal->hdr.aSalt[1] = 987654321;
+        }
         sqlite3WalEndWriteTransaction(cmd->conn->wal);
         sqlite3WalEndReadTransaction(cmd->conn->wal);
     }
@@ -1296,6 +1322,8 @@ do_exec_script(db_command *cmd, db_thread *thread)
 
     if (cmd->arg1)
     {
+        if (cmd->conn->writeNumToIgnore)
+            cmd->conn->writeNumToIgnore = 0;
         enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->writeTermNumber));
         enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->writeNumber));
         enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
