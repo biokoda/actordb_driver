@@ -1119,7 +1119,7 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
             return make_error_tuple(cmd->env, "unrecognized iolist");
     }
         
-    DBG(("do_replicate_opts %d\n",cmd->conn->packetPrefix.size));
+    DBG((g_log,"do_replicate_opts %d\n",cmd->conn->packetPrefix.size));
     if (!cmd->conn->packetPrefix.size)
         enif_release_binary(&cmd->conn->packetPrefix);
 
