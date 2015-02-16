@@ -2332,9 +2332,6 @@ static ERL_NIF_TERM
 tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     db_command *cmd = NULL;
-
-    DBG((g_log, "tcp_reconnect\n"));
-
     void *item = command_create(-1);
     cmd = queue_get_item_data(item);
     if(!cmd)
@@ -3151,6 +3148,11 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     const ERL_NIF_TERM *param1;
     char nodename[128];
     ERL_NIF_TERM head, tail;
+#ifdef _WIN32
+    WSADATA wsd;
+    if (WSAStartup(MAKEWORD(1, 1), &wsd) != 0)
+        return -1;
+#endif
 
     memset(nodename,0,128);
     enif_get_list_cell(env,info,&head,&info);
@@ -3159,12 +3161,6 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 #ifdef _TESTDBG_
     enif_get_string(env,head,nodename,128,ERL_NIF_LATIN1);
     g_log = fopen(nodename, "w");
-#endif
-
-#ifdef _WIN32
-    WSADATA wsd;
-    if (WSAStartup(MAKEWORD(1, 1), &wsd) != 0)
-        return -1;
 #endif
 
     sqlite3_initialize();

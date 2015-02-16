@@ -11,6 +11,10 @@
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
 
+#ifdef  _WIN32
+#define snprintf _snprintf
+#endif
+
 // in pages. So wal file in bytes is g_wal_size_limit*pagesize
 int g_wal_size_limit = 1024*3;
 

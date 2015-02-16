@@ -2167,8 +2167,8 @@ int wal_rewind(db_connection *conn, u64 evnum)
 	        	conn->lastWriteThreadNum = threadWriteNum;
 		        if (nTruncate)
 		        {
-		        	DBG((g_log,"rewind ok frame %lld, iframe=%d, walindex=%lld\n",curEvnum, iFrame,wal->walIndex));
 		        	WalCkptInfo *pInfo;
+		        	DBG((g_log,"rewind ok frame %lld, iframe=%d, walindex=%lld\n",curEvnum, iFrame,wal->walIndex));
 		        	wal->dirty = 0;
 		        	wal->szPage = SQLITE_DEFAULT_PAGE_SIZE;
 					wal->hdr.mxFrame = iFrame;
@@ -3110,9 +3110,10 @@ int sqlite3WalFrames(
 	  if (thrWalFile->mxFrame > g_wal_size_limit)
 	  {
 	  	char filename[MAX_PATHNAME];
+	  	wal_file *nw;
 	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,thrWalFile->walIndex+1);
 	  	DBG((g_log,"Creating new wal!\r\n"));
-	  	wal_file *nw = new_wal_file(filename,(*pWal)->thread->vfs);
+	  	nw = new_wal_file(filename,(*pWal)->thread->vfs);
 	  	nw->walIndex = thrWalFile->walIndex+1;
 	  	nw->prev = thrWalFile;
 	  	(*pWal)->thread->walFile = nw;
