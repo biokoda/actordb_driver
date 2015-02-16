@@ -51,7 +51,7 @@ queue_create(void (*freecb)(void*))
 {
     queue *ret;
     // int i = 0;
-    qitem *item;
+    // qitem *item;
 
     ret = (queue *) enif_alloc(sizeof(struct queue_t));
     if(ret == NULL) goto error;
@@ -66,7 +66,7 @@ queue_create(void (*freecb)(void*))
 
     ret->reuseq = (qitem *) enif_alloc(sizeof(struct qitem_t));
     ret->reuseq->data = ret->reuseq->next = NULL;
-    item = ret->reuseq;
+    // item = ret->reuseq;
     // for (i = 1; i < 10; i++)
     // {
     //     item->next = (qitem *) enif_alloc(sizeof(struct qitem_t));
