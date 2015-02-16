@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
- #define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1120,7 +1120,7 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
     }
         
     DBG((g_log,"do_replicate_opts %d\n",cmd->conn->packetPrefix.size));
-    if (!cmd->conn->packetPrefix.size)
+    if (cmd->conn->packetPrefix.size)
         enif_release_binary(&cmd->conn->packetPrefix);
 
     if (bin.size > 0)
@@ -1292,13 +1292,11 @@ do_exec_script(db_command *cmd, db_thread *thread)
 
     if (cmd->conn->wal && cmd->conn->wal->writeLock)
     {
-        DBG((g_log,"Ending write transaction\n"));
+        DBG((g_log,"Ending write transaction %d\n",(int)cmd->conn->wal->dirty));
         if (cmd->conn->wal->dirty)
         {
             cmd->conn->writeNumToIgnore = cmd->conn->lastWriteThreadNum;
             sqlite3WalUndo(cmd->conn->wal, NULL, NULL);
-            cmd->conn->wal->hdr.aSalt[0] = 123456789;
-            cmd->conn->wal->hdr.aSalt[1] = 987654321;
         }
         sqlite3WalEndWriteTransaction(cmd->conn->wal);
         sqlite3WalEndReadTransaction(cmd->conn->wal);

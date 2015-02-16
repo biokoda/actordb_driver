@@ -1061,6 +1061,7 @@ int checkpoint_continue(db_thread *thread)
 	Wal *conWal;
 	db_connection *curConn;
 	int *pActorPos;
+	int isdirty = 0;
 
 	if (thread->walFile == NULL)
 		return 0;
@@ -1089,14 +1090,16 @@ int checkpoint_continue(db_thread *thread)
 		conWal = curConn->wal;
 		while (conWal != NULL && conWal->walIndex > wFile->walIndex)
 		{
+			isdirty += conWal->dirty;
 			conWal = conWal->prev;
-		}	
+		}
 
-		DBG((g_log,"Checkpoint wal=%llu, lock=%d, conn=%d.\r\n",wFile->walIndex,thread->conns[i].checkpointLock,i));
+		DBG((g_log,"Checkpoint wal=%llu, lock=%d, conn=%d, dirty=%d.\r\n",wFile->walIndex,thread->conns[i].checkpointLock,i, isdirty));
 
 		if (conWal == NULL)
 			continue;
-		if (thread->conns[i].checkpointLock)
+		isdirty += conWal->dirty;
+		if (thread->conns[i].checkpointLock || isdirty > 0)
 			return 0;
 		if (conWal->walIndex == wFile->walIndex)
 		{
