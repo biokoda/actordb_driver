@@ -1,9 +1,11 @@
 #ifndef ACTORDB_DRIVER_NIF_H
-#include <dirent.h>
+
 
 #ifdef  _WIN32
 #include "dirent.h"
 #define snprintf _snprintf
+#else
+#include <dirent.h>
 #endif
 
 #define MAX_ATOM_LENGTH 255
