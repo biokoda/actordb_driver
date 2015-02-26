@@ -1763,7 +1763,7 @@ do_close(db_command *cmd,db_thread *thread)
             enif_release_binary(&conn->packetPrefix);
         close_prepared(conn);
     }
-    if (cmd->arg && enif_is_ref(cmd->env,cmd->arg))
+    if (cmd->arg && cmd->env && enif_is_ref(cmd->env,cmd->arg))
     {
         char filename[MAX_PATHNAME];
 
@@ -1794,7 +1794,10 @@ do_close(db_command *cmd,db_thread *thread)
         if(rc != SQLITE_OK)
         {
             DBG((g_log,"Error closing %d\n",rc));
-            ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
+            if (cmd->env)
+                ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
+            else
+                ret = make_false;
         }
         free(conn->dbpath);
         memset(conn,0,sizeof(db_connection));
@@ -1815,7 +1818,10 @@ do_close(db_command *cmd,db_thread *thread)
         if(rc != SQLITE_OK)
         {
             DBG((g_log,"Error closing %d\n",rc));
-            return make_error_tuple(cmd->env,"sqlite3_close in do_close");
+            if (cmd->env)
+                return make_error_tuple(cmd->env,"sqlite3_close in do_close");
+            else
+                return atom_false;
         }
         free(conn->dbpath);
         memset(conn,0,sizeof(db_connection));
