@@ -1797,7 +1797,7 @@ do_close(db_command *cmd,db_thread *thread)
             if (cmd->env)
                 ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
             else
-                ret = make_false;
+                ret = atom_false;
         }
         free(conn->dbpath);
         memset(conn,0,sizeof(db_connection));
