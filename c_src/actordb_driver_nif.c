@@ -139,10 +139,10 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     {
         buffUsed = 0;
     }
-    completeSize = buffUsed+2+headersize+1+conn->packetPrefix.size+2+conn->packetVarPrefix.size+2;
+    completeSize = buffUsed+2+headersize+1+conn->packetPrefixSize+2+conn->packetVarPrefix.size+2;
     write16bit(lenPage,buffUsed);
     write32bit(packetLen,completeSize);
-    write16bit(lenPrefix,conn->packetPrefix.size);
+    write16bit(lenPrefix,conn->packetPrefixSize);
     write16bit(lenVarPrefix,conn->packetVarPrefix.size);
 
 #ifndef _WIN32
@@ -152,8 +152,8 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     // Prefix size and prefix data
     iov[1].iov_base = lenPrefix;
     iov[1].iov_len = 2;
-    iov[2].iov_base = conn->packetPrefix.data;
-    iov[2].iov_len = conn->packetPrefix.size;
+    iov[2].iov_base = conn->packetPrefix;
+    iov[2].iov_len = conn->packetPrefixSize;
     // Variable prefix
     iov[3].iov_base = lenVarPrefix;
     iov[3].iov_len = 2;
@@ -176,8 +176,8 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     // Prefix size and prefix data
     iov[1].buf = lenPrefix;
     iov[1].len = 2;
-    iov[2].buf = conn->packetPrefix.data;
-    iov[2].len = conn->packetPrefix.size;
+    iov[2].buf = conn->packetPrefix;
+    iov[2].len = conn->packetPrefixSize;
     // Variable prefix
     iov[3].buf = lenVarPrefix;
     iov[3].len = 2;
@@ -1119,21 +1119,28 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
             return make_error_tuple(cmd->env, "unrecognized iolist");
     }
         
-    DBG((g_log,"do_replicate_opts %d\n",cmd->conn->packetPrefix.size));
-    if (cmd->conn->packetPrefix.size)
-        enif_release_binary(&cmd->conn->packetPrefix);
+    DBG((g_log,"do_replicate_opts %d %d\n",cmd->conn->connindex, bin.size));
+    if (cmd->conn->packetPrefixSize < bin.size)
+    {
+        free(cmd->conn->packetPrefix);
+        cmd->conn->packetPrefixSize = 0;
+        cmd->conn->packetPrefix = NULL;
+    }
+        
 
     if (bin.size > 0)
     {
         if (!enif_get_int(cmd->env,cmd->arg1,&(cmd->conn->doReplicate)))
             return make_error_tuple(cmd->env, "repltype_not_int");
-        enif_alloc_binary(bin.size,&(cmd->conn->packetPrefix));
-        memcpy(cmd->conn->packetPrefix.data,bin.data,bin.size);
+        if (!cmd->conn->packetPrefix)
+            cmd->conn->packetPrefix = malloc(bin.size);
+        memcpy(cmd->conn->packetPrefix,bin.data,bin.size);
+        cmd->conn->packetPrefixSize = bin.size;
     }
     else
     {
-        cmd->conn->packetPrefix.data = NULL;
-        cmd->conn->packetPrefix.size = 0;
+        cmd->conn->packetPrefix = NULL;
+        cmd->conn->packetPrefixSize = 0;
         cmd->conn->doReplicate = 0;
     }
     return atom_ok;
@@ -1759,8 +1766,13 @@ do_close(db_command *cmd,db_thread *thread)
     // DB no longer open in erlang code.
     if (conn->nErlOpen <= 0)
     {
-        if (conn->packetPrefix.size)
-            enif_release_binary(&conn->packetPrefix);
+        if (conn->packetPrefix)
+        {
+            free(conn->packetPrefix);
+            conn->packetPrefix = NULL;
+            conn->packetPrefixSize = 0;
+        }
+            
         close_prepared(conn);
     }
     if (cmd->arg && cmd->env && enif_is_ref(cmd->env,cmd->arg))

@@ -228,7 +228,8 @@ struct db_connection
     int doReplicate;
     #ifndef _TESTAPP_
     // Fixed part of packet prefix
-    ErlNifBinary packetPrefix;
+    char* packetPrefix;
+    int packetPrefixSize;
     // Variable part of packet prefix
     ErlNifBinary packetVarPrefix;
     #endif
