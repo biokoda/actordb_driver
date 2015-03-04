@@ -1803,7 +1803,7 @@ do_close(db_command *cmd,db_thread *thread)
         memset(conn,0,sizeof(db_connection));
     }
     // if it no longer has any frames in wal, it can actually be closed
-    else if (conn->wal->prev == NULL && conn->wal->hdr.mxFrame == 0)
+    else if ((conn->wal->prev == NULL && conn->wal->hdr.mxFrame == 0) || !thread->isopen)
     {
         DBG((g_log,"Closing %s\n",conn->dbpath));
         pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
@@ -2044,7 +2044,7 @@ thread_func(void *arg)
     wal_file *wFile;
     
     memset(&clcmd,0,sizeof(db_command));
-    data->alive = 1;
+    data->isopen = 1;
     sqlite3HashInit(&data->walHash);
 
     if (data->index >= 0)
@@ -2100,6 +2100,7 @@ thread_func(void *arg)
         DBG((g_log,"thread=%d command done 2.\n",data->index));
     }
     queue_destroy(data->commands);
+    data->isopen = 0;
 
     DBG((g_log,"thread=%d stopping.\n",data->index));
 
@@ -2140,7 +2141,6 @@ thread_func(void *arg)
     free(data->conns);
     data->nconns = 0;
   
-    data->alive = 0;
     return NULL;
 }
 

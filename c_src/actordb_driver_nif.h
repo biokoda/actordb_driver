@@ -157,7 +157,7 @@ struct db_thread
     queue *commands;
     ErlNifTid tid;
     #endif
-    int alive;
+    int isopen;
     // initialized to random, increased for every call.
     // it is used to distinguish writes to same actor from each other and detect
     // when they should be rollbacked (if they do not end with db size number).
