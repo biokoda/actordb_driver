@@ -1453,9 +1453,12 @@ do_exec_script(db_command *cmd, db_thread *thread)
                         if (cmd->conn->prepared[rowLen] != NULL)
                             sqlite3_finalize(cmd->conn->prepared[rowLen]);
 
+                        DBG((g_log,"Prepared sql: %s\n",thread->prepSqls[i][rowLen]));
+
                         rc = sqlite3_prepare_v2(cmd->conn->db, thread->prepSqls[i][rowLen], -1, &(cmd->conn->prepared[rowLen]), NULL);
                         if(rc != SQLITE_OK)
                         {
+                            DBG((g_log,"Prepared statement failed\n"));
                             errat = "prepare";
                             break;
                         }
@@ -1541,7 +1544,12 @@ do_exec_script(db_command *cmd, db_thread *thread)
                     }
                 }
                 else
-                    readpoint += 5;
+                {
+                    if (readpoint[skip+1] == 'r' || readpoint[skip+1] == 'w')
+                        readpoint += 7;
+                    else
+                        readpoint += 5;
+                }
             }
             else
             {
@@ -1595,9 +1603,11 @@ do_exec_script(db_command *cmd, db_thread *thread)
         }
         
         if (skip == 0 && (rowcount > 0 || column_count > 0))
+        {
             results = enif_make_list_cell(cmd->env, enif_make_list2(cmd->env,enif_make_tuple2(cmd->env,atom_columns,column_names),
                                                                       enif_make_tuple2(cmd->env,atom_rows,rows)), 
                                     results);
+        }
         else if (skip == 0 && statementlen > 6)
         {
             results = enif_make_list_cell(cmd->env, enif_make_tuple3(cmd->env,atom_changes,
