@@ -22,6 +22,8 @@
 #include <netinet/in.h>
 #include <sys/uio.h>
 #include <netinet/tcp.h>
+#include <sys/types.h>
+#include <netdb.h>
 #else
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -799,7 +801,7 @@ static ERL_NIF_TERM
 do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 {
     int i;
-    struct sockaddr_in addr;
+    // struct sockaddr_in addr;
     int fd;
     ERL_NIF_TERM result = atom_ok;
     db_command *ncmd = NULL;
@@ -808,6 +810,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #else
     WSABUF iov[2];
 #endif
+    char portstr[10];
     char packetLen[4];
     int *sockets;
     char confirm[7] = {0,0,0,0,0,0,0};
@@ -815,6 +818,8 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
     socklen_t errlen = sizeof error;
     struct timeval timeout;
     fd_set fdset;
+    struct addrinfo *addrlist;
+    struct addrinfo *adrp;
 
 
     write32bit(packetLen,thread->control->prefixes[pos].size);
@@ -851,11 +856,29 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 
         DBG((g_log,"Connecting to port %s:%d\n",thread->control->addresses[pos],thread->control->ports[pos]));
 
-        memset(&addr,0,sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
-        addr.sin_port = htons(thread->control->ports[pos]);
-        rt = connect(fd, (const void *)&addr, sizeof(addr));
+        // memset(&addr,0,sizeof(addr));
+        // addr.sin_family = AF_INET;
+        // addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
+        // addr.sin_port = htons(thread->control->ports[pos]);
+        snprintf(portstr,9,"%d",thread->control->ports[pos]);
+        if (getaddrinfo(thread->control->addresses[pos], portstr, NULL, &addrlist) != 0)
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to getaddrinfo");
+            break;
+        }
+        for(adrp = addrlist; adrp != NULL; adrp = adrp->ai_next)
+        {
+            if (adrp->ai_family == AF_INET && adrp->ai_socktype == SOCK_STREAM)
+            {
+                rt = connect(fd, adrp->ai_addr, adrp->ai_addrlen);
+                break;
+            }
+        }
+        if (adrp == NULL)
+            result = make_error_tuple(cmd->env,"unable find addrinfo");
+        
+        freeaddrinfo(addrlist);
 #ifndef _WIN32
         if (errno != EINPROGRESS)
 #else
