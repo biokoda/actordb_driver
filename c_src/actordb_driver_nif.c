@@ -1082,7 +1082,7 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
     ERL_NIF_TERM tBin;
     ERL_NIF_TERM res;
     int rc;
-    u64 evnumFrom;
+    u64 evnumFrom, evtermFrom;
     iterate_resource *iter;
     int nfilled = 0;
     char dorel = 0;
@@ -1092,6 +1092,10 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
         dorel = 1;
         if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnumFrom))
             return enif_make_badarg(cmd->env);
+        if (cmd->arg1 != 0 || !enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evtermFrom))
+        {
+            evtermFrom = 0;
+        }
 
         iter = enif_alloc_resource(iterate_type, sizeof(iterate_resource));
         if(!iter)
@@ -1101,6 +1105,7 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
         iter->thread = thread->index;
         iter->connindex = cmd->conn->connindex;
         iter->evnumFrom = evnumFrom;
+        iter->evtermFrom = evtermFrom;
         // Creating a iterator requires checkpoint lock.
         // On iterator destruct checkpoint will be released.
         cmd->conn->checkpointLock++;
@@ -1114,7 +1119,14 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
 
     enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
     rc = wal_iterate_from(cmd->conn,iter,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(u8*)bin.data,&nfilled,&activeWal);
-    if (rc == SQLITE_DONE)
+    if (rc == SQLITE_ABORT)
+    {
+        // found evterm does not match evterm we are looking for
+        enif_release_binary(&bin);
+        enif_release_resource(iter);
+        return enif_make_tuple2(cmd->env,atom_ok,enif_make_int(cmd->env,iter->evtermFrom));
+    }
+    else if (rc == SQLITE_DONE)
     {
         enif_release_binary(&bin);
         enif_release_resource(iter);
@@ -2917,7 +2929,7 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     DBG((g_log,"iterate_wal\n"));
      
-    if(argc != 4) 
+    if(argc != 4 && argc != 5) 
         return enif_make_badarg(env);  
     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
         return enif_make_badarg(env);
@@ -2940,6 +2952,8 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->pid = pid;
     cmd->connindex = res->connindex;
     cmd->arg = enif_make_copy(cmd->env,argv[3]);
+    if (argc == 5)
+        cmd->arg1 = enif_make_copy(cmd->env,argv[4]);
 
     enif_consume_timeslice(env,500);
 
@@ -3367,6 +3381,7 @@ static ErlNifFunc nif_funcs[] = {
     {"store_prepared_table",2,store_prepared_table},
     {"checkpoint_lock",4,checkpoint_lock},
     {"iterate_wal",4,iterate_wal},
+    {"iterate_wal",5,iterate_wal},
     {"iterate_close",1,iterate_close},
     {"page_size",0,page_size},
     {"inject_page",4,inject_page},

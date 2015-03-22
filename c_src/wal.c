@@ -2255,7 +2255,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	i64 iOffset;
 	Wal *wal = conn->wal;
 	Wal *tmpWal = NULL;
-	u64 curEvnum = 0, curTerm = 0;
+	u64 curEvnum = 0, curTerm = 0, foundTerm = 0;
 	char found = 0;
 	i64 nSize = 0;
 	const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
@@ -2357,6 +2357,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 					// Go back but remember position.
 					found = 1;
 					prevFrameOffset = iPrevOffset;
+					foundTerm = curTerm;
 				}
 			}
 			if (!found)
@@ -2370,6 +2371,11 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 			iter->iOffset = iOffset;
 			iter->walIndex = wal->walIndex;
 			iter->started = 1;
+			if (iter->evtermFrom != 0 && iter->evtermFrom != foundTerm)
+			{
+				iter->evtermFrom = foundTerm;
+				return SQLITE_ABORT;
+			}
 		}
 	}
 	

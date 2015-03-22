@@ -29,6 +29,7 @@
          wal_checksum/4,
          page_size/0,
          iterate_wal/4,
+         iterate_wal/5,
          iterate_close/1,
          % replicate_status/1,
          bind_insert/5,
@@ -50,6 +51,8 @@ page_size() ->
     exit(nif_library_not_loaded).
 
 iterate_wal(_,_,_,_) ->
+    exit(nif_library_not_loaded).
+iterate_wal(_,_,_,_,_) ->
     exit(nif_library_not_loaded).
 
 iterate_close(_) ->

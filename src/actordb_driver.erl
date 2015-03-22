@@ -8,7 +8,7 @@
          exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
          store_prepared_table/2,
          close/1,inject_page/2,inject_page/3,
-         parse_helper/1,parse_helper/2, iterate_wal/2,page_size/0, %wal_pages/1,
+         parse_helper/1,parse_helper/2, iterate_wal/2,iterate_wal/3,page_size/0, %wal_pages/1,
          % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
          wal_rewind/2,delete_actor/1,iterate_close/1,
@@ -119,9 +119,11 @@ iterate_wal({actordb_driver, _Ref, Connection},{iter,Iter}) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:iterate_wal(Connection, Ref, self(),Iter),
     receive_answer(Ref);
-iterate_wal({actordb_driver, _Ref, Connection},Evnum) when is_integer(Evnum) ->
+iterate_wal(C,Evnum) when is_integer(Evnum) ->
+    iterate_wal(C,Evnum,0).
+iterate_wal({actordb_driver, _Ref, Connection},Evnum,Evterm) when is_integer(Evnum) ->
     Ref = make_ref(),
-    ok = actordb_driver_nif:iterate_wal(Connection, Ref, self(),Evnum),
+    ok = actordb_driver_nif:iterate_wal(Connection, Ref, self(),Evnum,Evterm),
     receive_answer(Ref).
 
 inject_page({actordb_driver, _Ref, Connection},Bin) ->

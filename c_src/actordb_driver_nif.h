@@ -261,6 +261,7 @@ struct iterate_resource
   char closed;
   i64 iOffset;
   u64 evnumFrom;
+  u64 evtermFrom;
   u64 walIndex;
 
   int thread;
