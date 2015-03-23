@@ -633,7 +633,7 @@ do_open(db_command *cmd, db_thread *thread)
 
             // if filename :memory: this call will have no effect
             if (strcmp(mode,"wal") == 0)
-                sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=wal;PRAGMA synchronous=0;",NULL,NULL,NULL);
+                sqlite3_exec(cmd->conn->db,"PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
             else if (strcmp(mode,"off") == 0)
                 sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=off;",NULL,NULL,NULL);
             else if (strcmp(mode,"delete") == 0)
