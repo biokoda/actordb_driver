@@ -1,4 +1,4 @@
-xall:
+all:
 	../../rebar compile
 
 clean:
