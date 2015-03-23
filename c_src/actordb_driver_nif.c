@@ -1092,7 +1092,7 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
         dorel = 1;
         if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnumFrom))
             return enif_make_badarg(cmd->env);
-        if (cmd->arg1 != 0 || !enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evtermFrom))
+        if (cmd->arg1 == 0 || !enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evtermFrom))
         {
             evtermFrom = 0;
         }
@@ -1100,7 +1100,6 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
         iter = enif_alloc_resource(iterate_type, sizeof(iterate_resource));
         if(!iter)
             return make_error_tuple(cmd->env, "no_memory");
-
         memset(iter,0,sizeof(iterate_resource));
         iter->thread = thread->index;
         iter->connindex = cmd->conn->connindex;
