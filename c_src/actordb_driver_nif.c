@@ -1207,6 +1207,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
     u32 wnum = thread->threadNum;
     Btree *pBt = NULL;
     Pager *pPager = NULL;
+    int doReplicate;
 
     if (db->nDb <= 0)
         return atom_false;
@@ -1260,7 +1261,10 @@ do_inject_page(db_command *cmd, db_thread *thread)
             DBG((g_log,"Inject into wal=%lld, commit=%u\n",cmd->conn->wal->walIndex,commit));
                  
             page.pPager = pPager;
+            doReplicate = cmd->conn->doReplicate;
+            cmd->conn->doReplicate = 0;
             rc = pagerWalFrames(pPager,&page,commit,commit);
+            cmd->conn->doReplicate = doReplicate;
             // rc = sqlite3WalFrames(&pPager->pWal,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
             if (cmd->conn->wal)
                 cmd->conn->wal->init = 0;
