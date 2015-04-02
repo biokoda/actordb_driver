@@ -447,6 +447,7 @@ command_create(int threadnum)
     db_thread *thread = NULL;
     void *item;
     db_command *cmd;
+    ErlNifEnv *env;
     if (threadnum == -1)
         thread = &g_control_thread;
     else
@@ -460,12 +461,10 @@ command_create(int threadnum)
         cmd->env = enif_alloc_env();
         queue_set_item_data(item,cmd);
     }
-    cmd->type = cmd_unknown;
-    cmd->ref = 0;
-    cmd->arg = cmd->arg1 = cmd->arg2 = cmd->arg3 = cmd->arg4 = 0;
+    env = cmd->env;
+    memset(cmd,0,sizeof(db_command));
     cmd->connindex = -1;
-    // cmd->p = NULL;
-    cmd->conn = NULL;
+    cmd->env = env;
 
     return item;
 }
