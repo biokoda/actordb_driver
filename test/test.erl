@@ -4,11 +4,11 @@
 run_test_() ->
     [file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
     [file:delete(Fn) || Fn <- filelib:wildcard("*.db")],
-    [%fun lz4/0,
-     %fun modes/0,
-     fun bigtrans/0].
-     %fun repl/0,
-     %fun check/0].
+    [fun lz4/0,
+     fun modes/0,
+     fun bigtrans/0,
+     fun repl/0,
+     fun check/0].
 
 check() ->
     ?debugFmt("Reload and checking result of repl",[]),
