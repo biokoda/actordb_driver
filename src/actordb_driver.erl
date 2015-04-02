@@ -150,17 +150,17 @@ bind_insert(Sql, [[_|_]|_] = Params, {actordb_driver, _Ref, Connection}) ->
 
 exec_script(Sql, Db) ->
     exec_script(Sql,Db,infinity,0,0,<<>>).
-exec_script(Sql,[_|_] = Recs, Db) ->
+exec_script(Sql,Recs, Db) when is_list(Recs) ->
     exec_script(Sql,Recs,Db,infinity,0,0,<<>>);
 exec_script(Sql, Db, Timeout) when is_integer(Timeout) ->
     exec_script(Sql,Db,Timeout,0,0,<<>>).
-exec_script(Sql, [_|_] = Recs, Db, Timeout) when is_integer(Timeout) ->
+exec_script(Sql, Recs, Db, Timeout) when is_integer(Timeout), is_list(Recs) ->
     exec_script(Sql,Recs,Db,Timeout,0,0,<<>>).
 exec_script(Sql,  {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
     receive_answer(Ref,Connection,Timeout).
-exec_script(Sql, [_|_] = Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) when is_list(Recs) ->
     Ref = make_ref(),
     ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
     receive_answer(Ref,Connection,Timeout).
@@ -204,7 +204,7 @@ checkpoint_lock({actordb_driver, _Ref, Connection},Lock) ->
 
 
 receive_answer(Ref) ->
-    receive 
+    receive
         {Ref, Resp} -> Resp
     end.
 receive_answer(Ref,Connection,Timeout) ->
@@ -218,4 +218,3 @@ receive_answer(Ref,Connection,Timeout) ->
                 Resp
         end
    end.
-

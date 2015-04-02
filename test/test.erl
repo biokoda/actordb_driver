@@ -4,10 +4,11 @@
 run_test_() ->
     [file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
     [file:delete(Fn) || Fn <- filelib:wildcard("*.db")],
-    [fun lz4/0,
-     fun modes/0,
-     fun repl/0,
-     fun check/0].
+    [%fun lz4/0,
+     %fun modes/0,
+     fun bigtrans/0].
+     %fun repl/0,
+     %fun check/0].
 
 check() ->
     ?debugFmt("Reload and checking result of repl",[]),
@@ -44,13 +45,41 @@ modes() ->
         "$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db),
     {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
     {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db),
-    
+
     {ok,Db1} = actordb_driver:open("deletemode.db",1,delete),
     {ok,_} = actordb_driver:exec_script(<<"$CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT);",
         "$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
         "$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db1),
     {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db1),
     {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db1).
+
+bigtrans() ->
+  actordb_driver:init({{"."},{},100}),
+  Sql = <<"SAVEPOINT 'adb';",
+    "CREATE TABLE IF NOT EXISTS __transactions (id INTEGER PRIMARY KEY, tid INTEGER, updater INTEGER, node TEXT,",
+      "schemavers INTEGER, sql TEXT);",
+    "CREATE TABLE IF NOT EXISTS __adb (id INTEGER PRIMARY KEY, val TEXT);",
+   "CREATE TABLE t_task ( id INTEGER NOT NULL, project_id INTEGER NOT NULL, group_id INTEGER NOT NULL, owner_id TEXT NOT NULL,",
+     " assignee_id TEXT, title TEXT NOT NULL, category TEXT NOT NULL, status TEXT NOT NULL, priority INTEGER NOT NULL, ",
+     " created INTEGER NOT NULL, assigned INTEGER NOT NULL, deadline INTEGER NOT NULL, PRIMARY KEY(id)) WITHOUT ",
+     " ROWID;",
+    "CREATE TABLE t_comments ( id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, posted INTEGER NOT NULL, content TEXT NOT NULL,",
+    " poster_id INTEGER NOT NULL, parent_id INTEGER);",
+    "CREATE TABLE t_multimedia ( id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, mime TEXT NOT NULL,",
+      " content BLOB, owner_id INTEGER NOT NULL);",
+    "CREATE TABLE t_task_files ( file_id INTEGER PRIMARY KEY REFERENCES multimedia(id));",
+    "CREATE TABLE t_comment_files ( file_id INTEGER PRIMARY KEY REFERENCES multimedia(id));",
+    "CREATE TABLE t_history ( id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, prev_assignee_id INTEGER NOT NULL,",
+      " prev_project_id INTEGER NOT NULL, prev_group_id INTEGER NOR NULL, moved INTEGER NOT NULL, info TEXT NOT NULL);",
+    "CREATE TABLE t_followers ( id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, joined INTEGER NOT NULL);",
+    "INSERT  INTO t_task (id,project_id,group_id,title,category,priority,owner_id,assignee_id,created,assigned",
+     ",deadline,status) VALUES (1015,1,1014,'Task','Sexy','low','bbb','bbb',1427955816,1427955816,100,'waiting');",
+    "INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'1');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'1');",
+    "INSERT OR REPLACE INTO __adb (id,val) VALUES (3,'7');INSERT OR REPLACE INTO __adb (id,val) VALUES (4,'task');",
+    "INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'0');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'0');",
+    "INSERT OR REPLACE INTO __adb (id,val) VALUES (7,'614475188');RELEASE SAVEPOINT 'adb';">>,
+    {ok,Db,{ok,Res}} = actordb_driver:open("big.db",0,Sql,wal),
+    ?debugFmt("Result: ~p, select=~p",[Res,actordb_driver:exec_script("SELECT * FROM __adb;",Db)]).
 
 repl() ->
     ?debugFmt("repl",[]),
@@ -72,13 +101,13 @@ repl() ->
     {ok,Db2,_} = actordb_driver:open("t2.db",0,Sql,wal),
     [ok = actordb_driver:inject_page(Db2,Bin) || Bin <- L],
     {ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
-    
+
     % Now insert into second db, copy new pages back into first db
     L1 = get_pages(Db2),
     {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3, 'thirdthird');",Db2,10000,1,4,<<>>),
     L2 = get_pages(Db2),
     [ok = actordb_driver:inject_page(Db,Bin) || Bin <- L2 -- L1],
-    
+
     % Check both
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
@@ -119,7 +148,3 @@ get_pages(Db,Iter) ->
     	done ->
     		[]
     end.
-
-    
-
-    
