@@ -463,9 +463,8 @@ command_create(int threadnum)
     cmd->type = cmd_unknown;
     cmd->ref = 0;
     cmd->arg = cmd->arg1 = cmd->arg2 = cmd->arg3 = cmd->arg4 = 0;
-    cmd->stmt = NULL;
     cmd->connindex = -1;
-    cmd->p = NULL;
+    // cmd->p = NULL;
     cmd->conn = NULL;
 
     return item;
@@ -511,22 +510,22 @@ destruct_connection(ErlNifEnv *env, void *arg)
     push_command(res->thread, item);
 }
 
-static void
-destruct_backup(ErlNifEnv *env, void *arg)
-{
-    db_backup *p = (db_backup *)arg;
-    if (p->b)
-    {
-        void *item = command_create(p->thread);
-        db_command *cmd = queue_get_item_data(item);
-
-        cmd->type = cmd_backup_finish;
-        cmd->p = p;
-        cmd->ref = 0;
-
-        push_command(p->thread, item);
-    }
-}
+// static void
+// destruct_backup(ErlNifEnv *env, void *arg)
+// {
+//     db_backup *p = (db_backup *)arg;
+//     if (p->b)
+//     {
+//         void *item = command_create(p->thread);
+//         db_command *cmd = queue_get_item_data(item);
+//
+//         cmd->type = cmd_backup_finish;
+//         cmd->p = p;
+//         cmd->ref = 0;
+//
+//         push_command(p->thread, item);
+//     }
+// }
 
 static void
 destruct_iterate(ErlNifEnv *env, void *arg)
@@ -666,61 +665,61 @@ do_open(db_command *cmd, db_thread *thread)
     return result;
 }
 
-static ERL_NIF_TERM
-do_backup_init(db_command *cmd, db_thread *thread)
-{
-    db_backup *p = (db_backup *)cmd->p;
-    ERL_NIF_TERM backup_term;
+// static ERL_NIF_TERM
+// do_backup_init(db_command *cmd, db_thread *thread)
+// {
+//     db_backup *p = (db_backup *)cmd->p;
+//     ERL_NIF_TERM backup_term;
+//
+//     p->b = sqlite3_backup_init(p->dst,"main",p->src,"main");
+//     backup_term = enif_make_resource(cmd->env, p);
+//
+//     enif_release_resource(p);
+//     if (!(p->b))
+//         return atom_error;
+//     else
+//         return enif_make_tuple2(cmd->env,atom_ok,backup_term);
+// }
 
-    p->b = sqlite3_backup_init(p->dst,"main",p->src,"main");
-    backup_term = enif_make_resource(cmd->env, p);
+// static ERL_NIF_TERM
+// do_backup_step(db_command *cmd, db_thread *thread)
+// {
+//     db_backup *p = (db_backup *)cmd->p;
+//     int rt = sqlite3_backup_step(p->b,p->pages_for_step);
+//     enif_release_resource(p);
+//
+//     switch (rt)
+//     {
+//         case SQLITE_OK:
+//             return atom_ok;
+//         case SQLITE_DONE:
+//             return atom_done;
+//         default:
+//             return atom_error;
+//     }
+// }
 
-    enif_release_resource(p);
-    if (!(p->b))
-        return atom_error;
-    else
-        return enif_make_tuple2(cmd->env,atom_ok,backup_term);
-}
-
-static ERL_NIF_TERM
-do_backup_step(db_command *cmd, db_thread *thread)
-{
-    db_backup *p = (db_backup *)cmd->p;
-    int rt = sqlite3_backup_step(p->b,p->pages_for_step);
-    enif_release_resource(p);
-
-    switch (rt)
-    {
-        case SQLITE_OK:
-            return atom_ok;
-        case SQLITE_DONE:
-            return atom_done;
-        default:
-            return atom_error;
-    }
-}
-
-static ERL_NIF_TERM
-do_backup_finish(db_command *cmd, db_thread *thread)
-{
-    if (cmd->ref)
-    {
-        db_backup *p = (db_backup *)cmd->p;
-        if (p->b)
-        {
-            sqlite3_backup_finish(p->b);
-            p->b = NULL;
-        }
-        enif_release_resource(p);
-    }
-    else
-    {
-        sqlite3_backup *b = (sqlite3_backup *)cmd->p;
-        sqlite3_backup_finish(b);
-    }
-
-    return atom_ok;
-}
+// static ERL_NIF_TERM
+// do_backup_finish(db_command *cmd, db_thread *thread)
+// {
+//     if (cmd->ref)
+//     {
+//         db_backup *p = (db_backup *)cmd->p;
+//         if (p->b)
+//         {
+//             sqlite3_backup_finish(p->b);
+//             p->b = NULL;
+//         }
+//         enif_release_resource(p);
+//     }
+//     else
+//     {
+//         sqlite3_backup *b = (sqlite3_backup *)cmd->p;
+//         sqlite3_backup_finish(b);
+//     }
+//
+//     return atom_ok;
+// }
 
 static ERL_NIF_TERM
 do_interrupt(db_command *cmd, db_thread *thread)
@@ -1993,12 +1992,12 @@ evaluate_command(db_command *cmd,db_thread *thread)
         return do_store_prepared_table(cmd,thread);
     case cmd_close:
 	    return do_close(cmd,thread);
-    case cmd_backup_init:
-        return do_backup_init(cmd,thread);
-    case cmd_backup_finish:
-        return do_backup_finish(cmd,thread);
-    case cmd_backup_step:
-        return do_backup_step(cmd,thread);
+    // case cmd_backup_init:
+    //     return do_backup_init(cmd,thread);
+    // case cmd_backup_finish:
+    //     return do_backup_finish(cmd,thread);
+    // case cmd_backup_step:
+    //     return do_backup_step(cmd,thread);
     case cmd_replicate_opts:
         return do_replicate_opts(cmd,thread);
     case cmd_inject_page:
@@ -3283,11 +3282,11 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 	    return -1;
     db_connection_type = rt;
 
-    rt =  enif_open_resource_type(env, "actordb_driver_nif", "db_backup_type",
-                   destruct_backup, ERL_NIF_RT_CREATE, NULL);
-    if(!rt)
-        return -1;
-    db_backup_type = rt;
+    // rt =  enif_open_resource_type(env, "actordb_driver_nif", "db_backup_type",
+    //                destruct_backup, ERL_NIF_RT_CREATE, NULL);
+    // if(!rt)
+    //     return -1;
+    // db_backup_type = rt;
 
 
     rt =  enif_open_resource_type(env, "actordb_driver_nif", "iterate_type",

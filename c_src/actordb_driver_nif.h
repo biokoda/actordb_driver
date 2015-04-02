@@ -147,16 +147,29 @@ struct wal_file
 
 struct db_thread
 {
+    void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
+    // so currently executing connection data is accessible from wal callback
+    db_connection *curConn;
+    db_connection* conns;
+    sqlite3_vfs *vfs;
+    // Raft page replication
+    // MAX_CONNECTIONS (8) servers to replicate write log to
+    int sockets[MAX_CONNECTIONS];
+    int socket_types[MAX_CONNECTIONS];
+    wal_file *walFile;
+    int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
+    char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
+    #ifndef _TESTAPP_
+    queue *commands;
+    control_data *control;
+    ErlNifTid tid;
+    #endif
     // All DB paths are relative to this thread path.
     // This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
     char path[MAX_PATHNAME];
     int pathlen;
     unsigned int dbcount;
     unsigned int inactivity;
-    #ifndef _TESTAPP_
-    queue *commands;
-    ErlNifTid tid;
-    #endif
     int isopen;
     // initialized to random, increased for every call.
     // it is used to distinguish writes to same actor from each other and detect
@@ -165,29 +178,12 @@ struct db_thread
     u32 threadNum;
     // Index in table od threads.
     int index;
-    // so currently executing connection data is accessible from wal callback
-    db_connection *curConn; 
-
-    // Raft page replication
-    // MAX_CONNECTIONS (8) servers to replicate write log to
-    int sockets[MAX_CONNECTIONS];
-    int socket_types[MAX_CONNECTIONS];
-    control_data *control;
 
     // Prepared statements. 2d array (for every type, list of sqls and versions)
     int prepSize;
-    int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
-    char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
-
-    db_connection* conns;
     int nconns;
     // Maps DBPath (relative path to db) to connections index.
     Hash walHash;
-
-    wal_file *walFile;
-    sqlite3_vfs *vfs;
-
-    void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
 };
 int g_nthreads;
 
@@ -201,31 +197,19 @@ ErlNifMutex *g_dbcount_mutex = NULL;
 
 struct db_connection
 {
-    int thread;
-    // index in thread table of actors (thread->conns)
-    int connindex;
-    sqlite3 *db;
-    struct Wal *wal;
-    // Hash walPages;
-    char *dbpath;
-    // Is db open from erlang. It may just be open in driver.
-    char nErlOpen;
-    char checkpointLock;
-
-    u32 lastWriteThreadNum;
-    u32 writeNumToIgnore;
-    
     u64 writeNumber;
     u64 writeTermNumber;
-    char wal_configured;
-    // For every write:
-    // over how many connections data has been sent
-    char nSent;
-    // Set bit for every failed attempt to write to socket of connection
-    char failFlags;
-    // 0   - do not replicate
-    // > 0 - replicate to socket types that match number
-    int doReplicate;
+    struct Wal *wal;
+    sqlite3 *db;
+    char *dbpath;
+    sqlite3_stmt **staticPrepared;
+    sqlite3_stmt **prepared;
+    int *prepVersions;
+    // When actor is requesting pages from wal for replication use this iterator.
+    WalIterator *walIter;
+    // Pointer to wal structure that iterator belongs to.
+    // Iterators move from oldest wal to youngest
+    Wal* iterWal;
     #ifndef _TESTAPP_
     // Fixed part of packet prefix
     char* packetPrefix;
@@ -233,17 +217,23 @@ struct db_connection
     // Variable part of packet prefix
     ErlNifBinary packetVarPrefix;
     #endif
-
-    sqlite3_stmt **staticPrepared;
-    sqlite3_stmt **prepared;
-    int *prepVersions;
-
-    // When actor is requesting pages from wal for replication use this iterator.
-    WalIterator *walIter;
-    // Pointer to wal structure that iterator belongs to.
-    // Iterators move from oldest wal to youngest
-    Wal* iterWal;
-
+    u32 lastWriteThreadNum;
+    u32 writeNumToIgnore;
+    // index in thread table of actors (thread->conns)
+    int connindex;
+    // 0   - do not replicate
+    // > 0 - replicate to socket types that match number
+    int doReplicate;
+    int thread;
+    // Is db open from erlang. It may just be open in driver.
+    char nErlOpen;
+    char checkpointLock;
+    char wal_configured;
+    // For every write:
+    // over how many connections data has been sent
+    char nSent;
+    // Set bit for every failed attempt to write to socket of connection
+    char failFlags;
     char needRestart;
 };
 
@@ -257,8 +247,6 @@ struct conn_resource
 
 struct iterate_resource
 {
-  char started;
-  char closed;
   i64 iOffset;
   u64 evnumFrom;
   u64 evtermFrom;
@@ -266,20 +254,23 @@ struct iterate_resource
 
   int thread;
   int connindex;
+
+  char started;
+  char closed;
 };
 
 /* backup object */
 struct db_backup
 {
   sqlite3_backup *b;
-  int pages_for_step;
-  int thread;
   sqlite3 *dst;
   sqlite3 *src;
+  int pages_for_step;
+  int thread;
 };
 
 
-typedef enum 
+typedef enum
 {
     cmd_unknown = 0,
     cmd_open  = 1,
@@ -303,12 +294,13 @@ typedef enum
     cmd_replicate_opts = 19
 } command_type;
 
-typedef struct 
+typedef struct
 {
-    command_type type;
+    // void *p;
+    db_connection *conn;
 #ifndef _TESTAPP_
     ErlNifEnv *env;
-    ERL_NIF_TERM ref; 
+    ERL_NIF_TERM ref;
     ErlNifPid pid;
     ERL_NIF_TERM arg;
     ERL_NIF_TERM arg1;
@@ -316,11 +308,8 @@ typedef struct
     ERL_NIF_TERM arg3;
     ERL_NIF_TERM arg4;
 #endif
-    sqlite3_stmt *stmt;
     int connindex;
-    void *p;
-
-    db_connection *conn;
+    command_type type;
 } db_command;
 
 
