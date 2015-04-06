@@ -7,16 +7,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "queue.h"
+// #include "queue.h"
 
-
-struct qitem_t
-{
-    struct qitem_t* next;
-    void* data;
-};
-
-typedef struct qitem_t qitem;
 
 struct queue_t
 {
@@ -25,27 +17,25 @@ struct queue_t
     qitem *head;
     qitem *tail;
     qitem *reuseq;
-    // int reuseqlen;
-    void (*freeitem)(void*);
+    // void (*freeitem)(db_command);
     int length;
 };
 
-void*
-queue_get_item_data(void* item)
-{
-    qitem* it = (qitem*)item;
-    return it->data;
-}
+// void*
+// queue_get_item_data(void* item)
+// {
+//     qitem* it = (qitem*)item;
+//     return it->data;
+// }
+//
+// void
+// queue_set_item_data(void* item, void *data)
+// {
+//     qitem* it = (qitem*)item;
+//     it->data = data;
+// }
 
-void
-queue_set_item_data(void* item, void *data)
-{
-    qitem* it = (qitem*)item;
-    it->data = data;
-}
-
-queue *
-queue_create(void (*freecb)(void*))
+queue *queue_create()
 {
     queue *ret;
     // int i = 0;
@@ -54,23 +44,14 @@ queue_create(void (*freecb)(void*))
     ret = (queue *) enif_alloc(sizeof(struct queue_t));
     if(ret == NULL) goto error;
 
-    ret->freeitem = freecb;
+    // ret->freeitem = freecb;
     ret->lock = NULL;
     ret->cond = NULL;
     ret->head = NULL;
     ret->tail = NULL;
     ret->length = 0;
 
-    ret->reuseq = (qitem *) enif_alloc(sizeof(struct qitem_t));
-    ret->reuseq->data = ret->reuseq->next = NULL;
-    // item = ret->reuseq;
-    // for (i = 1; i < 10; i++)
-    // {
-    //     item->next = (qitem *) enif_alloc(sizeof(struct qitem_t));
-    //     item->next->next = item->next->data = item->data = NULL;
-    //     item = item->next;
-    // }
-
+    ret->reuseq = NULL;
 
     ret->lock = enif_mutex_create("queue_lock");
     if(ret->lock == NULL) goto error;
@@ -96,6 +77,7 @@ queue_destroy(queue *queue)
     ErlNifMutex *lock;
     ErlNifCond *cond;
     int length;
+    qitem *blocks = NULL;
 
     enif_mutex_lock(queue->lock);
     lock = queue->lock;
@@ -110,9 +92,20 @@ queue_destroy(queue *queue)
     while(queue->reuseq != NULL)
     {
         qitem *tmp = queue->reuseq->next;
-        queue->freeitem(queue->reuseq->data);
-        enif_free(queue->reuseq);
+        if(tmp->cmd.env != NULL)
+           enif_free_env(tmp->cmd.env);
+        if (queue->reuseq->blockStart)
+        {
+          queue->reuseq->next = blocks;
+          blocks = queue->reuseq;
+        }
         queue->reuseq = tmp;
+    }
+    while (blocks != NULL)
+    {
+      qitem *tmp = blocks->next;
+      enif_free(blocks);
+      blocks = tmp;
     }
     enif_mutex_unlock(lock);
 
@@ -124,10 +117,8 @@ queue_destroy(queue *queue)
 
 
 int
-queue_push(queue *queue, void *item)
+queue_push(queue *queue, qitem *entry)
 {
-    qitem *entry = (qitem*)item;
-
     enif_mutex_lock(queue->lock);
 
     assert(queue->length >= 0 && "Invalid queue size at push");
@@ -157,7 +148,7 @@ int queue_size(queue *queue)
     return r;
 }
 
-void*
+qitem*
 queue_pop(queue *queue)
 {
     qitem *entry;
@@ -191,31 +182,40 @@ queue_pop(queue *queue)
 }
 
 void
-queue_recycle(queue *queue,void* item)
+queue_recycle(queue *queue,qitem *entry)
 {
-    qitem *entry = (qitem*)item;
     enif_mutex_lock(queue->lock);
     entry->next = queue->reuseq;
     queue->reuseq = entry;
     enif_mutex_unlock(queue->lock);
 }
 
-void*
+qitem*
 queue_get_item(queue *queue)
 {
-    qitem *entry;
+    qitem *entry = NULL;
+    int i;
     enif_mutex_lock(queue->lock);
     if (queue->reuseq != NULL)
     {
         entry = queue->reuseq;
         queue->reuseq = queue->reuseq->next;
+        entry->next = NULL;
     }
     else
     {
-        entry = (qitem *) enif_alloc(sizeof(struct qitem_t));
-        entry->data = NULL;
+        entry = enif_alloc(sizeof(qitem)*16);
+        memset(entry,0,sizeof(qitem)*16);
+
+        for (i = 1; i < 16; i++)
+        {
+          entry[i].cmd.env = enif_alloc_env();
+          entry[i].next = queue->reuseq;
+          queue->reuseq = &entry[i];
+        }
+        entry->cmd.env = enif_alloc_env();
+        entry->blockStart = 1;
     }
-    entry->next = NULL;
     enif_mutex_unlock(queue->lock);
     return entry;
 }

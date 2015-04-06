@@ -30,7 +30,6 @@
 #endif
 
 #include "lz4.h"
-#include "queue.h"
 
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
@@ -45,7 +44,7 @@
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
 // Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
-
+#include "queue.c"
 
 
 void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
@@ -240,10 +239,9 @@ void fail_send(int i)
 {
     db_command *ncmd = NULL;
     // tell control thread to create new connections for position i
-    void *item = command_create(-1);
-    ncmd = queue_get_item_data(item);
-    ncmd->type = cmd_tcp_connect;
-    ncmd->arg3 = enif_make_int(ncmd->env,i);
+    qitem *item = command_create(-1);
+    item->cmd.type = cmd_tcp_connect;
+    item->cmd.arg3 = enif_make_int(ncmd->env,i);
     push_command(-1, item);
 }
 
@@ -430,23 +428,18 @@ make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code, 
                               enif_make_string(env, msg, ERL_NIF_LATIN1)));
 }
 
-static void
-command_destroy(void *obj)
-{
-    db_command *cmd = (db_command *) obj;
+// static void
+// command_destroy(db_command cmd)
+// {
+//     if(cmd.env != NULL)
+//        enif_free_env(cmd.env);
+// }
 
-    if(cmd->env != NULL)
-       enif_free_env(cmd->env);
-
-    enif_free(cmd);
-}
-
-void *
+qitem*
 command_create(int threadnum)
 {
     db_thread *thread = NULL;
-    void *item;
-    db_command *cmd;
+    qitem *item;
     ErlNifEnv *env;
     if (threadnum == -1)
         thread = &g_control_thread;
@@ -454,17 +447,14 @@ command_create(int threadnum)
         thread = &(g_threads[threadnum]);
 
     item = queue_get_item(thread->commands);
-    cmd = queue_get_item_data(item);
-    if (cmd == NULL)
+    if (item->cmd.env == NULL)
     {
-        cmd = (db_command *) enif_alloc(sizeof(db_command));
-        cmd->env = enif_alloc_env();
-        queue_set_item_data(item,cmd);
+        item->cmd.env = enif_alloc_env();
     }
-    env = cmd->env;
-    memset(cmd,0,sizeof(db_command));
-    cmd->connindex = -1;
-    cmd->env = env;
+    env = item->cmd.env;
+    memset(&item->cmd,0,sizeof(db_command));
+    item->cmd.connindex = -1;
+    item->cmd.env = env;
 
     return item;
 }
@@ -473,8 +463,7 @@ command_create(int threadnum)
 static void
 destruct_connection(ErlNifEnv *env, void *arg)
 {
-    void *item;
-    db_command *cmd;
+    qitem *item;
     conn_resource *res = (conn_resource*)arg;
 
     DBG((g_log,"destruct_connection %d\n",res->connindex));
@@ -484,26 +473,22 @@ destruct_connection(ErlNifEnv *env, void *arg)
     {
         DBG((g_log,"destruct with checkpoint lock, conn=%d, thread=%d\n",res->connindex,res->thread));
         item = command_create(res->thread);
-        cmd = queue_get_item_data(item);
 
-        cmd->type = cmd_checkpoint_lock;
-        cmd->arg = enif_make_int(cmd->env, res->checkpointLock);
-        cmd->connindex = res->connindex;
-        cmd->ref = 0;
+        item->cmd.type = cmd_checkpoint_lock;
+        item->cmd.arg = enif_make_int(item->cmd.env, res->checkpointLock);
+        item->cmd.connindex = res->connindex;
 
         push_command(res->thread, item);
     }
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
 
-    cmd->type = cmd_close;
-    cmd->connindex = res->connindex;
-    cmd->ref = 0;
+    item->cmd.type = cmd_close;
+    item->cmd.connindex = res->connindex;
     if (res->dodelete)
     {
         DBG((g_log,"destruct with delete conn=%d, thread=%d\n",res->connindex,res->thread));
-        cmd->arg = enif_make_ref(cmd->env);
+        item->cmd.arg = enif_make_ref(item->cmd.env);
     }
 
     push_command(res->thread, item);
@@ -529,8 +514,7 @@ destruct_connection(ErlNifEnv *env, void *arg)
 static void
 destruct_iterate(ErlNifEnv *env, void *arg)
 {
-    void *item;
-    db_command *cmd;
+    qitem *item;
     iterate_resource *res = (iterate_resource*)arg;
 
     DBG((g_log,"Destruct iterate conn=%d, closed=%d.\n",res->connindex,(int)res->closed));
@@ -538,12 +522,10 @@ destruct_iterate(ErlNifEnv *env, void *arg)
         return;
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
 
-    cmd->type = cmd_checkpoint_lock;
-    cmd->arg = enif_make_int(cmd->env, 0);
-    cmd->connindex = res->connindex;
-    cmd->ref = 0;
+    item->cmd.type = cmd_checkpoint_lock;
+    item->cmd.arg = enif_make_int(item->cmd.env, 0);
+    item->cmd.connindex = res->connindex;
 
     push_command(res->thread, item);
 }
@@ -802,7 +784,6 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
     // struct sockaddr_in addr;
     int fd;
     ERL_NIF_TERM result = atom_ok;
-    db_command *ncmd = NULL;
 #ifndef _WIN32
     struct iovec iov[2];
 #else
@@ -976,12 +957,11 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 
         for (i = 0; i < g_nthreads; i++)
         {
-            void *item = command_create(i);
-            ncmd = queue_get_item_data(item);
-            ncmd->type = cmd_set_socket;
-            ncmd->arg = enif_make_int(ncmd->env,sockets[i]);
-            ncmd->arg1 = enif_make_int(ncmd->env,pos);
-            ncmd->arg2 = enif_make_int(ncmd->env,thread->control->types[pos]);
+            qitem *item = command_create(i);
+            item->cmd.type = cmd_set_socket;
+            item->cmd.arg = enif_make_int(item->cmd.env,sockets[i]);
+            item->cmd.arg1 = enif_make_int(item->cmd.env,pos);
+            item->cmd.arg2 = enif_make_int(item->cmd.env,thread->control->types[pos]);
             push_command(i, item);
         }
     }
@@ -1953,12 +1933,12 @@ int reopen_db(db_connection *conn, db_thread *thread)
 
 
 static ERL_NIF_TERM
-evaluate_command(db_command *cmd,db_thread *thread)
+evaluate_command(db_command cmd,db_thread *thread)
 {
-    if (cmd->connindex >= 0 && cmd->connindex < thread->nconns)
+    if (cmd.connindex >= 0 && cmd.connindex < thread->nconns)
     {
-        cmd->conn = &thread->conns[cmd->connindex];
-        if (!cmd->conn->db)
+        cmd.conn = &thread->conns[cmd.connindex];
+        if (!cmd.conn->db)
         {
             DBG((g_log,"Received command on closed connection\n"));
             return atom_false;
@@ -1966,31 +1946,31 @@ evaluate_command(db_command *cmd,db_thread *thread)
     }
 
 
-    thread->curConn = cmd->conn;
+    thread->curConn = cmd.conn;
 
-    switch(cmd->type)
+    switch(cmd.type)
     {
     case cmd_open:
     {
-        ERL_NIF_TERM connres = do_open(cmd,thread);
-        if (cmd->conn != NULL && cmd->arg2 == 0)
-            return enif_make_tuple2(cmd->env,atom_ok,connres);
-        else if (cmd->conn == NULL)
+        ERL_NIF_TERM connres = do_open(&cmd,thread);
+        if (cmd.conn != NULL && cmd.arg2 == 0)
+            return enif_make_tuple2(cmd.env,atom_ok,connres);
+        else if (cmd.conn == NULL)
             return connres;
-        else if (cmd->arg2 != 0)
+        else if (cmd.arg2 != 0)
         {
-            cmd->arg = cmd->arg2;
-            cmd->arg1 = 0;
-            cmd->arg2 = 0;
-            return enif_make_tuple3(cmd->env,atom_ok,connres,do_exec_script(cmd,thread));
+            cmd.arg = cmd.arg2;
+            cmd.arg1 = 0;
+            cmd.arg2 = 0;
+            return enif_make_tuple3(cmd.env,atom_ok,connres,do_exec_script(&cmd,thread));
         }
     }
     case cmd_exec_script:
-        return do_exec_script(cmd,thread);
+        return do_exec_script(&cmd,thread);
     case cmd_store_prepared:
-        return do_store_prepared_table(cmd,thread);
+        return do_store_prepared_table(&cmd,thread);
     case cmd_close:
-	    return do_close(cmd,thread);
+	    return do_close(&cmd,thread);
     // case cmd_backup_init:
     //     return do_backup_init(cmd,thread);
     // case cmd_backup_finish:
@@ -1998,37 +1978,37 @@ evaluate_command(db_command *cmd,db_thread *thread)
     // case cmd_backup_step:
     //     return do_backup_step(cmd,thread);
     case cmd_replicate_opts:
-        return do_replicate_opts(cmd,thread);
+        return do_replicate_opts(&cmd,thread);
     case cmd_inject_page:
-        return do_inject_page(cmd,thread);
+        return do_inject_page(&cmd,thread);
     case cmd_wal_rewind:
-        return do_wal_rewind(cmd,thread);
+        return do_wal_rewind(&cmd,thread);
     case cmd_interrupt:
-        return do_interrupt(cmd,thread);
+        return do_interrupt(&cmd,thread);
     case cmd_iterate_wal:
-        return do_iterate_wal(cmd,thread);
+        return do_iterate_wal(&cmd,thread);
     case cmd_unknown:
         return atom_ok;
     case cmd_tcp_connect:
-        return do_tcp_connect(cmd,thread);
+        return do_tcp_connect(&cmd,thread);
     case cmd_tcp_reconnect:
-        return do_tcp_reconnect(cmd,thread);
+        return do_tcp_reconnect(&cmd,thread);
     case cmd_bind_insert:
-        return do_bind_insert(cmd,thread);
+        return do_bind_insert(&cmd,thread);
     case cmd_alltunnel_call:
-        return do_all_tunnel_call(cmd,thread);
+        return do_all_tunnel_call(&cmd,thread);
     case cmd_checkpoint_lock:
-        return do_checkpoint_lock(cmd,thread);
+        return do_checkpoint_lock(&cmd,thread);
     case cmd_set_socket:
     {
         int fd = 0;
         int pos = -1;
         int type = 1;
-        if (!enif_get_int(cmd->env,cmd->arg,&fd))
+        if (!enif_get_int(cmd.env,cmd.arg,&fd))
             return atom_error;
-        if (!enif_get_int(cmd->env,cmd->arg1,&pos))
+        if (!enif_get_int(cmd.env,cmd.arg1,&pos))
             return atom_error;
-        if (!enif_get_int(cmd->env,cmd->arg2,&type))
+        if (!enif_get_int(cmd.env,cmd.arg2,&type))
             return atom_error;
 
         if (fd > 3 && pos >= 0 && pos < 8)
@@ -2059,13 +2039,13 @@ evaluate_command(db_command *cmd,db_thread *thread)
         return atom_error;
     }
     default:
-	    return make_error_tuple(cmd->env, "invalid_command");
+	    return make_error_tuple(cmd.env, "invalid_command");
     }
 }
 
 // db_connection *conn
 static ERL_NIF_TERM
-push_command(int threadnum, void *item)
+push_command(int threadnum, qitem *item)
 {
     db_thread *thread = NULL;
     if (threadnum == -1)
@@ -2075,8 +2055,7 @@ push_command(int threadnum, void *item)
 
     if(!queue_push(thread->commands, item))
     {
-        db_command *cmd = queue_get_item_data(item);
-        return make_error_tuple(cmd->env, "command_push_failed");
+        return make_error_tuple(item->cmd.env, "command_push_failed");
     }
 
     return atom_ok;
@@ -2093,7 +2072,6 @@ thread_func(void *arg)
 {
     int i,j,chkCounter = 0;
     db_thread* data = (db_thread*)arg;
-    db_command *cmd;
     db_command clcmd;
     wal_file *wFile;
 
@@ -2101,33 +2079,34 @@ thread_func(void *arg)
     data->isopen = 1;
     sqlite3HashInit(&data->walHash);
 
+    // queue_recycle(data->commands,queue_get_item(data->commands));
+
     if (data->index >= 0)
         read_thread_wal(data);
 
     while(1)
     {
-        void *item = queue_pop(data->commands);
-        cmd = queue_get_item_data(item);
+        qitem *item = queue_pop(data->commands);
         chkCounter++;
 
-        DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,cmd->type,cmd->connindex));
+        DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,item->cmd.type,item->cmd.connindex));
 
-        if (cmd->type == cmd_stop)
+        if (item->cmd.type == cmd_stop)
         {
             queue_recycle(data->commands,item);
             break;
         }
         else
         {
-            if (cmd->ref == 0)
+            if (item->cmd.ref == 0)
             {
-                evaluate_command(cmd,data);
-                enif_clear_env(cmd->env);
+                evaluate_command(item->cmd,data);
+                enif_clear_env(item->cmd.env);
             }
             else
             {
-                enif_send(NULL, &cmd->pid, cmd->env, make_answer(cmd, evaluate_command(cmd,data)));
-                enif_clear_env(cmd->env);
+                enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, evaluate_command(item->cmd,data)));
+                enif_clear_env(item->cmd.env);
             }
             queue_recycle(data->commands,item);
         }
@@ -2249,9 +2228,8 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
     unsigned int thread;
 
     DBG((g_log,"db_open\n"));
@@ -2267,18 +2245,17 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     thread %= g_nthreads;
     item = command_create(thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
 
-    cmd->type = cmd_open;
-    cmd->ref = enif_make_copy(cmd->env, argv[0]);
-    cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env, argv[2]);
-    cmd->arg1 = enif_make_copy(cmd->env, argv[4]);
+    DBG((g_log,"db_open %d\n",(int)item->cmd.env));
+
+    item->cmd.type = cmd_open;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
+    item->cmd.pid = pid;
+    item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
+    item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]);
     if (argc == 6)
     {
-        cmd->arg2 = enif_make_copy(cmd->env, argv[5]);
+      item->cmd.arg2 = enif_make_copy(item->cmd.env, argv[5]);
     }
 
     enif_consume_timeslice(env,500);
@@ -2289,10 +2266,9 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    db_command *cmd = NULL;
     conn_resource *res;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"replicate_opts\n"));
 
@@ -2307,18 +2283,14 @@ replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env, "invalid_pid");
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
 
-    cmd->type = cmd_replicate_opts;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env, argv[3]);
-    cmd->arg1 = enif_make_copy(cmd->env, argv[4]);
+    item->cmd.type = cmd_replicate_opts;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
+    item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);
+    item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]);
 
-    cmd->connindex = res->connindex;
-
+    item->cmd.connindex = res->connindex;
     enif_consume_timeslice(env,500);
 
     return push_command(res->thread, item);
@@ -2346,9 +2318,8 @@ replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     DBG((g_log, "tcp_connect\n"));
 
@@ -2371,18 +2342,16 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
 
     item = command_create(-1);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
-    cmd->type = cmd_tcp_connect;
-    cmd->arg = enif_make_copy(cmd->env,argv[2]);
-    cmd->arg1 = enif_make_copy(cmd->env,argv[3]);
-    cmd->arg2 = enif_make_copy(cmd->env,argv[4]);
-    cmd->arg3 = enif_make_copy(cmd->env,argv[5]);
+
+    item->cmd.type = cmd_tcp_connect;
+    item->cmd.arg = enif_make_copy(item->cmd.env,argv[2]);
+    item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[3]);
+    item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[4]);
+    item->cmd.arg3 = enif_make_copy(item->cmd.env,argv[5]);
     if (argc == 7)
-        cmd->arg4 = enif_make_copy(cmd->env,argv[6]);
-    cmd->ref = enif_make_copy(cmd->env, argv[0]);
-    cmd->pid = pid;
+      item->cmd.arg4 = enif_make_copy(item->cmd.env,argv[6]);
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
+    item->cmd.pid = pid;
 
     enif_consume_timeslice(env,500);
     return push_command(-1,item);
@@ -2391,12 +2360,8 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    db_command *cmd = NULL;
-    void *item = command_create(-1);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
-    cmd->type = cmd_tcp_reconnect;
+    qitem *item = command_create(-1);
+    item->cmd.type = cmd_tcp_reconnect;
 
     enif_consume_timeslice(env,500);
 
@@ -2470,10 +2435,8 @@ wal_checksum(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    db_command *cmd = NULL;
-    // db_connection* conn;
     conn_resource *res;
-    void *item;
+    qitem *item;
 
     DBG((g_log, "interrupt\n"));
 
@@ -2485,12 +2448,8 @@ interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
     item = command_create(-1);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
-    cmd->type = cmd_interrupt;
-    cmd->ref = 0;
-    cmd->connindex = res->connindex;
+    item->cmd.type = cmd_interrupt;
+    item->cmd.connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
 
@@ -2734,10 +2693,9 @@ lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    db_command *cmd = NULL;
     ErlNifPid pid;
     int i;
-    void *item;
+    qitem *item;
 
     DBG((g_log, "all_tunnel_call\n"));
 
@@ -2754,15 +2712,12 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     for (i = 0; i < g_nthreads; i++)
     {
         item = command_create(i);
-        cmd = queue_get_item_data(item);
-        if(!cmd)
-            return make_error_tuple(env, "command_create_failed");
 
         /* command */
-        cmd->type = cmd_alltunnel_call;
-        cmd->ref = enif_make_copy(cmd->env, argv[0]);
-        cmd->pid = pid;
-        cmd->arg = enif_make_copy(cmd->env, argv[2]);
+        item->cmd.type = cmd_alltunnel_call;
+        item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
+        item->cmd.pid = pid;
+        item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
 
         enif_consume_timeslice(env,500);
 
@@ -2775,9 +2730,8 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    db_command *cmd = NULL;
     int i;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"store_prepared_table\n"));
 
@@ -2790,17 +2744,13 @@ store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     for (i = 0; i < g_nthreads; i++)
     {
         item = command_create(i);
-        cmd = queue_get_item_data(item);
-        if(!cmd)
-            return make_error_tuple(env, "command_create_failed");
 
         /* command */
-        cmd->type = cmd_store_prepared;
-        cmd->arg = enif_make_copy(cmd->env, argv[0]);
-        cmd->arg1 = enif_make_copy(cmd->env, argv[1]);
+        item->cmd.type = cmd_store_prepared;
+        item->cmd.arg = enif_make_copy(item->cmd.env, argv[0]);
+        item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[1]);
 
         enif_consume_timeslice(env,500);
-
         push_command(i, item);
     }
     return atom_ok;
@@ -2813,9 +2763,8 @@ static ERL_NIF_TERM
 exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"exec_script %d\n",argc));
 
@@ -2839,24 +2788,20 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
 
     /* command */
-    cmd->type = cmd_exec_script;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env, argv[3]);  // sql string
-    cmd->arg1 = enif_make_copy(cmd->env, argv[4]); // term
-    cmd->arg2 = enif_make_copy(cmd->env, argv[5]); // index
-    cmd->arg3 = enif_make_copy(cmd->env, argv[6]); // appendentries param binary
+    item->cmd.type = cmd_exec_script;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
+    item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // sql string
+    item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]); // term
+    item->cmd.arg2 = enif_make_copy(item->cmd.env, argv[5]); // index
+    item->cmd.arg3 = enif_make_copy(item->cmd.env, argv[6]); // appendentries param binary
     if (argc == 8)
-        cmd->arg4 = enif_make_copy(cmd->env, argv[7]);  // records for bulk insert
-    cmd->connindex = res->connindex;
+      item->cmd.arg4 = enif_make_copy(item->cmd.env, argv[7]);  // records for bulk insert
+    item->cmd.connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
-
     return push_command(res->thread, item);
 }
 
@@ -2864,9 +2809,8 @@ static ERL_NIF_TERM
 checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
     int lock;
 
     DBG((g_log,"checkpoint_lock\n"));
@@ -2884,11 +2828,6 @@ checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env, "term not number");
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-    {
-        return make_error_tuple(env, "command_create_failed");
-    }
 
     enif_get_int(env,argv[3],&lock);
     if (lock == res->checkpointLock)
@@ -2899,14 +2838,13 @@ checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     res->checkpointLock = (char)lock;
     /* command */
-    cmd->type = cmd_checkpoint_lock;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env, argv[3]);  // 1 - lock, 0 - unlock
-    cmd->connindex = res->connindex;
+    item->cmd.type = cmd_checkpoint_lock;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
+    item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // 1 - lock, 0 - unlock
+    item->cmd.connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
-
     return push_command(res->thread, item);
 }
 
@@ -2920,9 +2858,8 @@ static ERL_NIF_TERM
 iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"iterate_wal\n"));
 
@@ -2937,23 +2874,17 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env, "invalid_pid");
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-    {
-        return make_error_tuple(env, "command_create_failed");
-    }
 
     /* command */
-    cmd->type = cmd_iterate_wal;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->connindex = res->connindex;
-    cmd->arg = enif_make_copy(cmd->env,argv[3]);
+    item->cmd.type = cmd_iterate_wal;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
+    item->cmd.connindex = res->connindex;
+    item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
     if (argc == 5)
-        cmd->arg1 = enif_make_copy(cmd->env,argv[4]);
+      item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]);
 
     enif_consume_timeslice(env,500);
-
     return push_command(res->thread, item);
 }
 
@@ -2961,8 +2892,7 @@ static ERL_NIF_TERM
 iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     iterate_resource *iter;
-    db_command *cmd = NULL;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"iterate_close\n"));
 
@@ -2972,20 +2902,13 @@ iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
 
     item = command_create(iter->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-    {
-        return make_error_tuple(env, "command_create_failed");
-    }
 
     iter->closed = 1;
-    cmd->type = cmd_checkpoint_lock;
-    cmd->arg = enif_make_int(cmd->env, 0);
-    cmd->connindex = iter->connindex;
-    cmd->ref = 0;
+    item->cmd.type = cmd_checkpoint_lock;
+    item->cmd.arg = enif_make_int(item->cmd.env, 0);
+    item->cmd.connindex = iter->connindex;
 
     enif_consume_timeslice(env,500);
-
     return push_command(iter->thread, item);
 }
 
@@ -2993,9 +2916,8 @@ static ERL_NIF_TERM
 inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"inject_page\n"))
 
@@ -3012,23 +2934,17 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env,"not binary");
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-    {
-        return make_error_tuple(env, "command_create_failed");
-    }
 
     /* command */
-    cmd->type = cmd_inject_page;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env,argv[3]);
+    item->cmd.type = cmd_inject_page;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
+    item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
     if (argc == 5)
-        cmd->arg1 = enif_make_copy(cmd->env,argv[4]);
-    cmd->connindex = res->connindex;
+      item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]);
+    item->cmd.connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
-
     return push_command(res->thread, item);
 }
 
@@ -3052,9 +2968,8 @@ static ERL_NIF_TERM
 drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"WAL REWIND\n"));
 
@@ -3071,21 +2986,15 @@ drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env,"not evnum");
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-    {
-        return make_error_tuple(env, "command_create_failed");
-    }
 
     /* command */
-    cmd->type = cmd_wal_rewind;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env,argv[3]);
-    cmd->connindex = res->connindex;
+    item->cmd.type = cmd_wal_rewind;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
+    item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
+    item->cmd.connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
-
     return push_command(res->thread, item);
 }
 
@@ -3094,9 +3003,8 @@ static ERL_NIF_TERM
 bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     DBG((g_log,"bind_insert\n"));
 
@@ -3116,20 +3024,16 @@ bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env,"invalid bind parameters");
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
 
     /* command */
-    cmd->type = cmd_bind_insert;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env, argv[3]);  // sql string
-    cmd->arg1 = enif_make_copy(cmd->env, argv[4]); // bind list
-    cmd->connindex = res->connindex;
+    item->cmd.type = cmd_bind_insert;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
+    item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // sql string
+    item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]); // bind list
+    item->cmd.connindex = res->connindex;
 
     enif_consume_timeslice(env,500);
-
     return push_command(res->thread, item);
 }
 
@@ -3138,9 +3042,8 @@ static ERL_NIF_TERM
 noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
-    db_command *cmd = NULL;
     ErlNifPid pid;
-    void *item;
+    qitem *item;
 
     if(argc != 3)
         return enif_make_badarg(env);
@@ -3152,13 +3055,10 @@ noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env, "invalid_pid");
 
     item = command_create(res->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd)
-        return make_error_tuple(env, "command_create_failed");
 
-    cmd->type = cmd_unknown;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
+    item->cmd.type = cmd_unknown;
+    item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+    item->cmd.pid = pid;
 
     return push_command(res->thread, item);
 }
@@ -3272,9 +3172,6 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     for (i = 0; i < g_nstatic_sqls; i++)
         enif_get_string(env,param[i],g_static_sqls[i],256,ERL_NIF_LATIN1);
 
-
-    g_dbcount_mutex = enif_mutex_create("dbcountmutex");
-
     rt = enif_open_resource_type(env, "actordb_driver_nif", "db_connection_type",
 				destruct_connection, ERL_NIF_RT_CREATE, NULL);
     if(!rt)
@@ -3299,7 +3196,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     memset(g_threads,0,sizeof(db_thread)*g_nthreads);
     memset(&g_control_thread,0,sizeof(db_thread));
     g_control_thread.index = -1;
-    g_control_thread.commands = queue_create(command_destroy);
+    g_control_thread.commands = queue_create();
 
     if(enif_thread_create("db_connection", &(g_control_thread.tid), thread_func, &(g_control_thread), NULL) != 0)
     {
@@ -3315,7 +3212,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
         g_threads[i].pathlen = strlen(g_threads[i].path);
         g_threads[i].index = i;
         sqlite3_randomness(4,&g_threads[i].threadNum);
-        g_threads[i].commands = queue_create(command_destroy);
+        g_threads[i].commands = queue_create();
         g_threads[i].conns = malloc(sizeof(db_connection)*1024);
         memset(g_threads[i].conns,0,sizeof(db_connection)*1024);
         g_threads[i].nconns = 1024;
@@ -3337,9 +3234,8 @@ on_unload(ErlNifEnv* env, void* priv_data)
     int i;
     for (i = -1; i < g_nthreads; i++)
     {
-        void *item = command_create(i);
-        db_command *cmd = queue_get_item_data(item);
-        cmd->type = cmd_stop;
+        qitem *item = command_create(i);
+        item->cmd.type = cmd_stop;
         push_command(i, item);
 
         if (i >= 0)

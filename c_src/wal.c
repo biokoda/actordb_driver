@@ -11,7 +11,7 @@
 **
 *************************************************************************
 **
-** This file contains the implementation of a write-ahead log (WAL) used in 
+** This file contains the implementation of a write-ahead log (WAL) used in
 ** "journal_mode=WAL" mode.
 **
 ** WRITE-AHEAD LOG (WAL) FILE FORMAT
@@ -20,7 +20,7 @@
 ** Each frame records the revised content of a single page from the
 ** database file.  All changes to the database are recorded by writing
 ** frames into the WAL.  Transactions commit when a frame is written that
-** contains a commit marker.  A single WAL can and usually does record 
+** contains a commit marker.  A single WAL can and usually does record
 ** multiple transactions.  Periodically, the content of the WAL is
 ** transferred back into the database file in an operation called a
 ** "checkpoint".
@@ -47,11 +47,11 @@
 **
 ** Immediately following the wal-header are zero or more frames. Each
 ** frame consists of a 24-byte frame-header followed by a <page-size> bytes
-** of page data. The frame-header is six big-endian 32-bit unsigned 
+** of page data. The frame-header is six big-endian 32-bit unsigned
 ** integer values, as follows:
 **
 **     0: Page number.
-**     4: For commit records, the size of the database image in pages 
+**     4: For commit records, the size of the database image in pages
 **        after the commit. For all other records, zero.
 **     8: Salt-1 (copied from the header)
 **    12: Salt-2 (copied from the header)
@@ -77,7 +77,7 @@
 ** the checksum.  The checksum is computed by interpreting the input as
 ** an even number of unsigned 32-bit integers: x[0] through x[N].  The
 ** algorithm used for the checksum is as follows:
-** 
+**
 **   for i from 0 to n-1 step 2:
 **     s0 += x[i] + s1;
 **     s1 += x[i+1] + s0;
@@ -85,7 +85,7 @@
 **
 ** Note that s0 and s1 are both weighted checksums using fibonacci weights
 ** in reverse order (the largest fibonacci weight occurs on the first element
-** of the sequence being summed.)  The s1 value spans all 32-bit 
+** of the sequence being summed.)  The s1 value spans all 32-bit
 ** terms of the sequence whereas s0 omits the final term.
 **
 ** On a checkpoint, the WAL is first VFS.xSync-ed, then valid content of the
@@ -118,19 +118,19 @@
 ** multiple concurrent readers to view different versions of the database
 ** content simultaneously.
 **
-** The reader algorithm in the previous paragraphs works correctly, but 
+** The reader algorithm in the previous paragraphs works correctly, but
 ** because frames for page P can appear anywhere within the WAL, the
 ** reader has to scan the entire WAL looking for page P frames.  If the
 ** WAL is large (multiple megabytes is typical) that scan can be slow,
 ** and read performance suffers.  To overcome this problem, a separate
 ** data structure called the wal-index is maintained to expedite the
 ** search for frames of a particular page.
-** 
+**
 ** WAL-INDEX FORMAT
 **
 ** Conceptually, the wal-index is shared memory, though VFS implementations
 ** might choose to implement the wal-index using a mmapped file.  Because
-** the wal-index is shared memory, SQLite does not support journal_mode=WAL 
+** the wal-index is shared memory, SQLite does not support journal_mode=WAL
 ** on a network filesystem.  All users of the database must be able to
 ** share memory.
 **
@@ -144,28 +144,28 @@
 ** byte order of the host computer.
 **
 ** The purpose of the wal-index is to answer this question quickly:  Given
-** a page number P and a maximum frame index M, return the index of the 
+** a page number P and a maximum frame index M, return the index of the
 ** last frame in the wal before frame M for page P in the WAL, or return
 ** NULL if there are no frames for page P in the WAL prior to M.
 **
 ** The wal-index consists of a header region, followed by an one or
-** more index blocks.  
+** more index blocks.
 **
 ** The wal-index header contains the total number of frames within the WAL
 ** in the mxFrame field.
 **
-** Each index block except for the first contains information on 
+** Each index block except for the first contains information on
 ** HASHTABLE_NPAGE frames. The first index block contains information on
-** HASHTABLE_NPAGE_ONE frames. The values of HASHTABLE_NPAGE_ONE and 
+** HASHTABLE_NPAGE_ONE frames. The values of HASHTABLE_NPAGE_ONE and
 ** HASHTABLE_NPAGE are selected so that together the wal-index header and
 ** first index block are the same size as all other index blocks in the
 ** wal-index.
 **
 ** Each index block contains two sections, a page-mapping that contains the
-** database page number associated with each wal frame, and a hash-table 
+** database page number associated with each wal frame, and a hash-table
 ** that allows readers to query an index block for a specific page number.
 ** The page-mapping is an array of HASHTABLE_NPAGE (or HASHTABLE_NPAGE_ONE
-** for the first index block) 32-bit page numbers. The first entry in the 
+** for the first index block) 32-bit page numbers. The first entry in the
 ** first index-block contains the database page number corresponding to the
 ** first frame in the WAL file. The first entry in the second index block
 ** in the WAL file corresponds to the (HASHTABLE_NPAGE_ONE+1)th frame in
@@ -186,8 +186,8 @@
 **
 ** The hash table consists of HASHTABLE_NSLOT 16-bit unsigned integers.
 ** HASHTABLE_NSLOT = 2*HASHTABLE_NPAGE, and there is one entry in the
-** hash table for each page number in the mapping section, so the hash 
-** table is never more than half full.  The expected number of collisions 
+** hash table for each page number in the mapping section, so the hash
+** table is never more than half full.  The expected number of collisions
 ** prior to finding a match is 1.  Each entry of the hash table is an
 ** 1-based index of an entry in the mapping section of the same
 ** index block.   Let K be the 1-based index of the largest entry in
@@ -206,12 +206,12 @@
 ** reached) until an unused hash slot is found. Let the first unused slot
 ** be at index iUnused.  (iUnused might be less than iKey if there was
 ** wrap-around.) Because the hash table is never more than half full,
-** the search is guaranteed to eventually hit an unused entry.  Let 
+** the search is guaranteed to eventually hit an unused entry.  Let
 ** iMax be the value between iKey and iUnused, closest to iUnused,
 ** where aHash[iMax]==P.  If there is no iMax entry (if there exists
 ** no hash slot such that aHash[i]==p) then page P is not in the
 ** current index block.  Otherwise the iMax-th mapping entry of the
-** current index block corresponds to the last entry that references 
+** current index block corresponds to the last entry that references
 ** page P.
 **
 ** A hash search begins with the last index block and moves toward the
@@ -236,7 +236,7 @@
 ** if no values greater than K0 had ever been inserted into the hash table
 ** in the first place - which is what reader one wants.  Meanwhile, the
 ** second reader using K1 will see additional values that were inserted
-** later, which is exactly what reader two wants.  
+** later, which is exactly what reader two wants.
 **
 ** When a rollback occurs, the value of K is decreased. Hash table entries
 ** that correspond to frames greater than the new K value are removed
@@ -264,7 +264,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 ** values in the wal-header are correct and (b) the version field is not
 ** WAL_MAX_VERSION, recovery fails and SQLite returns SQLITE_CANTOPEN.
 **
-** Similarly, if a client successfully reads a wal-index header (i.e. the 
+** Similarly, if a client successfully reads a wal-index header (i.e. the
 ** checksum test is successful) and finds that the version field is not
 ** WALINDEX_MAX_VERSION, then no read-transaction is opened and SQLite
 ** returns SQLITE_CANTOPEN.
@@ -301,7 +301,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 ** There is one entry in aReadMark[] for each reader lock.  If a reader
 ** holds read-lock K, then the value in aReadMark[K] is no greater than
 ** the mxFrame for that reader.  The value READMARK_NOT_USED (0xffffffff)
-** for any aReadMark[] means that entry is unused.  aReadMark[0] is 
+** for any aReadMark[] means that entry is unused.  aReadMark[0] is
 ** a special case; its value is never used and it exists as a place-holder
 ** to avoid having to offset aReadMark[] indexs by one.  Readers holding
 ** WAL_READ_LOCK(0) always ignore the entire WAL and read all content
@@ -321,7 +321,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 ** previous sentence is when nBackfill equals mxFrame (meaning that everything
 ** in the WAL has been backfilled into the database) then new readers
 ** will choose aReadMark[0] which has value 0 and hence such reader will
-** get all their all content directly from the database file and ignore 
+** get all their all content directly from the database file and ignore
 ** the WAL.
 **
 ** Writers normally append new frames to the end of the WAL.  However,
@@ -359,14 +359,14 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 ** big-endian format in the first 4 bytes of a WAL file.
 **
 ** If the LSB is set, then the checksums for each frame within the WAL
-** file are calculated by treating all data as an array of 32-bit 
-** big-endian words. Otherwise, they are calculated by interpreting 
+** file are calculated by treating all data as an array of 32-bit
+** big-endian words. Otherwise, they are calculated by interpreting
 ** all data as 32-bit little-endian words.
 */
 #define WAL_MAGIC 0x377f0682
 
 /*
-** Return the offset of frame iFrame in the write-ahead log file, 
+** Return the offset of frame iFrame in the write-ahead log file,
 ** assuming a database page size of szPage bytes. The offset returned
 ** is to the start of the write-ahead log frame-header.
 */
@@ -379,7 +379,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 ** Candidate values for Wal.exclusiveMode.
 */
 #define WAL_NORMAL_MODE     0
-#define WAL_EXCLUSIVE_MODE  1     
+#define WAL_EXCLUSIVE_MODE  1
 #define WAL_HEAPMEMORY_MODE 2
 
 /*
@@ -398,7 +398,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 /*
 ** This structure is used to implement an iterator that loops through
 ** all frames in the WAL in database page order. Where two or more frames
-** correspond to the same database page, the iterator visits only the 
+** correspond to the same database page, the iterator visits only the
 ** frame most recently written to the WAL (in other words, the frame with
 ** the largest index).
 **
@@ -435,7 +435,7 @@ SQLITE_PRIVATE int sqlite3WalTrace = 0;
 #define HASHTABLE_HASH_1     383                  /* Should be prime */
 #define HASHTABLE_NSLOT      (HASHTABLE_NPAGE*2)  /* Must be a power of 2 */
 
-/* 
+/*
 ** The block of page numbers associated with the first hash-table in a
 ** wal-index is smaller than usual. This is so that there is a complete
 ** hash-table on each aligned 32KB page of the wal-index.
@@ -479,7 +479,7 @@ static int walIndexPage(Wal *pWal, int iPage, u32 **ppPage){
       if( !pWal->apWiData[iPage] ) rc = SQLITE_NOMEM;
     // }
     // else{
-    //   rc = sqlite3OsShmMap(pWal->pDbFd, iPage, WALINDEX_PGSZ, 
+    //   rc = sqlite3OsShmMap(pWal->pDbFd, iPage, WALINDEX_PGSZ,
     //       pWal->writeLock, (void **)&pWal->apWiData[iPage]
     //   );
     //   if( rc==SQLITE_READONLY ){
@@ -523,7 +523,7 @@ static WalIndexHdr *walIndexHdr(Wal *pWal){
 )
 
 /*
-** Generate or extend an 8 byte checksum based on the data in 
+** Generate or extend an 8 byte checksum based on the data in
 ** array aByte[] and the initial values of aIn[0] and aIn[1] (or
 ** initial values of 0 and 0 if aIn==NULL).
 **
@@ -595,14 +595,14 @@ static void walIndexWriteHdr(Wal *pWal){
 
 /*
 ** ActorDB modification - added more data (actor index, actor path, writeNumber, writeTermNumber)
-** Also checksum is not cummulative from beginning of wal. 
+** Also checksum is not cummulative from beginning of wal.
 
 ** This function encodes a single frame header and writes it to a buffer
-** supplied by the caller. A frame-header is made up of a series of 
+** supplied by the caller. A frame-header is made up of a series of
 ** 4-byte big-endian integers, as follows:
 **
 **     0: Page number.
-**     4: For commit records, the size of the database image in pages 
+**     4: For commit records, the size of the database image in pages
 **        after the commit. For all other records, zero.
 **     8: writeNumber (ActorDB addition)
 **    16: writeTermNumber (ActorDB addition)
@@ -628,7 +628,7 @@ static void walEncodeFrame(
 
   if (pWal->thread)
     conn = pWal->thread->curConn;
-  
+
   sqlite3Put4byte(&aFrame[0], iPage);
   sqlite3Put4byte(&aFrame[4], nTruncate);
   if (conn)
@@ -682,7 +682,7 @@ static int walDecodeFrame(
   char zeroFrame = 0;
 
   /* A frame is only valid if the salt values in the frame-header
-  ** match the salt values in the wal-header. 
+  ** match the salt values in the wal-header.
   */
   if( memcmp(aSalt, &aFrame[128], 8)!=0 ){
   	int i;
@@ -704,8 +704,8 @@ static int walDecodeFrame(
   pgno = sqlite3Get4byte(&aFrame[0]);
 
   /* A frame is only valid if a checksum of the WAL header,
-  ** all prior frams, the first 16 bytes of this frame-header, 
-  ** and the frame-data matches the checksum in the last 8 
+  ** all prior frams, the first 16 bytes of this frame-header,
+  ** and the frame-data matches the checksum in the last 8
   ** bytes of this frame-header.
   */
   if (aData != NULL && zeroFrame == 0)
@@ -713,8 +713,8 @@ static int walDecodeFrame(
     nativeCksum = (bigEndCksum==SQLITE_BIGENDIAN);
     walChecksumBytes(nativeCksum, aFrame, 136, aCksum, aCksum);
     walChecksumBytes(nativeCksum, aData, SQLITE_DEFAULT_PAGE_SIZE, aCksum, aCksum);
-    if( aCksum[0]!=sqlite3Get4byte(&aFrame[136]) 
-     || aCksum[1]!=sqlite3Get4byte(&aFrame[140]) 
+    if( aCksum[0]!=sqlite3Get4byte(&aFrame[136])
+     || aCksum[1]!=sqlite3Get4byte(&aFrame[140])
     ){
     /* Checksum failed. */
 	// *writeNumber = readUInt64(&aFrame[8]);
@@ -748,7 +748,7 @@ static int walDecodeFrame(
   *pnTruncate = sqlite3Get4byte(&aFrame[4]);
   return 1;
 }
-    
+
 
 /*
 ** Set or release locks on the WAL.  Locks are either shared or exclusive.
@@ -805,15 +805,15 @@ static int walNextHash(int iPriorHash){
   return (iPriorHash+1)&(HASHTABLE_NSLOT-1);
 }
 
-/* 
+/*
 ** Return pointers to the hash table and page number array stored on
 ** page iHash of the wal-index. The wal-index is broken into 32KB pages
 ** numbered starting from 0.
 **
 ** Set output variable *paHash to point to the start of the hash table
-** in the wal-index file. Set *piZero to one less than the frame 
+** in the wal-index file. Set *piZero to one less than the frame
 ** number of the first frame indexed by this hash table. If a
-** slot in the hash table is set to N, it refers to frame number 
+** slot in the hash table is set to N, it refers to frame number
 ** (*piZero+N) in the log.
 **
 ** Finally, set *paPgno so that *paPgno[1] is the page number of the
@@ -843,7 +843,7 @@ static int walHashGet(
     }else{
       iZero = HASHTABLE_NPAGE_ONE + (iHash-1)*HASHTABLE_NPAGE;
     }
-  
+
     *paPgno = &aPgno[-1];
     *paHash = aHash;
     *piZero = iZero;
@@ -854,7 +854,7 @@ static int walHashGet(
 /*
 ** Return the number of the wal-index page that contains the hash-table
 ** and page-number array that contain entries corresponding to WAL frame
-** iFrame. The wal-index is broken up into 32KB pages. Wal-index pages 
+** iFrame. The wal-index is broken up into 32KB pages. Wal-index pages
 ** are numbered starting from 0.
 */
 static int walFramePage(u32 iFrame){
@@ -906,7 +906,7 @@ static void walCleanupHash(Wal *pWal){
 
   if( pWal->hdr.mxFrame==0 ) return;
 
-  /* Obtain pointers to the hash-table and page-number array containing 
+  /* Obtain pointers to the hash-table and page-number array containing
   ** the entry that corresponds to frame pWal->hdr.mxFrame. It is guaranteed
   ** that the page said hash-table and array reside on is already mapped.
   */
@@ -924,9 +924,9 @@ static void walCleanupHash(Wal *pWal){
       aHash[i] = 0;
     }
   }
-  
+
   /* Zero the entries in the aPgno array that correspond to frames with
-  ** frame numbers greater than pWal->hdr.mxFrame. 
+  ** frame numbers greater than pWal->hdr.mxFrame.
   */
   nByte = (int)((char *)aHash - (char *)&aPgno[iLimit+1]);
   memset((void *)&aPgno[iLimit+1], 0, nByte);
@@ -971,9 +971,9 @@ static int walIndexAppend(Wal *pWal, u32 iFrame, u32 iPage){
 
     idx = iFrame - iZero;
     assert( idx <= HASHTABLE_NSLOT/2 + 1 );
-    
+
     /* If this is the first entry to be added to this hash-table, zero the
-    ** entire hash table and aPgno[] array before proceeding. 
+    ** entire hash table and aPgno[] array before proceeding.
     */
     if( idx==1 ){
       int nByte = (int)((u8 *)&aHash[HASHTABLE_NSLOT] - (u8 *)&aPgno[1]);
@@ -982,8 +982,8 @@ static int walIndexAppend(Wal *pWal, u32 iFrame, u32 iPage){
 
     /* If the entry in aPgno[] is already set, then the previous writer
     ** must have exited unexpectedly in the middle of a transaction (after
-    ** writing one or more dirty pages to the WAL to free up memory). 
-    ** Remove the remnants of that writers uncommitted transaction from 
+    ** writing one or more dirty pages to the WAL to free up memory).
+    ** Remove the remnants of that writers uncommitted transaction from
     ** the hash-table before writing any new entries.
     */
     if( aPgno[idx] ){
@@ -1033,7 +1033,7 @@ static int walIndexAppend(Wal *pWal, u32 iFrame, u32 iPage){
 
 
 /*
-** Recover the wal-index by reading the write-ahead log file. 
+** Recover the wal-index by reading the write-ahead log file.
 **
 ** This routine first tries to establish an exclusive lock on the
 ** wal-index to prevent other threads/processes from doing anything
@@ -1113,7 +1113,7 @@ int checkpoint_continue(db_thread *thread)
 			// {
 			// 	return 2;
 			// }
-			
+
 			rc = sqlite3_exec(thread->conns[i].db,"select name, sql from sqlite_master where type='table';",NULL,NULL,NULL);
 
 			// just call api function. It will call sqlite3WalCheckpoint, which will move to last
@@ -1200,7 +1200,7 @@ int read_thread_wal(db_thread *thread)
 
     if (!(strlen(ent->d_name) > 4 && ent->d_name[0] == 'w' && ent->d_name[1] == 'a' && ent->d_name[2] == 'l' && ent->d_name[3] == '.'))
       continue;
-    
+
     snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,ent->d_name);
     DBG((g_log,"Reading %s\n",filename));
     pWalFd = sqlite3MallocZero(thread->vfs->szOsFile);
@@ -1269,7 +1269,7 @@ int read_thread_wal(db_thread *thread)
   // strcpy(filename,thread->path);
   sprintf(filename,"%s/",thread->path);
 
-  
+
   rc = SQLITE_OK;
   while(rc == SQLITE_OK)
   {
@@ -1320,7 +1320,7 @@ int read_thread_wal(db_thread *thread)
         	DBG((g_log,"Can not read file\r\n"));
         	break;
         }
-        isValid = walDecodeFrame(curWal->aSalt,curWal->bigEndCksum, &pgno, &nTruncate,filename+thread->pathlen+1,&actorIndex, 
+        isValid = walDecodeFrame(curWal->aSalt,curWal->bigEndCksum, &pgno, &nTruncate,filename+thread->pathlen+1,&actorIndex,
         						&writeNumber,&writeTermNumber,&threadWriteNum,&prevFrameOffset,aData, aFrame);
         if( !isValid )
         {
@@ -1411,7 +1411,7 @@ int read_thread_wal(db_thread *thread)
 		    curConn->wal = tmpWal;
           }
         }
-        
+
         if (curConn->lastWriteThreadNum != threadWriteNum && curConn->wal->dirty)
         {
         	// previous transaction was not finished, we must undo index for it
@@ -1442,7 +1442,7 @@ int read_thread_wal(db_thread *thread)
           testcase( curWal->szPage<=32768 );
           testcase( curWal->szPage>=65536 );
 
-          
+
           walIndexWriteHdr(curConn->wal);
           pInfo = walCkptInfo(curConn->wal);
           pInfo->nBackfill = 0;
@@ -1475,13 +1475,13 @@ int read_thread_wal(db_thread *thread)
       	// If conn had and wals in current file, it has an open read transaction
       	sqlite3WalEndWriteTransaction(curConn->wal);
       	sqlite3WalEndReadTransaction(curConn->wal);
-      	// necessary to cause clear page cache on first read/write to DB. 
+      	// necessary to cause clear page cache on first read/write to DB.
       	curConn->wal->init = 0;
       }
-      	
+
       sqlite3_free(aFrame);
     }
-    
+
     // Start with newwest file
     prevWal = thread->walFile;
     // Move back until reaching next wal from current
@@ -1511,7 +1511,7 @@ wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs)
       sqlite3_free(pWalFd);
       return NULL;
     }
-	
+
     walFile = malloc(sizeof(wal_file));
     memset(walFile,0,sizeof(wal_file));
     strncpy(walFile->filename,filename,MAX_PATHNAME);
@@ -1528,7 +1528,7 @@ int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile)
   wal_file walFile;
   i64 nSize = 0;
   int rc;
-  
+
   *outWalFile = NULL;
   memset(&walFile,0,sizeof(wal_file));
 
@@ -1550,16 +1550,16 @@ int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile)
       return SQLITE_CANTOPEN_BKPT;
 
     /* If the database page size is not a power of two, or is greater than
-    ** SQLITE_MAX_PAGE_SIZE, conclude that the WAL file contains no valid 
+    ** SQLITE_MAX_PAGE_SIZE, conclude that the WAL file contains no valid
     ** data. Similarly, if the 'magic' value is invalid, ignore the whole
     ** WAL file.
     */
     magic = sqlite3Get4byte(&aBuf[0]);
     szPage = sqlite3Get4byte(&aBuf[8]);
-    if( (magic&0xFFFFFFFE)!=WAL_MAGIC 
-     || szPage&(szPage-1) 
-     || szPage>SQLITE_MAX_PAGE_SIZE 
-     || szPage<512 
+    if( (magic&0xFFFFFFFE)!=WAL_MAGIC
+     || szPage&(szPage-1)
+     || szPage>SQLITE_MAX_PAGE_SIZE
+     || szPage<512
     ){
       return SQLITE_CANTOPEN_BKPT;
     }
@@ -1573,9 +1573,9 @@ int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile)
     walFile.aSalt[1] = sqlite3Get4byte(&aBuf[24]);
 
     /* Verify that the WAL header checksum is correct */
-    walChecksumBytes(walFile.bigEndCksum==SQLITE_BIGENDIAN, 
+    walChecksumBytes(walFile.bigEndCksum==SQLITE_BIGENDIAN,
         aBuf, WAL_HDRSIZE-2*4, 0, aFrameCksum);
-    
+
     if( aFrameCksum[0]!=sqlite3Get4byte(&aBuf[32])
      || aFrameCksum[1]!=sqlite3Get4byte(&aBuf[36])
     ){
@@ -1697,7 +1697,7 @@ static void walMerge(
     ht_slot logpage;
     Pgno dbpage;
 
-    if( (iLeft<nLeft) 
+    if( (iLeft<nLeft)
      && (iRight>=nRight || aContent[aLeft[iLeft]]<aContent[aRight[iRight]])
     ){
       logpage = aLeft[iLeft++];
@@ -1791,7 +1791,7 @@ static void walMergesort(
 #endif
 }
 
-/* 
+/*
 ** Free an iterator allocated by walIteratorInit().
 */
 static void walIteratorFree(WalIterator *p){
@@ -1799,7 +1799,7 @@ static void walIteratorFree(WalIterator *p){
 }
 
 /*
-** Construct a WalInterator object that can be used to loop over all 
+** Construct a WalInterator object that can be used to loop over all
 ** pages in the WAL in ascending order. The caller must hold the checkpoint
 ** lock.
 **
@@ -1827,7 +1827,7 @@ static int walIteratorInit(Wal *pWal, WalIterator **pp){
 
   /* Allocate space for the WalIterator object. */
   nSegment = walFramePage(iLast) + 1;
-  nByte = sizeof(WalIterator) 
+  nByte = sizeof(WalIterator)
         + (nSegment-1)*sizeof(struct WalSegment)
         + iLast*sizeof(ht_slot);
   p = (WalIterator *)sqlite3_malloc(nByte);
@@ -1866,7 +1866,7 @@ static int walIteratorInit(Wal *pWal, WalIterator **pp){
       }
       aIndex = &((ht_slot *)&p->aSegment[p->nSegment])[iZero];
       iZero++;
-  
+
       for(j=0; j<nEntry; j++){
         aIndex[j] = (ht_slot)j;
       }
@@ -1923,8 +1923,8 @@ static int walPagesize(Wal *pWal){
 ** that a concurrent reader might be using.
 **
 ** All I/O barrier operations (a.k.a fsyncs) occur in this routine when
-** SQLite is in WAL-mode in synchronous=NORMAL.  That means that if 
-** checkpoints are always run by a background thread or background 
+** SQLite is in WAL-mode in synchronous=NORMAL.  That means that if
+** checkpoints are always run by a background thread or background
 ** process, foreground threads will never block on a lengthy fsync call.
 **
 ** Fsync is called on the WAL before writing content out of the WAL and
@@ -1937,7 +1937,7 @@ static int walPagesize(Wal *pWal){
 ** database file.
 **
 ** This routine uses and updates the nBackfill field of the wal-index header.
-** This is the only routine that will increase the value of nBackfill.  
+** This is the only routine that will increase the value of nBackfill.
 ** (A WAL reset or recovery will revert nBackfill to zero, but not increase
 ** its value.)
 **
@@ -2143,7 +2143,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 	        	DBG((g_log,"Can not read file\r\n"));
 	        	break;
 	        }
-	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
+	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex,
 	        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset,NULL, buffer);
 	        if(!rc || !pgno || actorIndex != conn->connindex)
 	        {
@@ -2247,7 +2247,7 @@ int wal_rewind(db_connection *conn, u64 evnum)
 	return found;
 }
 
-int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u8* buffer, 
+int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u8* buffer,
 	int *nFilled,		// OUT: how many bytes written to buffer
 	char *activeWal) 	// OUT: are we reading active wal file
 {
@@ -2293,7 +2293,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 		        {
 		        	return SQLITE_DONE;
 		        }
-		        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
+		        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex,
 		        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset, NULL, buffer);
 		        // DBG((g_log,"Finding initial pos %llu %llu %d %d %lld\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
 		        if(!rc || !pgno || actorIndex != conn->connindex)
@@ -2342,7 +2342,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 				}
 				iPrevOffset = iOffset;
 				iOffset = 0;
-				rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
+				rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex,
 	        			&curEvnum,&curTerm,&threadWriteNum,&iOffset,NULL, buffer);
 				if(!rc || !pgno || actorIndex != conn->connindex)
 					continue;
@@ -2378,7 +2378,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 			}
 		}
 	}
-	
+
 	wal = conn->wal;
 	while (wal != NULL && wal->walIndex != iter->walIndex)
 		wal = wal->prev;
@@ -2398,7 +2398,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 	        {
 	        	break;
 	        }
-	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex, 
+	        rc = walDecodeFrame(wal->hdr.aSalt,wal->hdr.bigEndCksum, &pgno, &nTruncate,filename,&actorIndex,
 	        			&curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset,buffer+(*nFilled)+WAL_FRAME_HDRSIZE, buffer+(*nFilled));
 	        // DBG((g_log,"Decode finding next %llu %llu %d %d %lld\r\n",curEvnum,wal->walIndex, actorIndex, conn->connindex, iOffset));
 	        if(!rc || !pgno || actorIndex != conn->connindex)
@@ -2437,7 +2437,7 @@ int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u
 
 	*activeWal = iter->walIndex == conn->wal->walIndex;
 
-	return rc;	
+	return rc;
 }
 
 // conn      -> connection to iterate wal from
@@ -2586,7 +2586,7 @@ static int walIndexTryHdr(Wal *pWal, int *pChanged){
 
   if( memcmp(&h1, &h2, sizeof(h1))!=0 ){
     return 1;   /* Dirty read */
-  }  
+  }
   if( h1.isInit==0 ){
     return 1;   /* Malformed header - probably all zeros */
   }
@@ -2616,7 +2616,7 @@ static int walIndexTryHdr(Wal *pWal, int *pChanged){
 ** changed by this operation.  If pWal->hdr is unchanged, set *pChanged
 ** to 0.
 **
-** If the wal-index header is successfully read, return SQLITE_OK. 
+** If the wal-index header is successfully read, return SQLITE_OK.
 ** Otherwise an SQLite error code.
 */
 static int walIndexReadHdr(Wal *pWal, int *pChanged){
@@ -2624,7 +2624,7 @@ static int walIndexReadHdr(Wal *pWal, int *pChanged){
   int badHdr;                     /* True if a header read failed */
   u32 *page0;            /* Chunk of wal-index containing header */
 
-  /* Ensure that page 0 of the wal-index (the page that contains the 
+  /* Ensure that page 0 of the wal-index (the page that contains the
   ** wal-index header) is mapped. Return early if an error occurs here.
   */
   assert( pChanged );
@@ -2636,7 +2636,7 @@ static int walIndexReadHdr(Wal *pWal, int *pChanged){
 
   /* If the first page of the wal-index has been mapped, try to read the
   ** wal-index header immediately, without holding any lock. This usually
-  ** works, but may fail if the wal-index header is corrupt or currently 
+  ** works, but may fail if the wal-index header is corrupt or currently
   ** being modified by another thread or process.
   */
   badHdr = (page0 ? walIndexTryHdr(pWal, pChanged) : 1);
@@ -2668,7 +2668,7 @@ static int walIndexReadHdr(Wal *pWal, int *pChanged){
       walUnlockExclusive(pWal, WAL_WRITE_LOCK, 1);
     }
   }
-  
+
   // Force changed to 1 if this is first time we have reached this point.
   // Wal was initialized by read_thread_wal, but data structures outside wal
   // don't know that. Normally this would occur here (in walIndexRecover).
@@ -2707,10 +2707,10 @@ static int walIndexReadHdr(Wal *pWal, int *pChanged){
 **
 ** The useWal parameter is true to force the use of the WAL and disable
 ** the case where the WAL is bypassed because it has been completely
-** checkpointed.  If useWal==0 then this routine calls walIndexReadHdr() 
-** to make a copy of the wal-index header into pWal->hdr.  If the 
-** wal-index header has changed, *pChanged is set to 1 (as an indication 
-** to the caller that the local paget cache is obsolete and needs to be 
+** checkpointed.  If useWal==0 then this routine calls walIndexReadHdr()
+** to make a copy of the wal-index header into pWal->hdr.  If the
+** wal-index header has changed, *pChanged is set to 1 (as an indication
+** to the caller that the local paget cache is obsolete and needs to be
 ** flushed.)  When useWal==1, the wal-index header is assumed to already
 ** be loaded and the pChanged parameter is unused.
 **
@@ -2725,7 +2725,7 @@ static int walIndexReadHdr(Wal *pWal, int *pChanged){
 ** bad luck when there is lots of contention for the wal-index, but that
 ** possibility is so small that it can be safely neglected, we believe.
 **
-** On success, this routine obtains a read lock on 
+** On success, this routine obtains a read lock on
 ** WAL_READ_LOCK(pWal->readLock).  The pWal->readLock integer is
 ** in the range 0 <= pWal->readLock < WAL_NREADER.  If pWal->readLock==(-1)
 ** that means the Wal does not hold any read lock.  The reader must not
@@ -2759,16 +2759,16 @@ static int walTryBeginRead(Wal *pWal, int *pChanged, int useWal, int cnt){
   **
   ** Circumstances that cause a RETRY should only last for the briefest
   ** instances of time.  No I/O or other system calls are done while the
-  ** locks are held, so the locks should not be held for very long. But 
+  ** locks are held, so the locks should not be held for very long. But
   ** if we are unlucky, another process that is holding a lock might get
-  ** paged out or take a page-fault that is time-consuming to resolve, 
+  ** paged out or take a page-fault that is time-consuming to resolve,
   ** during the few nanoseconds that it is holding the lock.  In that case,
   ** it might take longer than normal for the lock to free.
   **
   ** After 5 RETRYs, we begin calling sqlite3OsSleep().  The first few
   ** calls to sqlite3OsSleep() have a delay of 1 microsecond.  Really this
   ** is more of a scheduler yield than an actual delay.  But on the 10th
-  ** an subsequent retries, the delays start becoming longer and longer, 
+  ** an subsequent retries, the delays start becoming longer and longer,
   ** so that on the 100th (and last) RETRY we delay for 323 milliseconds.
   ** The total delay time before giving up is less than 10 seconds.
   */
@@ -2795,9 +2795,9 @@ static int walTryBeginRead(Wal *pWal, int *pChanged, int useWal, int cnt){
       if( pWal->apWiData[0]==0 ){
         /* This branch is taken when the xShmMap() method returns SQLITE_BUSY.
         ** We assume this is a transient condition, so return WAL_RETRY. The
-        ** xShmMap() implementation used by the default unix and win32 VFS 
-        ** modules may return SQLITE_BUSY due to a race condition in the 
-        ** code that determines whether or not the shared-memory region 
+        ** xShmMap() implementation used by the default unix and win32 VFS
+        ** modules may return SQLITE_BUSY due to a race condition in the
+        ** code that determines whether or not the shared-memory region
         ** must be zeroed before the requested page is returned.
         */
         rc = WAL_RETRY;
@@ -2829,7 +2829,7 @@ static int walTryBeginRead(Wal *pWal, int *pChanged, int useWal, int cnt){
         ** snapshot. Since holding READ_LOCK(0) prevents a checkpoint from
         ** happening, this is usually correct.
         **
-        ** However, if frames have been appended to the log (or if the log 
+        ** However, if frames have been appended to the log (or if the log
         ** is wrapped and written for that matter) before the READ_LOCK(0)
         ** is obtained, that is not necessarily true. A checkpointer may
         ** have started to backfill the appended frames but crashed before
@@ -2902,7 +2902,7 @@ static int walTryBeginRead(Wal *pWal, int *pChanged, int useWal, int cnt){
     **
     ** This does not guarantee that the copy of the wal-index header is up to
     ** date before proceeding. That would not be possible without somehow
-    ** blocking writers. It only guarantees that a dangerous checkpoint or 
+    ** blocking writers. It only guarantees that a dangerous checkpoint or
     ** log-wrap (either of which would require an exclusive lock on
     ** WAL_READ_LOCK(mxI)) has not occurred since the snapshot was valid.
     */
@@ -3015,7 +3015,7 @@ int sqlite3WalOpen(
     {
     	pRet = thread->curConn->wal;
     }
-		
+
 	if (!pRet)
 	{
 		pRet = sqlite3MallocZero(sizeof(Wal));
@@ -3031,7 +3031,7 @@ int sqlite3WalOpen(
 		return SQLITE_ERROR;
 
 	do
-	{	
+	{
 		curWal->pVfs = pVfs;
 	    curWal->pDbFd = pDbFd;
 	    curWal->thread = thread;
@@ -3057,7 +3057,7 @@ int sqlite3WalOpen(
 	    }
 	}while(curWal);
 
-    
+
     *ppWal = pRet;
 
     return SQLITE_OK;
@@ -3101,7 +3101,7 @@ int sqlite3WalFrames(
   WalWriter w;                    /* The writer */
   // db_connection *con = (*pWal)->thread->curConn;
   wal_file *thrWalFile = (*pWal)->thread->walFile;
-  
+
   assert( pList );
   /* If this frame set completes a transaction, then nTruncate>0.  If
   ** nTruncate==0 then this frame set does not complete the transaction. */
@@ -3148,7 +3148,7 @@ int sqlite3WalFrames(
 	    newWal->pWalFd = thrWalFile->pWalFd;
 	    newWal->walIndex = thrWalFile->walIndex;
 	    newWal->init = 0;
-	    
+
 	    newWal->thread->curConn->wal = newWal;
 	    *pWal = newWal;
 
@@ -3189,7 +3189,7 @@ int sqlite3WalFrames(
     walChecksumBytes((u8)((WAL_MAGIC | SQLITE_BIGENDIAN)&0x00000001) == SQLITE_BIGENDIAN, aWalHdr, WAL_HDRSIZE-2*4, 0, aCksum);
     sqlite3Put4byte(&aWalHdr[32], aCksum[0]);
     sqlite3Put4byte(&aWalHdr[36], aCksum[1]);
-    
+
     (*pWal)->hdr.bigEndCksum = SQLITE_BIGENDIAN;
     (*pWal)->hdr.aFrameCksum[0] = aCksum[0];
     (*pWal)->hdr.aFrameCksum[1] = aCksum[1];
@@ -3287,7 +3287,7 @@ int sqlite3WalFrames(
   //   pWal->truncateOnCommit = 0;
   // }
 
-  /* Append data to the wal-index. It is not necessary to lock the 
+  /* Append data to the wal-index. It is not necessary to lock the
   ** wal-index to do this as the SQLITE_SHM_WRITE lock held on the wal-index
   ** guarantees that there are no other writers, and no data that may
   ** be in use by existing readers is being overwritten.
@@ -3505,7 +3505,7 @@ int sqlite3WalCheckpoint(
   }
 
   if( isChanged ){
-    /* If a new wal-index header was loaded before the checkpoint was 
+    /* If a new wal-index header was loaded before the checkpoint was
     ** performed, then the pager-cache associated with pWal is now
     ** out of date. So zero the cached wal-index header to ensure that
     ** next time the pager opens a snapshot on this database it knows that
@@ -3557,9 +3557,9 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
   {
     Pgno iMax = pWal->hdr.mxFrame;
     Pgno iFrame;
-  
+
     /* Restore the clients cache of the wal-index header to the state it
-    ** was in before the client began writing to the database. 
+    ** was in before the client began writing to the database.
     */
     memcpy(&pWal->hdr, (void *)walIndexHdr(pWal), sizeof(WalIndexHdr));
     pWal->dirty = 0;
@@ -3578,7 +3578,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
         iFrame++
       ){
         /* This call cannot fail. Unless the page for which the page number
-        ** is passed as the second argument is (a) in the cache and 
+        ** is passed as the second argument is (a) in the cache and
         ** (b) has an outstanding reference, then xUndo is either a no-op
         ** (if (a) is false) or simply expels the page from the cache (if (b)
         ** is false).
@@ -3728,7 +3728,7 @@ int sqlite3WalHeapMemory(Wal *pWal)
     return pWal != NULL;
 }
 
-/* 
+/*
 ** This function starts a write transaction on the WAL.
 **
 ** A read transaction must have already been started by a prior call
@@ -3742,7 +3742,7 @@ int sqlite3WalHeapMemory(Wal *pWal)
 ** There can only be a single writer active at a time.
 */
 int sqlite3WalBeginWriteTransaction(Wal *pWal){
-  int rc; 
+  int rc;
 
   /* Cannot start a write transaction without first holding a read
   ** transaction. */
@@ -3832,7 +3832,7 @@ void writeUInt64(unsigned char* buf, unsigned long long num)
 
 u64 readUInt64(u8* buf)
 {
-  return ((u64)buf[0] << 56) + ((u64)buf[1] << 48) + ((u64)buf[2] << 40) + ((u64)buf[3] << 32) + 
+  return ((u64)buf[0] << 56) + ((u64)buf[1] << 48) + ((u64)buf[2] << 40) + ((u64)buf[3] << 32) +
        ((u64)buf[4] << 24) + ((u64)buf[5] << 16)  + ((u64)buf[6] << 8) + buf[7];
 }
 

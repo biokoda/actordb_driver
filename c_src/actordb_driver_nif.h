@@ -48,8 +48,16 @@ typedef struct WalIndexHdr WalIndexHdr;
 typedef struct WalIterator WalIterator;
 typedef struct WalCkptInfo WalCkptInfo;
 typedef struct iterate_resource iterate_resource;
+typedef struct queue_t queue;
+typedef struct qitem_t qitem;
 
 typedef u16 ht_slot;
+
+
+int g_nthreads;
+db_thread* g_threads;
+db_thread g_control_thread;
+
 
 struct WalIterator {
   int iPrior;                     /* Last result returned from the iterator */
@@ -185,15 +193,7 @@ struct db_thread
     // Maps DBPath (relative path to db) to connections index.
     Hash walHash;
 };
-int g_nthreads;
 
-db_thread* g_threads;
-db_thread g_control_thread;
-
-#ifndef _TESTAPP_
-ErlNifUInt64 g_dbcount = 0;
-ErlNifMutex *g_dbcount_mutex = NULL;
-#endif
 
 struct db_connection
 {
@@ -312,6 +312,13 @@ typedef struct
     command_type type;
 } db_command;
 
+struct qitem_t
+{
+    qitem* next;
+    db_command cmd;
+    char blockStart;
+};
+
 
 
 #ifndef _TESTAPP_
@@ -327,10 +334,10 @@ ERL_NIF_TERM atom_done;
 ERL_NIF_TERM atom_iter;
 
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
-static ERL_NIF_TERM push_command(int thread, void *cmd);
+static ERL_NIF_TERM push_command(int thread, qitem *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 // int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
-void *command_create(int threadnum);
+qitem *command_create(int threadnum);
 static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
@@ -352,4 +359,16 @@ int read_thread_wal(db_thread*);
 void writeUInt64(unsigned char* buf, u64 num);
 void write32bit(char *p, int v);
 void write16bit(char *p, int v);
+
+
+queue *queue_create(void);
+void queue_destroy(queue *queue);
+int queue_push(queue *queue, qitem* item);
+qitem* queue_pop(queue *queue);
+// void* queue_get_item_data(void* item);
+// void queue_set_item_data(void* item, void *ndata);
+void queue_recycle(queue *queue,qitem* item);
+qitem* queue_get_item(queue *queue);
+int queue_size(queue *queue);
+
 #endif
