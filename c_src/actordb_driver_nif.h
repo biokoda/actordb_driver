@@ -50,14 +50,21 @@ typedef struct WalCkptInfo WalCkptInfo;
 typedef struct iterate_resource iterate_resource;
 typedef struct queue_t queue;
 typedef struct qitem_t qitem;
+typedef struct priv_data priv_data;
 
 typedef u16 ht_slot;
 
 
-int g_nthreads;
+// int g_nthreads;
 db_thread* g_threads;
 db_thread g_control_thread;
 
+struct priv_data
+{
+    queue *commands;
+    queue *ctrlCmds;
+    int nthreads;
+};
 
 struct WalIterator {
   int iPrior;                     /* Last result returned from the iterator */
@@ -146,10 +153,10 @@ struct wal_file
 	sqlite3_file *pWalFd;
 	u32 aSalt[2];
 	// u32 nPages;
-  u32 lastCommit; // frame number of last commit. Used in sqlite3WalUndo
-  u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
-                     // once we reach the end of actor table, we are done.
-  char filename[MAX_PATHNAME];
+    u32 lastCommit; // frame number of last commit. Used in sqlite3WalUndo
+    u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
+                       // once we reach the end of actor table, we are done.
+    char filename[MAX_PATHNAME];
 	wal_file *prev;
 };
 
@@ -186,6 +193,7 @@ struct db_thread
     u32 threadNum;
     // Index in table od threads.
     int index;
+    int nthreads;
 
     // Prepared statements. 2d array (for every type, list of sqls and versions)
     int prepSize;

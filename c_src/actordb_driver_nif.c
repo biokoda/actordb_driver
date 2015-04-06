@@ -814,10 +814,10 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
     iov[1].len = thread->control->prefixes[pos].size;
 #endif
 
-    sockets = enif_alloc(sizeof(int)*g_nthreads);
-    memset(sockets,0,sizeof(int)*g_nthreads);
+    sockets = enif_alloc(sizeof(int)*thread->nthreads);
+    memset(sockets,0,sizeof(int)*thread->nthreads);
 
-    for (i = 0; i < g_nthreads; i++)
+    for (i = 0; i < thread->nthreads; i++)
     {
         fd = socket(AF_INET,SOCK_STREAM,0);
 
@@ -955,7 +955,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
     {
         thread->control->isopen[pos] = 1;
 
-        for (i = 0; i < g_nthreads; i++)
+        for (i = 0; i < thread->nthreads; i++)
         {
             qitem *item = command_create(i);
             item->cmd.type = cmd_set_socket;
@@ -969,7 +969,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
     {
         thread->control->isopen[pos] = 0;
 
-        for (i = 0; i < g_nthreads; i++)
+        for (i = 0; i < thread->nthreads; i++)
         {
             if (sockets[i])
                 close(sockets[i]);
@@ -2231,6 +2231,7 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     qitem *item;
     unsigned int thread;
+    int nthreads = ((priv_data*)enif_priv_data(env))->nthreads;
 
     DBG((g_log,"db_open\n"));
 
@@ -2243,7 +2244,7 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_uint(env, argv[3], &thread))
         return make_error_tuple(env, "invalid_pid");
 
-    thread %= g_nthreads;
+    thread %= nthreads;
     item = command_create(thread);
 
     DBG((g_log,"db_open %d\n",(int)item->cmd.env));
@@ -2696,6 +2697,7 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     int i;
     qitem *item;
+    int nthreads = ((priv_data*)enif_priv_data(env))->nthreads;
 
     DBG((g_log, "all_tunnel_call\n"));
 
@@ -2709,7 +2711,7 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!(enif_is_binary(env,argv[2]) || enif_is_list(env,argv[2])))
         return make_error_tuple(env, "invalid bin");
 
-    for (i = 0; i < g_nthreads; i++)
+    for (i = 0; i < nthreads; i++)
     {
         item = command_create(i);
 
@@ -2732,6 +2734,7 @@ store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int i;
     qitem *item;
+    int nthreads = ((priv_data*)enif_priv_data(env))->nthreads;
 
     DBG((g_log,"store_prepared_table\n"));
 
@@ -2741,7 +2744,7 @@ store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!(enif_is_tuple(env,argv[0]) && enif_is_tuple(env,argv[1])))
         return enif_make_badarg(env);
 
-    for (i = 0; i < g_nthreads; i++)
+    for (i = 0; i < nthreads; i++)
     {
         item = command_create(i);
 
@@ -3102,7 +3105,7 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg)
 
 
 static int
-on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
+on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 {
     ErlNifResourceType *rt;
     int i = 0;
@@ -3110,12 +3113,15 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     const ERL_NIF_TERM *param1;
     char nodename[128];
     ERL_NIF_TERM head, tail;
+    priv_data *priv;
 #ifdef _WIN32
     WSADATA wsd;
     if (WSAStartup(MAKEWORD(1, 1), &wsd) != 0)
         return -1;
 #endif
-
+    priv = malloc(sizeof(priv_data));
+    memset(priv,0,sizeof(priv_data));
+    *priv_out = priv;
     memset(nodename,0,128);
     enif_get_list_cell(env,info,&head,&info);
     enif_get_list_cell(env,info,&info,&tail);
@@ -3159,8 +3165,10 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     }
 
 
-    if (!enif_get_tuple(env,param[0],&g_nthreads,&param1))
+    if (!enif_get_tuple(env,param[0],&priv->nthreads,&param1))
         return -1;
+
+    // g_nthreads = priv->nthreads;
 
     if (!enif_get_tuple(env,param[1],&i,&param))
         return -1;
@@ -3192,8 +3200,8 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     iterate_type = rt;
 
 
-    g_threads = (db_thread*)malloc(sizeof(db_thread)*g_nthreads);
-    memset(g_threads,0,sizeof(db_thread)*g_nthreads);
+    g_threads = (db_thread*)malloc(sizeof(db_thread)*priv->nthreads);
+    memset(g_threads,0,sizeof(db_thread)*priv->nthreads);
     memset(&g_control_thread,0,sizeof(db_thread));
     g_control_thread.index = -1;
     g_control_thread.commands = queue_create();
@@ -3203,9 +3211,9 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
         printf("Unable to create esqlite3 thread\r\n");
         return -1;
     }
-    DBG((g_log,"Driver starting %d threads.\n",g_nthreads));
+    DBG((g_log,"Driver starting %d threads.\n",priv->nthreads));
 
-    for (i = 0; i < g_nthreads; i++)
+    for (i = 0; i < priv->nthreads; i++)
     {
         if (!(enif_get_string(env,param1[i],g_threads[i].path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
             return -1;
@@ -3216,6 +3224,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
         g_threads[i].conns = malloc(sizeof(db_connection)*1024);
         memset(g_threads[i].conns,0,sizeof(db_connection)*1024);
         g_threads[i].nconns = 1024;
+        g_threads[i].nthreads = priv->nthreads;
         g_threads[i].wal_page_hook = wal_page_hook;
 
         if(enif_thread_create("db_connection", &(g_threads[i].tid), thread_func, &(g_threads[i]), NULL) != 0)
@@ -3229,10 +3238,11 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 }
 
 static void
-on_unload(ErlNifEnv* env, void* priv_data)
+on_unload(ErlNifEnv* env, void* pd)
 {
     int i;
-    for (i = -1; i < g_nthreads; i++)
+    int nthreads = ((priv_data*)pd)->nthreads;
+    for (i = -1; i < nthreads; i++)
     {
         qitem *item = command_create(i);
         item->cmd.type = cmd_stop;
