@@ -92,7 +92,7 @@ queue_destroy(queue *queue)
     while(queue->reuseq != NULL)
     {
         qitem *tmp = queue->reuseq->next;
-        if(tmp->cmd.env != NULL)
+        if(tmp != NULL && tmp->cmd.env != NULL)
            enif_free_env(tmp->cmd.env);
         if (queue->reuseq->blockStart)
         {
