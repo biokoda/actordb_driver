@@ -3100,7 +3100,8 @@ int sqlite3WalFrames(
   i64 iOffset;                    /* Next byte to write in WAL file */
   WalWriter w;                    /* The writer */
   // db_connection *con = (*pWal)->thread->curConn;
-  wal_file *thrWalFile = (*pWal)->thread->walFile;
+  db_thread *thread = (*pWal)->thread;
+  wal_file *thrWalFile = thread->walFile;
 
   assert( pList );
   /* If this frame set completes a transaction, then nTruncate>0.  If
@@ -3113,16 +3114,16 @@ int sqlite3WalFrames(
   if (!(*pWal)->dirty)
   {
   	  // Do we need to create new wal file?
-	  if (thrWalFile->mxFrame > g_wal_size_limit)
+	  if (thrWalFile->mxFrame > thread->walSizeLimit)
 	  {
 	  	char filename[MAX_PATHNAME];
 	  	wal_file *nw;
-	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",(*pWal)->thread->path,thrWalFile->walIndex+1);
+	  	snprintf(filename,MAX_PATHNAME,"%s/wal.%llu",thread->path,thrWalFile->walIndex+1);
 	  	DBG((g_log,"Creating new wal!\r\n"));
-	  	nw = new_wal_file(filename,(*pWal)->thread->vfs);
+	  	nw = new_wal_file(filename,thread->vfs);
 	  	nw->walIndex = thrWalFile->walIndex+1;
 	  	nw->prev = thrWalFile;
-	  	(*pWal)->thread->walFile = nw;
+	  	thread->walFile = nw;
 	  	thrWalFile = nw;
 	  }
 
@@ -3132,7 +3133,7 @@ int sqlite3WalFrames(
 	    Wal *newWal;
 	    int changed;
 	    DBG((g_log,"Opening into new wal %lld, curmxframe=%u\r\n",thrWalFile->walIndex,(*pWal)->hdr.mxFrame));
-	    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)(*pWal)->thread);
+	    sqlite3WalOpen((*pWal)->pVfs, (*pWal)->pDbFd, NULL, 1, 0, &newWal,(void*)thread);
 	    sqlite3WalEndReadTransaction(*pWal);
 	    sqlite3WalEndWriteTransaction(*pWal);
 
@@ -3140,8 +3141,8 @@ int sqlite3WalFrames(
 	  	{
 	  		newWal->prev = (*pWal)->prev;
 	  		walIndexClose(*pWal, 0);
-			sqlite3_free((void *)(*pWal)->apWiData);
-			sqlite3_free(*pWal);
+			  sqlite3_free((void *)(*pWal)->apWiData);
+			  sqlite3_free(*pWal);
 	  	}
 	  	else
 	    	newWal->prev = *pWal;
@@ -3167,7 +3168,7 @@ int sqlite3WalFrames(
 
   iFrame = thrWalFile->mxFrame;
 
-  (*pWal)->thread->curConn->lastWriteThreadNum = (*pWal)->thread->threadNum;
+  thread->curConn->lastWriteThreadNum = thread->threadNum;
   (*pWal)->szPage = szPage;
   if( iFrame==0 ){
     u8 aWalHdr[WAL_HDRSIZE];      /* Buffer to assemble wal-header in */

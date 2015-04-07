@@ -17,9 +17,6 @@
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
 
-// in pages. So wal file in bytes is g_wal_size_limit*pagesize
-int g_wal_size_limit = 1024*3;
-
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
@@ -34,8 +31,6 @@ static ErlNifResourceType *db_backup_type = NULL;
 static ErlNifResourceType *iterate_type = NULL;
 #endif
 
-char g_static_sqls[MAX_STATIC_SQLS][256];
-int g_nstatic_sqls = 0;
 
 typedef struct db_connection db_connection;
 typedef struct db_backup db_backup;
@@ -56,14 +51,15 @@ typedef u16 ht_slot;
 
 
 // int g_nthreads;
-db_thread* g_threads;
-db_thread g_control_thread;
+// db_thread* g_threads;
+// db_thread g_control_thread;
 
 struct priv_data
 {
     queue *commands;
     queue *ctrlCmds;
     int nthreads;
+    db_thread **threads;
 };
 
 struct WalIterator {
@@ -93,14 +89,24 @@ struct WalIndexHdr {
 };
 
 struct Wal {
+  db_thread *thread;
+  const char *zWalName;      /* Name of WAL file */
+  Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
+                  that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded
+                  for new. Writes are always to new file, reads always start with new file and they move to previous files
+                  if not found. */
   sqlite3_vfs *pVfs;         /* The VFS used to create pDbFd */
   sqlite3_file *pDbFd;       /* File handle for the database file */
   sqlite3_file *pWalFd;      /* File handle for WAL file */
-  u32 iCallback;             /* Value to pass to log callback (or 0) */
+  u32 **apWiData;            /* Pointer to wal-index content in memory (ActorDB change remove volatile, access is single threaded) */
   i64 mxWalSize;             /* Truncate WAL to this size upon reset */
+  u64 walIndex;
+  u32 iCallback;             /* Value to pass to log callback (or 0) */
   int nWiData;               /* Size of array apWiData */
   int szFirstBlock;          /* Size of first block written to WAL file */
-  u32 **apWiData;        /* Pointer to wal-index content in memory (ActorDB change remove volatile, access is single threaded) */
+  WalIndexHdr hdr;           /* Wal-index header for current transaction */
+  u32 nCkpt;                 /* Checkpoint sequence counter in the wal-header */
+  u32 prevFrameOffset;       /* Offset of last written frame to wal file. Regardless if commited or not. */
   u32 szPage;                /* Database page size */
   i16 readLock;              /* Which read lock is being held.  -1 for none */
   u8 syncFlags;              /* Flags to use to sync header writes */
@@ -111,20 +117,9 @@ struct Wal {
   u8 truncateOnCommit;       /* True to truncate WAL file on commit */
   u8 syncHeader;             /* Fsync the WAL header if true */
   u8 padToSectorBoundary;    /* Pad transactions out to the next sector */
-  WalIndexHdr hdr;           /* Wal-index header for current transaction */
-  const char *zWalName;      /* Name of WAL file */
-  u32 nCkpt;                 /* Checkpoint sequence counter in the wal-header */
-  db_thread *thread;
-  u64 walIndex;
   u8 init;
   u8 lockError;
-  u32 prevFrameOffset;       /* Offset of last written frame to wal file. Regardless if commited or not. */
   u8 dirty;                  /* 1 when between commit flags */
-
-  Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
-                  that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded
-                  for new. Writes are always to new file, reads always start with new file and they move to previous files
-                  if not found. */
 };
 struct WalCkptInfo {
   u32 nBackfill;        /* Number of WAL frames backfilled into DB */
@@ -146,43 +141,39 @@ struct control_data
 
 struct wal_file
 {
-	u64 walIndex;
+  wal_file *prev;
+  sqlite3_file *pWalFd;
+  u64 walIndex;
 	u32 mxFrame;
 	int szPage;
-	u8 bigEndCksum;
-	sqlite3_file *pWalFd;
 	u32 aSalt[2];
-	// u32 nPages;
-    u32 lastCommit; // frame number of last commit. Used in sqlite3WalUndo
-    u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
-                       // once we reach the end of actor table, we are done.
-    char filename[MAX_PATHNAME];
-	wal_file *prev;
+  u32 lastCommit;    // frame number of last commit. Used in sqlite3WalUndo
+  u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
+                     // once we reach the end of actor table, we are done.
+  u8 bigEndCksum;
+  char filename[MAX_PATHNAME];
 };
 
 struct db_thread
 {
-    void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
     // so currently executing connection data is accessible from wal callback
     db_connection *curConn;
     db_connection* conns;
     sqlite3_vfs *vfs;
+    wal_file *walFile;
+
     // Raft page replication
     // MAX_CONNECTIONS (8) servers to replicate write log to
     int sockets[MAX_CONNECTIONS];
     int socket_types[MAX_CONNECTIONS];
-    wal_file *walFile;
-    int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
-    char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
+    void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
+
     #ifndef _TESTAPP_
     queue *commands;
     control_data *control;
-    ErlNifTid tid;
     #endif
-    // All DB paths are relative to this thread path.
-    // This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
-    char path[MAX_PATHNAME];
-    int pathlen;
+    int nconns;
+
     unsigned int dbcount;
     unsigned int inactivity;
     int isopen;
@@ -191,15 +182,27 @@ struct db_thread
     // when they should be rollbacked (if they do not end with db size number).
     // Unlike regular sqlite wal files, in actordb wal files can be intertwined.
     u32 threadNum;
-    // Index in table od threads.
-    int index;
+    u32 walSizeLimit; // in pages. So wal file in bytes is walSizeLimit*pagesize
+    int index;        // Index in table of threads.
     int nthreads;
+
+    // Maps DBPath (relative path to db) to connections index.
+    Hash walHash;
+    // All DB paths are relative to this thread path.
+    // This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
+    char path[MAX_PATHNAME];
+    int pathlen;
+    char staticSqls[MAX_STATIC_SQLS][256];
+    int nstaticSqls;
 
     // Prepared statements. 2d array (for every type, list of sqls and versions)
     int prepSize;
-    int nconns;
-    // Maps DBPath (relative path to db) to connections index.
-    Hash walHash;
+    int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
+    char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
+    #ifndef _TESTAPP_
+    ErlNifTid tid;
+    #endif
+    priv_data *pd;
 };
 
 
@@ -342,14 +345,14 @@ ERL_NIF_TERM atom_done;
 ERL_NIF_TERM atom_iter;
 
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
-static ERL_NIF_TERM push_command(int thread, qitem *cmd);
+static ERL_NIF_TERM push_command(int thread,priv_data *pd, qitem *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 // int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
-qitem *command_create(int threadnum);
+qitem *command_create(int threadnum,priv_data* pd);
 static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
-void fail_send(int i);
+void fail_send(int i,priv_data *priv);
 #endif
 
 int reopen_db(db_connection *conn, db_thread *thread);

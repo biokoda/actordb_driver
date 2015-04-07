@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 // #include "queue.h"
-
+#define BLOCK_SIZE 32
 
 struct queue_t
 {
@@ -204,10 +204,10 @@ queue_get_item(queue *queue)
     }
     else
     {
-        entry = enif_alloc(sizeof(qitem)*16);
-        memset(entry,0,sizeof(qitem)*16);
+        entry = enif_alloc(sizeof(qitem)*BLOCK_SIZE);
+        memset(entry,0,sizeof(qitem)*BLOCK_SIZE);
 
-        for (i = 1; i < 16; i++)
+        for (i = 1; i < BLOCK_SIZE; i++)
         {
           entry[i].cmd.env = enif_alloc_env();
           entry[i].next = queue->reuseq;
