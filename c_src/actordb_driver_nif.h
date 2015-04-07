@@ -25,12 +25,6 @@ FILE *g_log = 0;
 # define DBG(X)
 #endif
 
-#ifndef _TESTAPP_
-static ErlNifResourceType *db_connection_type = NULL;
-static ErlNifResourceType *db_backup_type = NULL;
-static ErlNifResourceType *iterate_type = NULL;
-#endif
-
 
 typedef struct db_connection db_connection;
 typedef struct db_backup db_backup;
@@ -50,16 +44,17 @@ typedef struct priv_data priv_data;
 typedef u16 ht_slot;
 
 
-// int g_nthreads;
-// db_thread* g_threads;
-// db_thread g_control_thread;
-
 struct priv_data
 {
-    queue *commands;
-    queue *ctrlCmds;
-    int nthreads;
-    db_thread **threads;
+    queue **tasks;      // array of queues for every thread + control thread
+    ErlNifTid *tids;    // tids for every thread
+    int nthreads;       // number of work threads
+
+    #ifndef _TESTAPP_
+    ErlNifResourceType *db_connection_type;
+    ErlNifResourceType *db_backup_type;
+    ErlNifResourceType *iterate_type;
+    #endif
 };
 
 struct WalIterator {
@@ -169,7 +164,7 @@ struct db_thread
     void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
 
     #ifndef _TESTAPP_
-    queue *commands;
+    queue *tasks;
     control_data *control;
     #endif
     int nconns;
@@ -199,9 +194,6 @@ struct db_thread
     int prepSize;
     int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
     char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
-    #ifndef _TESTAPP_
-    ErlNifTid tid;
-    #endif
     priv_data *pd;
 };
 

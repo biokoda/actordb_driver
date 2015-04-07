@@ -438,15 +438,15 @@ make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code, 
 qitem*
 command_create(int threadnum,priv_data *p)
 {
-    db_thread *thread = NULL;
+    queue *thrCmds = NULL;
     qitem *item;
     ErlNifEnv *env;
     if (threadnum == -1)
-        thread = p->threads[p->nthreads];
+        thrCmds = p->tasks[p->nthreads];
     else
-        thread = p->threads[threadnum];
+        thrCmds = p->tasks[threadnum];
 
-    item = queue_get_item(thread->commands);
+    item = queue_get_item(thrCmds);
     if (item->cmd.env == NULL)
     {
         item->cmd.env = enif_alloc_env();
@@ -558,7 +558,7 @@ do_open(db_command *cmd, db_thread *thread)
     if(size <= 0 || size >= MAX_ACTOR_NAME)
         return make_error_tuple(cmd->env, "invalid_filename");
 
-    res = enif_alloc_resource(db_connection_type, sizeof(conn_resource));
+    res = enif_alloc_resource(thread->pd->db_connection_type, sizeof(conn_resource));
     if(!res)
         return make_error_tuple(cmd->env, "no_memory");
     memset(res,0,sizeof(conn_resource));
@@ -1066,7 +1066,7 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
     int nfilled = 0;
     char dorel = 0;
 
-    if (!enif_get_resource(cmd->env, cmd->arg, iterate_type, (void **) &iter))
+    if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
     {
         dorel = 1;
         if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnumFrom))
@@ -1076,7 +1076,7 @@ do_iterate_wal(db_command *cmd, db_thread *thread)
             evtermFrom = 0;
         }
 
-        iter = enif_alloc_resource(iterate_type, sizeof(iterate_resource));
+        iter = enif_alloc_resource(thread->pd->iterate_type, sizeof(iterate_resource));
         if(!iter)
             return make_error_tuple(cmd->env, "no_memory");
         memset(iter,0,sizeof(iterate_resource));
@@ -2048,13 +2048,13 @@ evaluate_command(db_command cmd,db_thread *thread)
 static ERL_NIF_TERM
 push_command(int threadnum, priv_data *pd, qitem *item)
 {
-    db_thread *thread = NULL;
+    queue *thrCmds = NULL;
     if (threadnum == -1)
-        thread = pd->threads[pd->nthreads];
+        thrCmds = pd->tasks[pd->nthreads];
     else
-        thread = pd->threads[threadnum];
+        thrCmds = pd->tasks[threadnum];
 
-    if(!queue_push(thread->commands, item))
+    if(!queue_push(thrCmds, item))
     {
         return make_error_tuple(item->cmd.env, "command_push_failed");
     }
@@ -2080,21 +2080,21 @@ thread_func(void *arg)
     data->isopen = 1;
     sqlite3HashInit(&data->walHash);
 
-    // queue_recycle(data->commands,queue_get_item(data->commands));
+    // queue_recycle(data->tasks,queue_get_item(data->tasks));
 
     if (data->index >= 0)
         read_thread_wal(data);
 
     while(1)
     {
-        qitem *item = queue_pop(data->commands);
+        qitem *item = queue_pop(data->tasks);
         chkCounter++;
 
         DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,item->cmd.type,item->cmd.connindex));
 
         if (item->cmd.type == cmd_stop)
         {
-            queue_recycle(data->commands,item);
+            queue_recycle(data->tasks,item);
             break;
         }
         else
@@ -2109,12 +2109,12 @@ thread_func(void *arg)
                 enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, evaluate_command(item->cmd,data)));
                 enif_clear_env(item->cmd.env);
             }
-            queue_recycle(data->commands,item);
+            queue_recycle(data->tasks,item);
         }
 
         DBG((g_log,"thread=%d command done 1.\n",data->index));
 
-        while (data->index >= 0 && (queue_size(data->commands) == 0 || chkCounter > 3))
+        while (data->index >= 0 && (queue_size(data->tasks) == 0 || chkCounter > 3))
         {
             chkCounter = 0;
             i = checkpoint_continue(data);
@@ -2133,7 +2133,7 @@ thread_func(void *arg)
 
         DBG((g_log,"thread=%d command done 2.\n",data->index));
     }
-    queue_destroy(data->commands);
+    queue_destroy(data->tasks);
     data->isopen = 0;
 
     DBG((g_log,"thread=%d stopping.\n",data->index));
@@ -2279,7 +2279,7 @@ replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!(argc == 5))
         return enif_make_badarg(env);
 
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return make_error_tuple(env, "invalid_connection");
     if(!enif_is_ref(env, argv[1]))
         return make_error_tuple(env, "invalid_ref");
@@ -2450,7 +2450,7 @@ interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(argc != 1)
         return enif_make_badarg(env);
 
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
     {
         return enif_make_badarg(env);
     }
@@ -2783,7 +2783,7 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(argc != 7 && argc != 8)
         return enif_make_badarg(env);
 
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
     if(!enif_is_ref(env, argv[1]))
         return make_error_tuple(env, "invalid_ref");
@@ -2830,7 +2830,7 @@ checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if(argc != 4)
         return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
 
     if(!enif_is_ref(env, argv[1]))
@@ -2879,7 +2879,7 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if(argc != 4 && argc != 5)
         return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
 
     if(!enif_is_ref(env, argv[1]))
@@ -2913,7 +2913,7 @@ iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if(argc != 1)
         return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], iterate_type, (void **) &iter))
+    if(!enif_get_resource(env, argv[0], pd->iterate_type, (void **) &iter))
         return enif_make_badarg(env);
 
     item = command_create(iter->thread,pd);
@@ -2939,7 +2939,7 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if(argc != 4 && argc != 5)
         return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
 
     if(!enif_is_ref(env, argv[1]))
@@ -2968,11 +2968,12 @@ static ERL_NIF_TERM
 delete_actor(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     conn_resource *res;
+    priv_data *pd = (priv_data*)enif_priv_data(env);
     DBG((g_log,"delete_actor\n"));
 
     if(argc != 1)
         return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
 
     res->dodelete = 1;
@@ -2992,7 +2993,7 @@ drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if(argc != 4)
         return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
 
     if(!enif_is_ref(env, argv[1]))
@@ -3029,7 +3030,7 @@ bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(argc != 5)
         return enif_make_badarg(env);
 
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
 
     if(!enif_is_ref(env, argv[1]))
@@ -3066,7 +3067,7 @@ noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     if(argc != 3)
         return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+    if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
         return enif_make_badarg(env);
     if(!enif_is_ref(env, argv[1]))
         return make_error_tuple(env, "invalid_ref");
@@ -3123,7 +3124,6 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg)
 static int
 on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 {
-    ErlNifResourceType *rt;
     int i = 0, j = 0;
     const ERL_NIF_TERM *param;
     const ERL_NIF_TERM *param1;
@@ -3199,11 +3199,10 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
     for (i = 0; i < nstaticSqls; i++)
         enif_get_string(env,param[i],staticSqls[i],256,ERL_NIF_LATIN1);
 
-    rt = enif_open_resource_type(env, "actordb_driver_nif", "db_connection_type",
+    priv->db_connection_type = enif_open_resource_type(env, "actordb_driver_nif", "db_connection_type",
 				destruct_connection, ERL_NIF_RT_CREATE, NULL);
-    if(!rt)
+    if(!priv->db_connection_type)
 	    return -1;
-    db_connection_type = rt;
 
     // rt =  enif_open_resource_type(env, "actordb_driver_nif", "db_backup_type",
     //                destruct_backup, ERL_NIF_RT_CREATE, NULL);
@@ -3212,43 +3211,42 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
     // db_backup_type = rt;
 
 
-    rt =  enif_open_resource_type(env, "actordb_driver_nif", "iterate_type",
+    priv->iterate_type =  enif_open_resource_type(env, "actordb_driver_nif", "iterate_type",
                    destruct_iterate, ERL_NIF_RT_CREATE, NULL);
-    if(!rt)
+    if(!priv->iterate_type)
         return -1;
-    iterate_type = rt;
 
 
-    priv->threads = malloc(sizeof(db_thread*)*(priv->nthreads+1));
-    // memset(g_threads,0,sizeof(db_thread)*priv->nthreads);
+    priv->tasks = malloc(sizeof(queue*)*(priv->nthreads+1));
+    priv->tids = malloc(sizeof(ErlNifTid)*(priv->nthreads+1));
 
     controlThread = malloc(sizeof(db_thread));
     memset(controlThread,0,sizeof(db_thread));
     controlThread->index = -1;
-    controlThread->commands = queue_create();
+    controlThread->tasks = queue_create();
     controlThread->nthreads = priv->nthreads;
     controlThread->pd = priv;
-    priv->threads[priv->nthreads] = controlThread;
+    priv->tasks[priv->nthreads] = controlThread->tasks;
 
-    if(enif_thread_create("db_connection", &(controlThread->tid), thread_func, controlThread, NULL) != 0)
+    if(enif_thread_create("db_connection", &(priv->tids[priv->nthreads]), thread_func, controlThread, NULL) != 0)
     {
         printf("Unable to create esqlite3 thread\r\n");
         return -1;
     }
+
     DBG((g_log,"Driver starting %d threads.\n",priv->nthreads));
 
     for (i = 0; i < priv->nthreads; i++)
     {
         db_thread *curThread = malloc(sizeof(db_thread));
         memset(curThread,0,sizeof(db_thread));
-        priv->threads[i] = curThread;
 
         if (!(enif_get_string(env,param1[i],curThread->path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
             return -1;
         curThread->pathlen = strlen(curThread->path);
         curThread->index = i;
         sqlite3_randomness(4,&curThread->threadNum);
-        curThread->commands = queue_create();
+        curThread->tasks = queue_create();
         curThread->conns = malloc(sizeof(db_connection)*1024);
         memset(curThread->conns,0,sizeof(db_connection)*1024);
         curThread->nconns = 1024;
@@ -3256,12 +3254,13 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
         curThread->wal_page_hook = wal_page_hook;
         curThread->walSizeLimit = walSizeLimit;
         curThread->pd = priv;
+        priv->tasks[i] = curThread->tasks;
 
         curThread->nstaticSqls = nstaticSqls;
         for (j = 0; j < nstaticSqls; j++)
           memcpy(curThread->staticSqls[j], staticSqls[j], 256);
 
-        if(enif_thread_create("db_connection", &(curThread->tid), thread_func, curThread, NULL) != 0)
+        if(enif_thread_create("db_connection", &(priv->tids[i]), thread_func, curThread, NULL) != 0)
         {
             printf("Unable to create esqlite3 thread\r\n");
             return -1;
@@ -3278,17 +3277,19 @@ on_unload(ErlNifEnv* env, void* pd)
     priv_data *priv = (priv_data*)pd;
     int nthreads = priv->nthreads;
 
-    for (i = -1; i < nthreads+1; i++)
+    for (i = -1; i < nthreads; i++)
     {
         qitem *item = command_create(i,priv);
         item->cmd.type = cmd_stop;
         push_command(i, priv, item);
 
         if (i >= 0)
-            enif_thread_join((ErlNifTid)priv->threads[i]->tid,NULL);
+            enif_thread_join((ErlNifTid)priv->tids[i],NULL);
         else
-            enif_thread_join((ErlNifTid)priv->threads[i]->tid,NULL);
+            enif_thread_join((ErlNifTid)priv->tids[nthreads],NULL);
     }
+    free(priv->tasks);
+    free(priv->tids);
     free(pd);
 }
 
