@@ -3110,6 +3110,12 @@ int sqlite3WalFrames(
 
   DBG((g_log,"sqlite3WalFrames\r\n"));
 
+  if (!((*pWal)->readLock))
+  {
+      int cnt=0, notUsed = 0;
+      walTryBeginRead(*pWal, &notUsed, 1, ++cnt);
+  }
+
   // Only move on to new wal files when this is beginning of a new write
   if (!(*pWal)->dirty)
   {
@@ -3340,8 +3346,8 @@ int sqlite3WalFindFrame(
     u32 iLast = pWal->hdr.mxFrame;  /* Last page in WAL for this reader */
     int iHash;                      /* Used to loop through N hash tables */
     int rc;
-    DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d\r\n",
-    	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex));
+    DBG((g_log,"Wal find frame, walindex=%llu, pgno=%d last=%d, conn=%d, lock=%d\r\n",
+    	pWal->walIndex,pgno, iLast,pWal->thread->curConn->connindex,pWal->readLock));
 
     if( iLast==0 || pWal->readLock==0 ){
       if (iLast == 0 && pWal->prev)
@@ -3693,7 +3699,7 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged){
     rc = walTryBeginRead(pWal, pChanged, 0, ++cnt);
   }while( rc==WAL_RETRY );
 
-  DBG((g_log,"START READ TRANSACTION wal=%lld result=%d, changed %d, mxframe=%u\r\n",pWal->walIndex,rc,*pChanged,pWal->hdr.mxFrame));
+  DBG((g_log,"START READ TRANSACTION wal=%lld result=%d, changed %d, mxframe=%u, lock=%d\r\n",pWal->walIndex,rc,*pChanged,pWal->hdr.mxFrame,(int)pWal->readLock));
   testcase( (rc&0xff)==SQLITE_BUSY );
   testcase( (rc&0xff)==SQLITE_IOERR );
   testcase( rc==SQLITE_PROTOCOL );

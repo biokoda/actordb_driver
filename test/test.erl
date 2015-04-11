@@ -55,7 +55,7 @@ modes() ->
 
 bigtrans() ->
   actordb_driver:init({{"."},{},100}),
-  Sql = <<"SAVEPOINT 'adb';",
+  Sql = [<<"SAVEPOINT 'adb';",
     "CREATE TABLE IF NOT EXISTS __transactions (id INTEGER PRIMARY KEY, tid INTEGER, updater INTEGER, node TEXT,",
       "schemavers INTEGER, sql TEXT);",
     "CREATE TABLE IF NOT EXISTS __adb (id INTEGER PRIMARY KEY, val TEXT);",
@@ -77,9 +77,14 @@ bigtrans() ->
     "INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'1');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'1');",
     "INSERT OR REPLACE INTO __adb (id,val) VALUES (3,'7');INSERT OR REPLACE INTO __adb (id,val) VALUES (4,'task');",
     "INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'0');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'0');",
-    "INSERT OR REPLACE INTO __adb (id,val) VALUES (7,'614475188');RELEASE SAVEPOINT 'adb';">>,
-    {ok,Db,{ok,Res}} = actordb_driver:open("big.db",0,Sql,wal),
-    ?debugFmt("Result: ~p, select=~p",[Res,actordb_driver:exec_script("SELECT * FROM __adb;",Db)]).
+    "INSERT OR REPLACE INTO __adb (id,val) VALUES (7,'614475188');">>,
+    "INSERT INTO __adb (id,val) VALUES (10,'",binary:copy(<<"a">>,1024*1024*10),"');",
+    "DELETE from __adb;",
+    "RELEASE SAVEPOINT 'adb';"],
+    {ok,Db,{ok,Res}} = actordb_driver:open("big.db",0,Sql,wal).
+    % ?debugFmt("Result: ~p, select=~p",[Res,actordb_driver:exec_script("SELECT * FROM __adb;",Db)]).
+
+
 
 repl() ->
     ?debugFmt("repl",[]),
