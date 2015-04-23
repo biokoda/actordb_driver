@@ -2090,6 +2090,8 @@ thread_func(void *arg)
         qitem *item = queue_pop(data->tasks);
         chkCounter++;
 
+        // printf("Queue size %d\r\n",queue_size(data->tasks));
+
         DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,item->cmd.type,item->cmd.connindex));
 
         if (item->cmd.type == cmd_stop)
