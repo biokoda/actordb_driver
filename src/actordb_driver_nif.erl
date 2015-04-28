@@ -4,9 +4,9 @@
 -module(actordb_driver_nif).
 
 -export([init/1,
-         open/5, 
+         open/5,
          open/6,
-         exec_script/7, 
+         exec_script/7,
          exec_script/8,
          store_prepared_table/2,
          close/3,
@@ -25,8 +25,8 @@
          tcp_connect/7,
          tcp_reconnect/0,
          replicate_opts/5,
-         wal_header/1,
-         wal_checksum/4,
+         %wal_header/1,
+        %  wal_checksum/4,
          page_size/0,
          iterate_wal/4,
          iterate_wal/5,
@@ -46,7 +46,7 @@ delete_actor(_) ->
 
 wal_rewind(_,_,_,_) ->
     exit(nif_library_not_loaded).
-    
+
 page_size() ->
     exit(nif_library_not_loaded).
 
@@ -76,14 +76,14 @@ all_tunnel_call(_,_,_) ->
 bind_insert(_,_,_,_,_) ->
     exit(nif_library_not_loaded).
 
-wal_checksum(_,_,_,_) ->
-    exit(nif_library_not_loaded).
+% wal_checksum(_,_,_,_) ->
+%     exit(nif_library_not_loaded).
 
 % replicate_status(_) ->
 %     exit(nif_library_not_loaded).
 
-wal_header(_) ->
-    exit(nif_library_not_loaded).
+% wal_header(_) ->
+%     exit(nif_library_not_loaded).
 
 noop(_,_,_) ->
     exit(nif_library_not_loaded).
@@ -99,7 +99,7 @@ tcp_connect(_,_,_,_,_,_,_) ->
 
 tcp_reconnect() ->
     exit(nif_library_not_loaded).
-    
+
 interrupt_query(_) ->
     exit(nif_library_not_loaded).
 
@@ -160,8 +160,3 @@ exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam,_RecordInsert) ->
 
 close(_Db, _Ref, _Dest) ->
     exit(nif_library_not_loaded).
-
-    
-
-
-

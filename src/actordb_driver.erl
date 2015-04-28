@@ -13,7 +13,8 @@
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
          wal_rewind/2,delete_actor/1,iterate_close/1,
          replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
-         tcp_connect_async/4,tcp_connect_async/5,make_wal_header/1,tcp_reconnect/0,wal_checksum/4,bind_insert/3]).
+         tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
+         tcp_reconnect/0,bind_insert/3]).
 
 % {{ThreadPath1,ThreadPath2,...},{StaticSql1,StaticSql2,...}}
 init(Threads) ->
@@ -53,11 +54,11 @@ close({actordb_driver, _Ref, _Connection}) ->
 store_prepared_table(Indexes,Sqls) when is_tuple(Indexes), is_tuple(Sqls), tuple_size(Indexes) == tuple_size(Sqls) ->
     actordb_driver_nif:store_prepared_table(Indexes,Sqls).
 
-make_wal_header(PageSize) ->
-    actordb_driver_nif:wal_header(PageSize).
+% make_wal_header(PageSize) ->
+%     actordb_driver_nif:wal_header(PageSize).
 
-wal_checksum(Bin,C1,C2,Size) ->
-    actordb_driver_nif:wal_checksum(Bin,C1,C2,Size).
+% wal_checksum(Bin,C1,C2,Size) ->
+%     actordb_driver_nif:wal_checksum(Bin,C1,C2,Size).
 
 parse_helper(Bin) ->
     parse_helper(Bin,0).
