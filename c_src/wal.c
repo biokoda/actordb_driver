@@ -5,6 +5,7 @@
 
 ** LMDB schema:
 ** - Actors DB: {<<ActorName/binary>>, <<ActorIndex:64>>}
+**   {"?",MaxInteger} -> when adding actors, increment this value
 
 ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
 **   Pages db is a dupsort database. It stores lz4 compressed sqlite pages. There can be multiple
@@ -31,9 +32,13 @@
 ** the end.
 ** Undo is a matter of checking the pages of last write in log db and deleting them in log and pages db.
 */
+
+
+// 1. Figure out actor index, create one if it does not exist
+// 2. check info for evnum/evterm data
 int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName, int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
 {
-  MDB_dbi infodb;
+  MDB_dbi actorsdb, infodb;
   MDB_txn *txn;
   MDB_val key, data;
   int rc;
@@ -43,23 +48,80 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
   if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
     return SQLITE_ERROR;
 
+  if (mdb_dbi_open(txn, "actors", MDB_INTEGERKEY, &actorsdb) != MDB_SUCCESS)
+    return SQLITE_ERROR;
+
   if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY, &infodb) != MDB_SUCCESS)
     return SQLITE_ERROR;
 
   key.mv_size = strlen(thr->curConn->dbpath);
   key.mv_data = thr->curConn->dbpath;
-  rc = mdb_get(txn,infodb,&key,&data);
+  rc = mdb_get(txn,actorsdb,&key,&data);
 
+  // This is new actor, assign an index
   if (rc == MDB_NOTFOUND)
   {
+    i64 index = 0;
+    MDB_val key1 = {1,(void*)"*"};
+
+    rc = mdb_get(txn,actorsdb,&key1,&data);
+    if (rc == MDB_NOTFOUND)
+    {
+      // this is first actor at index 0
+    }
+    else if (rc == MDB_SUCCESS)
+    {
+      index = *(i64*)data.mv_data;
+    }
+    else
+    {
+      mdb_txn_abort(txn);
+      return SQLITE_ERROR;
+    }
+
+    pWal->index = index++;
+    data.mv_size = sizeof(i64);
+    data.mv_data = (void*)&index;
+    if (mdb_put(thr->wtxn,thr->infodb,&key1,&data,0) != MDB_SUCCESS)
+    {
+      mdb_txn_abort(txn);
+      return SQLITE_ERROR;
+    }
+    thr->forceCommit = 1;
   }
+  // Actor exists, read evnum/evterm info
   else if (rc == MDB_SUCCESS)
   {
+    // data contains index
+    key = data;
+    pWal->index = *(i64*)data.mv_data;
+    rc = mdb_get(txn,infodb,&key,&data);
+
+    if (rc == MDB_SUCCESS)
+    {
+      i64 *v = (i64*)(data.mv_data+1);
+      if (*(u8*)data.mv_data != 1)
+      {
+        mdb_txn_abort(txn);
+        return SQLITE_ERROR;
+      }
+      pWal->firstCompleteTerm = *(v);
+      pWal->firstCompleteEvnum = *(v+sizeof(i64));
+      pWal->lastCompleteTerm = *(v+sizeof(i64)*2);
+      pWal->lastCompleteEvnum = *(v+sizeof(i64)*3);
+      pWal->inProgressTerm = *(v+sizeof(i64)*4);
+      pWal->inProgressEvnum = *(v+sizeof(i64)*5);
+
+      if (pWal->inProgressTerm != 0)
+      {
+        // Delete pages from an incomplete write.
+      }
+    }
   }
   else
   {
     mdb_txn_abort(txn);
-    return SQLITE_ERROR;  
+    return SQLITE_ERROR;
   }
 
   mdb_txn_abort(txn);

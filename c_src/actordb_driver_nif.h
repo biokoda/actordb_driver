@@ -88,6 +88,7 @@ struct priv_data
 
 struct Wal {
   db_thread *thread;
+  i64 index;
   i64 firstCompleteTerm;
   i64 firstCompleteEvnum;
   i64 lastCompleteTerm;
@@ -196,6 +197,7 @@ struct db_thread
   u32 threadNum;
   u32 walSizeLimit; // in pages. So wal file in bytes is walSizeLimit*pagesize
   u32 pagesChanged;
+  u8 forceCommit;
   int index;        // Index in table of threads.
   int nthreads;
 

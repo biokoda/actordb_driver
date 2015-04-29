@@ -2226,6 +2226,7 @@ thread_func(void *arg)
 
         if (data->pagesChanged != pagesChanged)
         {
+          data->forceCommit = 0;
           mdb_txn_commit(data->wtxn);
           if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
             return NULL;
