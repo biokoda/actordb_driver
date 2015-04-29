@@ -1,5 +1,7 @@
-/* ActorDB -> sqlite -> REPLICATION pipe -> LMDB
+/* ActorDB -> sqlite -> lz4 -> REPLICATION pipe -> LMDB
 ** WAL is where sqlite ends and lmdb starts.
+
+** We will not be doing any endian checking/encoding, as we do not care about any big-endian platforms.
 
 ** LMDB schema:
 ** - Actors DB: {<<ActorName/binary>>, <<ActorIndex:64>>}
@@ -11,21 +13,58 @@
 **   Once replication has run its course, old pages are deleted.
 
 ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
-**   Also a dupsort. Every entry is one sqlite write transaction. Value is a list of pages
+**   Also a dupsort. Every key is one sqlite write transaction. Values are a list of pages
 **   that have changed.
 
-** On writes log and pages db are updated.
+** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
+                                      LastCompleteTerm:64,LastCompleteEvnum:64,
+                                      InprogressTerm:64,InProgressEvnum:64>>}
+**   V (version) = 1
+**   FirstComplete(term/evnum) - First entry for actor in Log DB.
+**   LastComplete(term/evnum) - Last entry in log that is commited.
+**   InProgress(term/evnum) - pages from this evnum+evterm combination are not commited. If actor has just opened
+**                            and it has these values set, it must delete pages to continue.
+
+** On writes log, pages and info db are updated.
 ** Non-live replication is simply a matter of looking up log and sending the right pages.
 ** If stale replication or actor copy, simply traverse actor pages from 0 forward until reaching
 ** the end.
 ** Undo is a matter of checking the pages of last write in log db and deleting them in log and pages db.
 */
-
 int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName, int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
 {
-  db_thread *thread = (db_thread*)walData;
-  (*ppWal) = &thread->curConn->wal;
+  MDB_dbi infodb;
+  MDB_txn *txn;
+  MDB_val key, data;
+  int rc;
+  db_thread *thr = (db_thread*)walData;
+  Wal *pWal = &thr->curConn->wal;
 
+  if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+    return SQLITE_ERROR;
+
+  if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY, &infodb) != MDB_SUCCESS)
+    return SQLITE_ERROR;
+
+  key.mv_size = strlen(thr->curConn->dbpath);
+  key.mv_data = thr->curConn->dbpath;
+  rc = mdb_get(txn,infodb,&key,&data);
+
+  if (rc == MDB_NOTFOUND)
+  {
+  }
+  else if (rc == MDB_SUCCESS)
+  {
+  }
+  else
+  {
+    mdb_txn_abort(txn);
+    return SQLITE_ERROR;  
+  }
+
+  mdb_txn_abort(txn);
+
+  (*ppWal) = pWal;
   return SQLITE_OK;
 }
 
@@ -108,6 +147,14 @@ int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 /* Write a frame or frames to the log. */
 int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int isCommit, int sync_flags)
 {
+  PgHdr *p;
+  db_thread *thr = pWal->thread;
+
+  for(p=pList; p; p=p->pDirty)
+  {
+    thr->pagesChanged++;
+  }
+
   return SQLITE_OK;
 }
 
@@ -126,6 +173,8 @@ int sqlite3WalCheckpoint(
 {
   return SQLITE_OK;
 }
+
+
 
 /* Return the value to pass to a sqlite3_wal_hook callback, the
 ** number of frames in the WAL at the point of the last commit since
@@ -151,8 +200,10 @@ int sqlite3WalExclusiveMode(Wal *pWal, int op)
 */
 int sqlite3WalHeapMemory(Wal *pWal)
 {
-  return SQLITE_OK;
+  return pWal != NULL;
 }
+
+
 
 
 

@@ -88,7 +88,13 @@ struct priv_data
 
 struct Wal {
   db_thread *thread;
-  MDB_txn *txn;
+  i64 firstCompleteTerm;
+  i64 firstCompleteEvnum;
+  i64 lastCompleteTerm;
+  i64 lastCompleteEvnum;
+  i64 inProgressTerm;
+  i64 inProgressEvnum;
+
   // const char *zWalName;      /* Name of WAL file */
   // Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
   //                 that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded
@@ -155,6 +161,7 @@ struct control_data
 
 struct db_thread
 {
+  MDB_dbi infodb;
   MDB_dbi logdb;
   MDB_dbi pagesdb;
   MDB_dbi actorsdb;
@@ -357,6 +364,7 @@ static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i,priv_data *priv);
 #endif
+
 
 int reopen_db(db_connection *conn, db_thread *thread);
 void close_prepared(db_connection *conn);

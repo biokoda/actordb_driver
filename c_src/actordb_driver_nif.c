@@ -2069,6 +2069,82 @@ make_answer(db_command *cmd, ERL_NIF_TERM answer)
     return enif_make_tuple2(cmd->env, cmd->ref, answer);
 }
 
+static int logdb_cmp(const MDB_val *a, const MDB_val *b)
+{
+  // <<ActorIndex:64, Evterm:64, Evnum:64>>
+  i64 aActor,aEvterm,aEvnum,bActor,bEvterm,bEvnum;
+  int diff;
+
+  aActor = *(i64*)a->mv_data;
+  bActor = *(i64*)b->mv_data;
+  diff = aActor - bActor;
+  if (diff == 0)
+  {
+    aEvterm = *((i64*)a->mv_data+sizeof(i64));
+    bEvterm = *((i64*)b->mv_data+sizeof(i64));
+    diff = aEvterm - bEvterm;
+    if (diff == 0)
+    {
+      aEvnum  = *((i64*)a->mv_data+sizeof(i64)*2);
+      bEvnum  = *((i64*)a->mv_data+sizeof(i64)*2);
+      return aEvnum - bEvnum;
+    }
+    else
+    {
+      return diff;
+    }
+  }
+  else
+  {
+    return diff;
+  }
+}
+
+static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
+{
+  // <<ActorIndex:64, Pgno:32/unsigned>>
+  i64 aActor;
+  i64 bActor;
+  u32 aPgno;
+  u32 bPgno;
+  int diff;
+
+  aActor = *(i64*)a->mv_data;
+  bActor = *(i64*)b->mv_data;
+  diff = aActor - bActor;
+  if (diff == 0)
+  {
+    aPgno = *((u32*)a->mv_data+sizeof(i64));
+    bPgno = *((u32*)b->mv_data+sizeof(i64));
+    return aPgno - bPgno;
+  }
+  else
+  {
+    return diff;
+  }
+}
+
+static MDB_txn* open_wtxn(db_thread *data)
+{
+  if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
+    return NULL;
+
+  if (mdb_dbi_open(data->wtxn, "info", MDB_INTEGERKEY | MDB_CREATE, &data->infodb) != MDB_SUCCESS)
+    return NULL;
+  if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
+    return NULL;
+  if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
+    return NULL;
+  if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
+    return NULL;
+  if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
+    return NULL;
+  if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
+    return NULL;
+
+  return data->wtxn;
+}
+
 static void *
 thread_func(void *arg)
 {
@@ -2076,6 +2152,11 @@ thread_func(void *arg)
     db_thread* data = (db_thread*)arg;
     db_command clcmd;
     char path[MAX_PATHNAME];
+    u32 pagesChanged = 0;
+    // MDB_dbi infodb;
+    // MDB_dbi logdb;
+    // MDB_dbi pagesdb;
+    // MDB_dbi actorsdb;
     // wal_file *wFile;
 
     snprintf(path,MAX_PATHNAME,"%s/lmdb",data->path);
@@ -2094,7 +2175,18 @@ thread_func(void *arg)
     if (mdb_env_open(data->env, path, MDB_NOSUBDIR | MDB_NOSYNC, 0664) != MDB_SUCCESS)
       return NULL;
 
-    if (mdb_env_set_maxdbs(data->env,3) != MDB_SUCCESS)
+    if (mdb_env_set_maxdbs(data->env,4) != MDB_SUCCESS)
+      return NULL;
+
+    if (open_wtxn(data) == NULL)
+      return NULL;
+
+    // if db empty, our 4 databases were created. Commit.
+    if (mdb_txn_commit(data->wtxn) != MDB_SUCCESS)
+      return NULL;
+
+    // Now reopen.
+    if (open_wtxn(data) == NULL)
       return NULL;
 
     // if (data->index >= 0)
@@ -2104,6 +2196,7 @@ thread_func(void *arg)
     {
         qitem *item = queue_pop(data->tasks);
         chkCounter++;
+        pagesChanged = data->pagesChanged;
 
         // printf("Queue size %d\r\n",queue_size(data->tasks));
 
@@ -2131,22 +2224,29 @@ thread_func(void *arg)
 
         DBG((g_log,"thread=%d command done 1.\n",data->index));
 
-        while (data->index >= 0 && (queue_size(data->tasks) == 0 || chkCounter > 3))
+        if (data->pagesChanged != pagesChanged)
         {
-            chkCounter = 0;
-            i = checkpoint_continue(data);
-            DBG((g_log,"Do checkpoint res=%d\n",i));
-
-            if (i == 1)
-                continue;
-            else if (i == 2)
-            {
-                reopen_db(data->curConn,data);
-                continue;
-            }
-
-            break;
+          mdb_txn_commit(data->wtxn);
+          if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
+            return NULL;
         }
+
+        // while (data->index >= 0 && (queue_size(data->tasks) == 0 || chkCounter > 3))
+        // {
+        //     chkCounter = 0;
+        //     i = checkpoint_continue(data);
+        //     DBG((g_log,"Do checkpoint res=%d\n",i));
+        //
+        //     if (i == 1)
+        //         continue;
+        //     else if (i == 2)
+        //     {
+        //         reopen_db(data->curConn,data);
+        //         continue;
+        //     }
+        //
+        //     break;
+        // }
 
         DBG((g_log,"thread=%d command done 2.\n",data->index));
     }
