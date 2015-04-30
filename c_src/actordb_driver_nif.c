@@ -2027,7 +2027,12 @@ evaluate_command(db_command cmd,db_thread *thread)
                 memset(zero,0,4);
 
                 // check if connection open, if it is do not use new socket
+
+#ifdef MSG_NOSIGNAL
+                if (send(thread->sockets[pos], zero, sizeof(zero), MSG_NOSIGNAL) == -1);
+#else
                 if (write(thread->sockets[pos],zero,4) == -1)
+#endif
                 {
                     close(thread->sockets[pos]);
                     thread->sockets[pos] = fd;
