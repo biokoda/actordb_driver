@@ -43,11 +43,11 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
   db_thread *thr = (db_thread*)walData;
   Wal *pWal = &thr->curConn->wal;
   MDB_dbi actorsdb = thr->actorsdb, infodb = thr->infodb;
-  MDB_txn *txn = thr->wtxn;
+  MDB_txn *txn;
 
-  // if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
-  //   return SQLITE_ERROR;
-  //
+  if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+    return SQLITE_ERROR;
+
   // if (mdb_dbi_open(txn, "actors", MDB_INTEGERKEY, &actorsdb) != MDB_SUCCESS)
   //   return SQLITE_ERROR;
   //
@@ -58,16 +58,12 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
   key.mv_data = thr->curConn->dbpath;
   rc = mdb_get(txn,actorsdb,&key,&data);
 
-  DBG((g_log,"Opening wal %s\r\n",thr->curConn->dbpath));
-
   // This is new actor, assign an index
   if (rc == MDB_NOTFOUND)
   {
     i64 index = 0;
     MDB_val key1 = {1,(void*)"*"};
     MDB_val data1;
-
-    DBG((g_log,"starting new\r\n"));
 
     rc = mdb_get(txn,actorsdb,&key1,&data);
     if (rc == MDB_NOTFOUND)
@@ -82,38 +78,28 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
     }
     else
     {
-      // mdb_txn_abort(txn);
+      mdb_txn_abort(txn);
       return SQLITE_ERROR;
     }
 
     pWal->index = index++;
     data.mv_size = sizeof(i64);
     data.mv_data = (void*)&index;
-    DBG((g_log,"Writing index %lld\r\n",index));
-    if (mdb_put(thr->wtxn,thr->infodb,&key1,&data,0) != MDB_SUCCESS)
+    // DBG((g_log,"Writing index %lld\r\n",index));
+    if (mdb_put(thr->wtxn,actorsdb,&key1,&data,0) != MDB_SUCCESS)
     {
-      // mdb_txn_abort(txn);
+      mdb_txn_abort(txn);
       return SQLITE_ERROR;
     }
 
     // key is already set to actorname
     data.mv_size = sizeof(i64);
     data.mv_data = (void*)&pWal->index;
-    if (mdb_put(thr->wtxn,thr->infodb,&key,&data,0) != MDB_SUCCESS)
+    if (mdb_put(thr->wtxn,actorsdb,&key,&data,0) != MDB_SUCCESS)
     {
-      // mdb_txn_abort(txn);
+      mdb_txn_abort(txn);
       return SQLITE_ERROR;
     }
-
-    // rc = mdb_get(thr->wtxn,thr->infodb,&key1,&data1);
-    // if (rc == MDB_NOTFOUND)
-    // {
-    //   DBG((g_log,"NOT FOUND!?!?!?!?!!?\r\n"));
-    // }
-    // else
-    // {
-    //   DBG((g_log,"READ: %lld\r\n",*(i64*)data1.mv_data));
-    // }
 
     thr->forceCommit = 1;
   }
@@ -131,7 +117,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
       i64 *v = (i64*)(data.mv_data+1);
       if (*(u8*)data.mv_data != 1)
       {
-        // mdb_txn_abort(txn);
+        mdb_txn_abort(txn);
         return SQLITE_ERROR;
       }
       pWal->firstCompleteTerm = *(v);
@@ -148,16 +134,16 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
     }
     else if (rc == MDB_NOTFOUND)
     {
-      DBG((g_log,"Info for actor not found\r\n"));
+      // DBG((g_log,"Info for actor not found\r\n"));
     }
   }
   else
   {
-    // mdb_txn_abort(txn);
+    mdb_txn_abort(txn);
     return SQLITE_ERROR;
   }
 
-  // mdb_txn_abort(txn);
+  mdb_txn_abort(txn);
 
   (*ppWal) = pWal;
   return SQLITE_OK;

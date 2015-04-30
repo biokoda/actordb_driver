@@ -140,7 +140,7 @@ int main(int argc, char* argv[])
   if (mdb_env_set_mapsize(thread.env,4096*1024*1024*128) != MDB_SUCCESS)
     return 0;
 
-  if (mdb_env_open(thread.env, path, MDB_NOSUBDIR /*| MDB_NOSYNC*/, 0664) != MDB_SUCCESS)
+  if (mdb_env_open(thread.env, path, MDB_NOSUBDIR | MDB_NOSYNC, 0664) != MDB_SUCCESS)
     return 0;
 
   if (open_wtxn(&thread) == NULL)
@@ -154,7 +154,7 @@ int main(int argc, char* argv[])
   if (open_wtxn(&thread) == NULL)
     return 0;
 
-  // for (;;i++)
+  for (i = 0; i < 10000;i++)
   {
     char name[256];
     snprintf(name,256,"actor/%d",i);
@@ -162,12 +162,13 @@ int main(int argc, char* argv[])
     db_connection con;
     memset(&con,0,sizeof(db_connection));
     con.dbpath = name;
+    int rc;
 
     thread.curConn = &con;
 
-    if (sqlite3WalOpen(NULL, NULL, name, 0, 0, &pWal, &thread) == SQLITE_OK)
+    if (sqlite3WalOpen(NULL, NULL, name, 0, 0, &pWal, &thread) != SQLITE_OK)
     {
-      DBG((g_log,"Wal opened\n"));
+      break;
     }
 
     if (mdb_txn_commit(thread.wtxn) != MDB_SUCCESS)
@@ -175,9 +176,29 @@ int main(int argc, char* argv[])
       DBG((g_log,"COmmit failed!\r\n"));
       return 0;
     }
-    DBG((g_log,"COMMITED!\r\n"));
-    // if (mdb_txn_begin(thread.env, NULL, 0, &thread.wtxn) != MDB_SUCCESS)
-    //   return 0;
+
+    // {
+    //   MDB_txn *txn;
+    //   MDB_dbi actorsdb;
+    //   MDB_val key, data;
+    //
+    //   if (mdb_txn_begin(thread.env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+    //     return SQLITE_ERROR;
+    //
+    //   if (mdb_dbi_open(txn, "actors", MDB_INTEGERKEY, &actorsdb) != MDB_SUCCESS)
+    //     return SQLITE_ERROR;
+    //
+    //   key.mv_size = strlen(name);
+    //   key.mv_data = name;
+    //   rc = mdb_get(txn,actorsdb,&key,&data);
+    //   if (rc == MDB_NOTFOUND)
+    //     DBG((g_log,"NOTFOUND!!!"));
+    //   if (rc == MDB_SUCCESS)
+    //     DBG((g_log,"FOUND: %lld\r\n",*(i64*)data.mv_data));
+    // }
+
+    if (mdb_txn_begin(thread.env, NULL, 0, &thread.wtxn) != MDB_SUCCESS)
+      return 0;
   }
   DBG((g_log,"Closing\r\n"));
   // mdb_dbi_close(thread.env,thread.infodb);
