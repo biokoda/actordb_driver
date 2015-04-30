@@ -38,25 +38,27 @@
 // 2. check info for evnum/evterm data
 int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName, int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
 {
-  MDB_dbi actorsdb, infodb;
-  MDB_txn *txn;
   MDB_val key, data;
   int rc;
   db_thread *thr = (db_thread*)walData;
   Wal *pWal = &thr->curConn->wal;
+  MDB_dbi actorsdb = thr->actorsdb, infodb = thr->infodb;
+  MDB_txn *txn = thr->wtxn;
 
-  if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
-    return SQLITE_ERROR;
-
-  if (mdb_dbi_open(txn, "actors", MDB_INTEGERKEY, &actorsdb) != MDB_SUCCESS)
-    return SQLITE_ERROR;
-
-  if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY, &infodb) != MDB_SUCCESS)
-    return SQLITE_ERROR;
+  // if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+  //   return SQLITE_ERROR;
+  //
+  // if (mdb_dbi_open(txn, "actors", MDB_INTEGERKEY, &actorsdb) != MDB_SUCCESS)
+  //   return SQLITE_ERROR;
+  //
+  // if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY, &infodb) != MDB_SUCCESS)
+  //   return SQLITE_ERROR;
 
   key.mv_size = strlen(thr->curConn->dbpath);
   key.mv_data = thr->curConn->dbpath;
   rc = mdb_get(txn,actorsdb,&key,&data);
+
+  DBG((g_log,"Opening wal %s\r\n",thr->curConn->dbpath));
 
   // This is new actor, assign an index
   if (rc == MDB_NOTFOUND)
@@ -64,29 +66,44 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
     i64 index = 0;
     MDB_val key1 = {1,(void*)"*"};
 
+    DBG((g_log,"starting new\r\n"));
+
     rc = mdb_get(txn,actorsdb,&key1,&data);
     if (rc == MDB_NOTFOUND)
     {
       // this is first actor at index 0
+      DBG((g_log,"first actor!\r\n"));
     }
     else if (rc == MDB_SUCCESS)
     {
       index = *(i64*)data.mv_data;
+      DBG((g_log,"index assigned=%lld\r\n",index));
     }
     else
     {
-      mdb_txn_abort(txn);
+      // mdb_txn_abort(txn);
       return SQLITE_ERROR;
     }
 
     pWal->index = index++;
     data.mv_size = sizeof(i64);
     data.mv_data = (void*)&index;
+    DBG((g_log,"Writing index %lld\r\n",index));
     if (mdb_put(thr->wtxn,thr->infodb,&key1,&data,0) != MDB_SUCCESS)
     {
-      mdb_txn_abort(txn);
+      // mdb_txn_abort(txn);
       return SQLITE_ERROR;
     }
+
+    // key is already set to actorname
+    data.mv_size = sizeof(i64);
+    data.mv_data = (void*)&pWal->index;
+    if (mdb_put(thr->wtxn,thr->infodb,&key,&data,0) != MDB_SUCCESS)
+    {
+      // mdb_txn_abort(txn);
+      return SQLITE_ERROR;
+    }
+
     thr->forceCommit = 1;
   }
   // Actor exists, read evnum/evterm info
@@ -95,6 +112,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
     // data contains index
     key = data;
     pWal->index = *(i64*)data.mv_data;
+    DBG((g_log,"Actor at index %lld\r\n",pWal->index));
     rc = mdb_get(txn,infodb,&key,&data);
 
     if (rc == MDB_SUCCESS)
@@ -102,7 +120,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
       i64 *v = (i64*)(data.mv_data+1);
       if (*(u8*)data.mv_data != 1)
       {
-        mdb_txn_abort(txn);
+        // mdb_txn_abort(txn);
         return SQLITE_ERROR;
       }
       pWal->firstCompleteTerm = *(v);
@@ -117,14 +135,18 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
         // Delete pages from an incomplete write.
       }
     }
+    else if (rc == MDB_NOTFOUND)
+    {
+      DBG((g_log,"Info for actor not found\r\n"));
+    }
   }
   else
   {
-    mdb_txn_abort(txn);
+    // mdb_txn_abort(txn);
     return SQLITE_ERROR;
   }
 
-  mdb_txn_abort(txn);
+  // mdb_txn_abort(txn);
 
   (*ppWal) = pWal;
   return SQLITE_OK;

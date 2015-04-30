@@ -48,12 +48,12 @@ typedef u16 ht_slot;
 struct priv_data
 {
     queue **tasks;      // array of queues for every thread + control thread
-    ErlNifTid *tids;    // tids for every thread
     int nthreads;       // number of work threads
 
     MDB_env *env;       // lmdb environment
 
     #ifndef _TESTAPP_
+    ErlNifTid *tids;    // tids for every thread
     ErlNifResourceType *db_connection_type;
     ErlNifResourceType *db_backup_type;
     ErlNifResourceType *iterate_type;

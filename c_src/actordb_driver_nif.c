@@ -2168,14 +2168,14 @@ thread_func(void *arg)
     if (mdb_env_create(&data->env) != MDB_SUCCESS)
       return NULL;
 
+    if (mdb_env_set_maxdbs(data->env,4) != MDB_SUCCESS)
+      return NULL;
+
     // TODO: set this as an input parameter, right now 549GB
     if (mdb_env_set_mapsize(data->env,4096*1024*1024*128) != MDB_SUCCESS)
       return NULL;
 
     if (mdb_env_open(data->env, path, MDB_NOSUBDIR | MDB_NOSYNC, 0664) != MDB_SUCCESS)
-      return NULL;
-
-    if (mdb_env_set_maxdbs(data->env,4) != MDB_SUCCESS)
       return NULL;
 
     if (open_wtxn(data) == NULL)
