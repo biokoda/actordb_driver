@@ -920,7 +920,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
             result = make_error_tuple(cmd->env,"unable to set nodelay");
             break;
         }
-#ifndef _WIN32
+#ifdef SO_NOSIGPIPE
         if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&flag, sizeof(int)) != 0)
         {
           close(fd);
