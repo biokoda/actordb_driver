@@ -904,22 +904,29 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
         if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int)) != 0)
         {
             close(fd);
-            result = make_error_tuple(cmd->env,"unable to set sockopt");
+            result = make_error_tuple(cmd->env,"unable to set keepalive");
             break;
         }
         if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int)) != 0)
         {
             close(fd);
-            result = make_error_tuple(cmd->env,"unable to set sockopt");
+            result = make_error_tuple(cmd->env,"unable to set reuseaddr");
             break;
         }
         if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int)) != 0)
         {
             close(fd);
-            result = make_error_tuple(cmd->env,"unable to set sockopt");
+            result = make_error_tuple(cmd->env,"unable to set nodelay");
             break;
         }
-
+#ifdef SO_NOSIGPIPE
+        if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&flag, sizeof(int)) != 0)
+        {
+          close(fd);
+          result = make_error_tuple(cmd->env,"unable to set nosigpipe");
+          break;
+        }
+#endif
 
         timeout.tv_sec = 2;
         timeout.tv_usec = 0;
@@ -2021,7 +2028,11 @@ evaluate_command(db_command cmd,db_thread *thread)
                 memset(zero,0,4);
 
                 // check if connection open, if it is do not use new socket
+#ifdef MSG_NOSIGNAL
+                if (send(thread->sockets[pos], zero, sizeof(zero), MSG_NOSIGNAL) == -1)
+#else
                 if (write(thread->sockets[pos],zero,4) == -1)
+#endif
                 {
                     close(thread->sockets[pos]);
                     thread->sockets[pos] = fd;
