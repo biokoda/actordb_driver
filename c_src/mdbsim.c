@@ -175,10 +175,15 @@ int main(int argc, char* argv[])
       DBG((g_log,"COmmit failed!\r\n"));
       return 0;
     }
+    DBG((g_log,"COMMITED!\r\n"));
     // if (mdb_txn_begin(thread.env, NULL, 0, &thread.wtxn) != MDB_SUCCESS)
     //   return 0;
   }
   DBG((g_log,"Closing\r\n"));
+  // mdb_dbi_close(thread.env,thread.infodb);
+  // mdb_dbi_close(thread.env,thread.actorsdb);
+  // mdb_dbi_close(thread.env,thread.logdb);
+  // mdb_dbi_close(thread.env,thread.pagesdb);
   mdb_env_close(thread.env);
 
   return 0;

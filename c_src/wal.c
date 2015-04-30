@@ -65,6 +65,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
   {
     i64 index = 0;
     MDB_val key1 = {1,(void*)"*"};
+    MDB_val data1;
 
     DBG((g_log,"starting new\r\n"));
 
@@ -103,6 +104,16 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
       // mdb_txn_abort(txn);
       return SQLITE_ERROR;
     }
+
+    // rc = mdb_get(thr->wtxn,thr->infodb,&key1,&data1);
+    // if (rc == MDB_NOTFOUND)
+    // {
+    //   DBG((g_log,"NOT FOUND!?!?!?!?!!?\r\n"));
+    // }
+    // else
+    // {
+    //   DBG((g_log,"READ: %lld\r\n",*(i64*)data1.mv_data));
+    // }
 
     thr->forceCommit = 1;
   }
