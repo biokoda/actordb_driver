@@ -62,7 +62,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
   if (rc == MDB_NOTFOUND)
   {
     i64 index = 0;
-    MDB_val key1 = {1,(void*)"*"};
+    MDB_val key1 = {1,(void*)"?"};
     MDB_val data1;
 
     rc = mdb_get(txn,actorsdb,&key1,&data);
@@ -230,9 +230,50 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 {
   PgHdr *p;
   db_thread *thr = pWal->thread;
+  db_connection *pCon = thr->curConn;
+  MDB_val key, data;
 
+  key.mv_size = sizeof(i64);
+  key.mv_data = (void*)&pWal->index;
+
+  // ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
   for(p=pList; p; p=p->pDirty)
   {
+    u8 pagesKeyBuf[sizeof(i64)+sizeof(u32)];
+    u8 pagesBuf[PAGE_BUFF_SIZE];
+
+    memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
+    memcpy(pagesKeyBuf + sizeof(i64), &p->pgno,    sizeof(u32));
+    key.mv_size = sizeof(pagesKeyBuf);
+    key.mv_data = pagesKeyBuf;
+
+    memcpy(pagesBuf,              &pCon->writeTermNumber,sizeof(i64));
+    memcpy(pagesBuf + sizeof(i64),&pCon->writeNumber,    sizeof(i64));
+    data.mv_size = sizeof(i64)*2 + LZ4_compress((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2,szPage);
+    data.mv_data = pagesBuf;
+
+    if (mdb_cursor_put(thr->cursorPages,&key,&data,0) != MDB_SUCCESS)
+      return SQLITE_ERROR;
+
+    thr->pagesChanged++;
+  }
+  // ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
+  for(p=pList; p; p=p->pDirty)
+  {
+    u8 logKeyBuf[sizeof(i64)*3];
+
+    memcpy(logKeyBuf,                 &pWal->index,           sizeof(i64));
+    memcpy(logKeyBuf + sizeof(i64),   &pCon->writeTermNumber, sizeof(i64));
+    memcpy(logKeyBuf + sizeof(i64)*2, &pCon->writeNumber,     sizeof(i64));
+    key.mv_size = sizeof(logKeyBuf);
+    key.mv_data = logKeyBuf;
+
+    data.mv_size = sizeof(u32);
+    data.mv_data = &p->pgno;
+
+    if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
+      return SQLITE_ERROR;
+
     thr->pagesChanged++;
   }
 

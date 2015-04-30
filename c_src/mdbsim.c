@@ -27,7 +27,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif
-
+#include "lz4.h"
 
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
@@ -116,6 +116,11 @@ static MDB_txn* open_wtxn(db_thread *data)
     return NULL;
   if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
     return NULL;
+  if (mdb_cursor_open(data->wtxn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
+    return NULL;
+  if (mdb_cursor_open(data->wtxn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
+    return NULL;
+
 
   return data->wtxn;
 }

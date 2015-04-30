@@ -11,7 +11,7 @@
 
 #define MAX_ATOM_LENGTH 255
 #define MAX_PATHNAME 512
-#define PAGE_BUFF_SIZE 9000
+#define PAGE_BUFF_SIZE 5300
 #define MAX_CONNECTIONS 8
 #define PACKET_ITEMS 9
 #define MAX_STATIC_SQLS 11
@@ -168,6 +168,8 @@ struct db_thread
   MDB_dbi actorsdb;
   MDB_env *env;
   MDB_txn *wtxn;
+  MDB_cursor *cursorLog;
+  MDB_cursor *cursorPages;
   // sqlite3_vfs *vfs;
   // so currently executing connection data is accessible from wal callback
   db_connection *curConn;
