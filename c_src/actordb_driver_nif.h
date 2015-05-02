@@ -95,6 +95,7 @@ struct Wal {
   i64 lastCompleteEvnum;
   i64 inProgressTerm;
   i64 inProgressEvnum;
+  MDB_val curFrame;
 
   // const char *zWalName;      /* Name of WAL file */
   // Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
@@ -170,6 +171,7 @@ struct db_thread
   MDB_txn *wtxn;
   MDB_cursor *cursorLog;
   MDB_cursor *cursorPages;
+  MDB_cursor *cursorInfo;
   // sqlite3_vfs *vfs;
   // so currently executing connection data is accessible from wal callback
   db_connection *curConn;

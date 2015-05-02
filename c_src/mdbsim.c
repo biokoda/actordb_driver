@@ -108,9 +108,9 @@ static MDB_txn* open_wtxn(db_thread *data)
     return NULL;
   if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
     return NULL;
-  if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
+  if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
     return NULL;
-  if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
+  if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
     return NULL;
   if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
     return NULL;
@@ -120,7 +120,8 @@ static MDB_txn* open_wtxn(db_thread *data)
     return NULL;
   if (mdb_cursor_open(data->wtxn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
     return NULL;
-
+  if (mdb_cursor_open(data->wtxn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
+    return NULL;
 
   return data->wtxn;
 }
@@ -132,6 +133,10 @@ int main(int argc, char* argv[])
 	db_command clcmd;
   char *path = "dbfile";
   int i = 0;
+  u8 page[SQLITE_DEFAULT_PAGE_SIZE];
+
+  for (i = 0; i < SQLITE_DEFAULT_PAGE_SIZE; i++)
+    page[i] = i;
 
   g_log = stdout;
 
@@ -181,6 +186,8 @@ int main(int argc, char* argv[])
       DBG((g_log,"COmmit failed!\r\n"));
       return 0;
     }
+    if (open_wtxn(&thread) == NULL)
+      return 0;
 
     // {
     //   MDB_txn *txn;
@@ -201,11 +208,77 @@ int main(int argc, char* argv[])
     //   if (rc == MDB_SUCCESS)
     //     DBG((g_log,"FOUND: %lld\r\n",*(i64*)data.mv_data));
     // }
-
-    if (mdb_txn_begin(thread.env, NULL, 0, &thread.wtxn) != MDB_SUCCESS)
-      return 0;
+    // if (mdb_txn_begin(thread.env, NULL, 0, &thread.wtxn) != MDB_SUCCESS)
+    //   return 0;
   }
-  DBG((g_log,"Closing\r\n"));
+  printf("DBs created. Inserting pages\n");
+  for (i = 0; i < 100; i++)
+  {
+    db_connection con;
+    con.wal.thread = &thread;
+    con.wal.index = 0;
+    thread.curConn = &con;
+
+    con.writeTermNumber = i / 10;
+    con.writeNumber = i;
+
+    PgHdr pgList;
+    memset(&pgList,0,sizeof(PgHdr));
+    pgList.pgno = i % 10;
+    pgList.pData = page;
+    if (sqlite3WalFrames(&con.wal, sizeof(page), &pgList, 10, i % 10, 0) != SQLITE_OK)
+    {
+      printf("Write frames failed\n");
+      break;
+    }
+
+    if (i % 10 == 0)
+    {
+      if (mdb_txn_commit(thread.wtxn) != MDB_SUCCESS)
+      {
+        DBG((g_log,"COmmit failed!\r\n"));
+        return 0;
+      }
+      if (open_wtxn(&thread) == NULL)
+      {
+        printf("Cant reopen txn?!\n");
+        return 0;
+      }
+
+    }
+  }
+
+  if (mdb_txn_commit(thread.wtxn) != MDB_SUCCESS)
+  {
+    DBG((g_log,"COmmit failed!\r\n"));
+    return 0;
+  }
+  if (open_wtxn(&thread) == NULL)
+  {
+    printf("Cant open txn\n");
+    return 0;
+  }
+
+  for (i = 0; i < 10; i++)
+  {
+    db_connection con;
+    u32 n;
+    con.wal.thread = &thread;
+    con.wal.index = 0;
+    thread.curConn = &con;
+    con.wal.curFrame.mv_size = 0;
+    con.wal.curFrame.mv_data = NULL;
+
+    sqlite3WalFindFrame(&con.wal, i, &n);
+    if (!n)
+    {
+      printf("Frame not found!!\n");
+      break;
+    }
+    sqlite3WalReadFrame(&con.wal, n, sizeof(page), page);
+  }
+
+  mdb_txn_commit(thread.wtxn);
   // mdb_dbi_close(thread.env,thread.infodb);
   // mdb_dbi_close(thread.env,thread.actorsdb);
   // mdb_dbi_close(thread.env,thread.logdb);

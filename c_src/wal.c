@@ -129,7 +129,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
       if (pWal->inProgressTerm != 0)
       {
-        // Delete pages from an incomplete write.
+        // TODO: Delete pages from an incomplete write.
       }
     }
     else if (rc == MDB_NOTFOUND)
@@ -177,17 +177,54 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 }
 
 /* Read a page from the write-ahead log, if it is present. */
+// TODO: We are making an assumption that an actor is being called from a single process,
+//       and there is no per actor read/write concurrency. Once there is read/write concurrency,
+//       find frame on a read transaction must not read intermediate frames that a write thread is
+//       flushing out.
+//       i.e. do not use thread->wtxn on read transactions.
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
-  db_thread *thread = pWal->thread;
+  db_thread *thr = pWal->thread;
+  MDB_val key, data;
+  int rc;
+  u8 pagesKeyBuf[sizeof(i64)+sizeof(u32)];
 
+  // ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
+  memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
+  memcpy(pagesKeyBuf + sizeof(i64), &pgno,       sizeof(u32));
+  key.mv_size = sizeof(pagesKeyBuf);
+  key.mv_data = pagesKeyBuf;
+
+  rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST);
+  if (rc == MDB_SUCCESS)
+  {
+    pWal->curFrame = data;
+    *piRead = 1;
+  }
+  else if (rc == MDB_NOTFOUND)
+  {
+    DBG((g_log,"Frame not found!\r\n"));
+    *piRead = 0;
+  }
+  else
+  {
+    DBG((g_log,"Error?! %d\r\n",rc));
+    *piRead = 0;
+  }
 
   return SQLITE_OK;
 }
 
 int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
-  return SQLITE_OK;
+  i64 term, evnum;
+  if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2),(char*)pOut,
+                          pWal->curFrame.mv_size-sizeof(i64)*2,nOut) > 0)
+  {
+    printf("Term=%lld, evnum=%lld\n",*(i64*)pWal->curFrame.mv_data, *(i64*)(pWal->curFrame.mv_data+sizeof(i64)));
+    return SQLITE_OK;
+  }
+  return SQLITE_ERROR;
 }
 
 /* If the WAL is not empty, return the size of the database. */
@@ -236,6 +273,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
   key.mv_size = sizeof(i64);
   key.mv_data = (void*)&pWal->index;
 
+  DBG((g_log,"Insert frame pgno=%u, term=%lld, evnum=%lld\n",pList->pgno,pCon->writeTermNumber,pCon->writeNumber));
+
   // ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
   for(p=pList; p; p=p->pDirty)
   {
@@ -273,8 +312,30 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 
     if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
       return SQLITE_ERROR;
+  }
+  /** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
+                                        LastCompleteTerm:64,LastCompleteEvnum:64,
+                                        InprogressTerm:64,InProgressEvnum:64>>} */
+  if (isCommit)
+  {
+    u8 infoBuf[1+6*sizeof(i64)];
+    pWal->lastCompleteTerm = pCon->writeTermNumber;
+    pWal->lastCompleteEvnum = pCon->writeNumber;
 
-    thr->pagesChanged++;
+    infoBuf[0] = 1;
+    memcpy(infoBuf+1,               &pWal->firstCompleteTerm,  sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64),   &pWal->firstCompleteEvnum, sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*2, &pWal->lastCompleteTerm,   sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*3, &pWal->lastCompleteEvnum,  sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*4, &pWal->inProgressTerm,     sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*5, &pWal->inProgressEvnum,    sizeof(i64));
+
+    key.mv_size = sizeof(i64);
+    key.mv_data = &pWal->index;
+    data.mv_size = sizeof(infoBuf);
+    data.mv_data = infoBuf;
+    if (mdb_cursor_put(thr->cursorInfo,&key,&data,0) != MDB_SUCCESS)
+      return SQLITE_ERROR;
   }
 
   return SQLITE_OK;
