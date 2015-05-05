@@ -88,13 +88,13 @@ struct priv_data
 
 struct Wal {
   db_thread *thread;
-  i64 index;
-  i64 firstCompleteTerm;
-  i64 firstCompleteEvnum;
-  i64 lastCompleteTerm;
-  i64 lastCompleteEvnum;
-  i64 inProgressTerm;
-  i64 inProgressEvnum;
+  u64 index;
+  u64 firstCompleteTerm;
+  u64 firstCompleteEvnum;
+  u64 lastCompleteTerm;
+  u64 lastCompleteEvnum;
+  u64 inProgressTerm;
+  u64 inProgressEvnum;
   MDB_val curFrame;
 
   // const char *zWalName;      /* Name of WAL file */
@@ -167,11 +167,13 @@ struct db_thread
   MDB_dbi logdb;
   MDB_dbi pagesdb;
   MDB_dbi actorsdb;
+  // MDB_dbi testdb;
   MDB_env *env;
   MDB_txn *wtxn;
   MDB_cursor *cursorLog;
   MDB_cursor *cursorPages;
   MDB_cursor *cursorInfo;
+  // MDB_cursor *cursorTest;
   // sqlite3_vfs *vfs;
   // so currently executing connection data is accessible from wal callback
   db_connection *curConn;

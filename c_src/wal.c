@@ -1,8 +1,6 @@
 /* ActorDB -> sqlite -> lz4 -> REPLICATION pipe -> LMDB
 ** WAL is where sqlite ends and lmdb starts.
 
-** We will not be doing any endian checking/encoding, as we do not care about any big-endian platforms.
-
 ** LMDB schema:
 ** - Actors DB: {<<ActorName/binary>>, <<ActorIndex:64>>}
 **   {"?",MaxInteger} -> when adding actors, increment this value
@@ -31,6 +29,14 @@
 ** If stale replication or actor copy, simply traverse actor pages from 0 forward until reaching
 ** the end.
 ** Undo is a matter of checking the pages of last write in log db and deleting them in log and pages db.
+
+** Endianess
+** Sort order is quite important for performance. We are assuming the platform this is running on
+** is little endian. No relevant platform uses bigendian.
+** Tables with integer keys (everything except actorsdb), use little endian encoding for keys.
+** Values for dbs that have integers (pages and log dbs) and are dupsort use big endian integer encoding.
+** This is because memcmp sort for little endian does not return right sort order, but it does
+** for big endian.
 */
 
 
@@ -286,8 +292,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
     key.mv_size = sizeof(pagesKeyBuf);
     key.mv_data = pagesKeyBuf;
 
-    memcpy(pagesBuf,              &pCon->writeTermNumber,sizeof(i64));
-    memcpy(pagesBuf + sizeof(i64),&pCon->writeNumber,    sizeof(i64));
+    writeUInt64(pagesBuf, pCon->writeTermNumber);
+    writeUInt64(pagesBuf + sizeof(u64), pCon->writeNumber);
     data.mv_size = sizeof(i64)*2 + LZ4_compress((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2,szPage);
     data.mv_data = pagesBuf;
 
@@ -300,6 +306,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
   for(p=pList; p; p=p->pDirty)
   {
     u8 logKeyBuf[sizeof(i64)*3];
+    u8 logBuf[sizeof(u32)];
 
     memcpy(logKeyBuf,                 &pWal->index,           sizeof(i64));
     memcpy(logKeyBuf + sizeof(i64),   &pCon->writeTermNumber, sizeof(i64));
@@ -307,8 +314,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
     key.mv_size = sizeof(logKeyBuf);
     key.mv_data = logKeyBuf;
 
+    sqlite3Put4byte(logBuf,p->pgno);
     data.mv_size = sizeof(u32);
-    data.mv_data = &p->pgno;
+    data.mv_data = logBug;
 
     if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
       return SQLITE_ERROR;
@@ -323,12 +331,12 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
     pWal->lastCompleteEvnum = pCon->writeNumber;
 
     infoBuf[0] = 1;
-    memcpy(infoBuf+1,               &pWal->firstCompleteTerm,  sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64),   &pWal->firstCompleteEvnum, sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*2, &pWal->lastCompleteTerm,   sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*3, &pWal->lastCompleteEvnum,  sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*4, &pWal->inProgressTerm,     sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*5, &pWal->inProgressEvnum,    sizeof(i64));
+    memcpy(infoBuf+1,               pWal->firstCompleteTerm,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64),   pWal->firstCompleteEvnum,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*2, pWal->lastCompleteTerm,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*3, pWal->lastCompleteEvnum,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*4, pWal->inProgressTerm,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*5, pWal->inProgressEvnum,sizeof(i64));
 
     key.mv_size = sizeof(i64);
     key.mv_data = &pWal->index;
@@ -417,7 +425,8 @@ SQLITE_API int sqlite3_wal_data(
   return rt;
 }
 
-void writeUInt64(unsigned char* buf, unsigned long long num)
+// write u64 to big endian
+void writeUInt64(unsigned char* buf, u64 num)
 {
   buf[0] = num >> 56;
   buf[1] = num >> 48;
@@ -429,6 +438,7 @@ void writeUInt64(unsigned char* buf, unsigned long long num)
   buf[7] = num;
 }
 
+// read big endian encoded u64
 u64 readUInt64(u8* buf)
 {
   return ((u64)buf[0] << 56) + ((u64)buf[1] << 48) + ((u64)buf[2] << 40) + ((u64)buf[3] << 32) +

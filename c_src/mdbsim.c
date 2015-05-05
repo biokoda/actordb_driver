@@ -112,6 +112,8 @@ static MDB_txn* open_wtxn(db_thread *data)
     return NULL;
   if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
     return NULL;
+  // if (mdb_dbi_open(data->wtxn, "test1", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->testdb) != MDB_SUCCESS)
+  //   return NULL;
   if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
     return NULL;
   if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
@@ -122,6 +124,8 @@ static MDB_txn* open_wtxn(db_thread *data)
     return NULL;
   if (mdb_cursor_open(data->wtxn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
     return NULL;
+  // if (mdb_cursor_open(data->wtxn, data->testdb, &data->cursorTest) != MDB_SUCCESS)
+  //   return NULL;
 
   return data->wtxn;
 }
@@ -143,7 +147,7 @@ int main(int argc, char* argv[])
   if (mdb_env_create(&thread.env) != MDB_SUCCESS)
     return 0;
 
-  if (mdb_env_set_maxdbs(thread.env,4) != MDB_SUCCESS)
+  if (mdb_env_set_maxdbs(thread.env,5) != MDB_SUCCESS)
     return 0;
 
   // TODO: set this as an input parameter, right now 549GB
@@ -163,6 +167,35 @@ int main(int argc, char* argv[])
   // Now reopen.
   if (open_wtxn(&thread) == NULL)
     return 0;
+
+  // {
+  //   // If we want sorted data values must be big endian
+  //   MDB_val key, data;
+  //   int j = 0;
+  //   key.mv_data = &j;
+  //   key.mv_size = sizeof(j);
+  //   for (i = 0; i < 1000; i++)
+  //   {
+  //     u8 buf[10];
+  //     sqlite3Put4byte(buf, i / 10);
+  //     sqlite3Put4byte(buf+4, i);
+  //     buf[8] = i;
+  //     buf[9] = i;
+  //     data.mv_data = buf;
+  //     data.mv_size = sizeof(buf);
+  //     mdb_put(thread.wtxn,thread.testdb,&key,&data,0);
+  //   }
+  //
+  //   mdb_cursor_get(thread.cursorTest,&key,&data,MDB_FIRST_DUP);
+  //   printf("First %d\n",*(int*)data.mv_data);
+  //   for (i = 0; i < 100; i++)
+  //   {
+  //     mdb_cursor_get(thread.cursorTest,&key,&data,MDB_NEXT_DUP);
+  //     printf("Next %d %d\n",sqlite3Get4byte(data.mv_data),sqlite3Get4byte(data.mv_data+4));
+  //   }
+  //   return 0;
+  // }
+
 
   for (i = 0; i < 10000;i++)
   {
