@@ -33,7 +33,8 @@
 ** Endianess
 ** Sort order is quite important for performance. We are assuming the platform this is running on
 ** is little endian. No relevant platform uses bigendian.
-** Tables with integer keys (everything except actorsdb), use little endian encoding for keys.
+** Tables with integer keys (everything except actorsdb), use little endian encoding for keys. This is because they are
+** set to integer keys and they will be interpreted correctly.
 ** Values for dbs that have integers (pages and log dbs) and are dupsort use big endian integer encoding.
 ** This is because memcmp sort for little endian does not return right sort order, but it does
 ** for big endian.
@@ -279,7 +280,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
   key.mv_size = sizeof(i64);
   key.mv_data = (void*)&pWal->index;
 
-  DBG((g_log,"Insert frame pgno=%u, term=%lld, evnum=%lld\n",pList->pgno,pCon->writeTermNumber,pCon->writeNumber));
+  DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld\n",pWal->index,pList->pgno,pCon->writeTermNumber,pCon->writeNumber));
 
   // ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
   for(p=pList; p; p=p->pDirty)
@@ -298,7 +299,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
     data.mv_data = pagesBuf;
 
     if (mdb_cursor_put(thr->cursorPages,&key,&data,0) != MDB_SUCCESS)
+    {
+      printf("Cursor put failed to pages\n");
       return SQLITE_ERROR;
+    }
 
     thr->pagesChanged++;
   }
@@ -316,10 +320,13 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 
     sqlite3Put4byte(logBuf,p->pgno);
     data.mv_size = sizeof(u32);
-    data.mv_data = logBug;
+    data.mv_data = logBuf;
 
     if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
+    {
+      printf("Cursor put failed to log\n");
       return SQLITE_ERROR;
+    }
   }
   /** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
                                         LastCompleteTerm:64,LastCompleteEvnum:64,
@@ -331,19 +338,23 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
     pWal->lastCompleteEvnum = pCon->writeNumber;
 
     infoBuf[0] = 1;
-    memcpy(infoBuf+1,               pWal->firstCompleteTerm,sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64),   pWal->firstCompleteEvnum,sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*2, pWal->lastCompleteTerm,sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*3, pWal->lastCompleteEvnum,sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*4, pWal->inProgressTerm,sizeof(i64));
-    memcpy(infoBuf+1+sizeof(i64)*5, pWal->inProgressEvnum,sizeof(i64));
+    memcpy(infoBuf+1,               &pWal->firstCompleteTerm,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64),   &pWal->firstCompleteEvnum,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*2, &pWal->lastCompleteTerm,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*3, &pWal->lastCompleteEvnum,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*4, &pWal->inProgressTerm,sizeof(i64));
+    memcpy(infoBuf+1+sizeof(i64)*5, &pWal->inProgressEvnum,sizeof(i64));
 
     key.mv_size = sizeof(i64);
     key.mv_data = &pWal->index;
     data.mv_size = sizeof(infoBuf);
     data.mv_data = infoBuf;
     if (mdb_cursor_put(thr->cursorInfo,&key,&data,0) != MDB_SUCCESS)
+    {
+      printf("Cursor put failed to info\n");
       return SQLITE_ERROR;
+    }
+
   }
 
   return SQLITE_OK;

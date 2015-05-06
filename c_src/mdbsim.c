@@ -55,13 +55,13 @@ static int logdb_cmp(const MDB_val *a, const MDB_val *b)
   diff = aActor - bActor;
   if (diff == 0)
   {
-    aEvterm = *((i64*)a->mv_data+sizeof(i64));
-    bEvterm = *((i64*)b->mv_data+sizeof(i64));
+    aEvterm = *(i64*)(a->mv_data+sizeof(i64));
+    bEvterm = *(i64*)(b->mv_data+sizeof(i64));
     diff = aEvterm - bEvterm;
     if (diff == 0)
     {
-      aEvnum  = *((i64*)a->mv_data+sizeof(i64)*2);
-      bEvnum  = *((i64*)a->mv_data+sizeof(i64)*2);
+      aEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+      bEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
       return aEvnum - bEvnum;
     }
     else
@@ -89,8 +89,8 @@ static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
   diff = aActor - bActor;
   if (diff == 0)
   {
-    aPgno = *((u32*)a->mv_data+sizeof(i64));
-    bPgno = *((u32*)b->mv_data+sizeof(i64));
+    aPgno = *(u32*)(a->mv_data+sizeof(i64));
+    bPgno = *(u32*)(b->mv_data+sizeof(i64));
     return aPgno - bPgno;
   }
   else
@@ -136,7 +136,7 @@ int main(int argc, char* argv[])
 	db_thread thread;
 	db_command clcmd;
   char *path = "dbfile";
-  int i = 0;
+  int i = 0, j, rc;
   u8 page[SQLITE_DEFAULT_PAGE_SIZE];
 
   for (i = 0; i < SQLITE_DEFAULT_PAGE_SIZE; i++)
@@ -150,8 +150,8 @@ int main(int argc, char* argv[])
   if (mdb_env_set_maxdbs(thread.env,5) != MDB_SUCCESS)
     return 0;
 
-  // TODO: set this as an input parameter, right now 549GB
-  if (mdb_env_set_mapsize(thread.env,4096*1024*1024*128) != MDB_SUCCESS)
+  // TODO: set this as an input parameter, right now 5GB
+  if (mdb_env_set_mapsize(thread.env,4096*1024*128*10) != MDB_SUCCESS)
     return 0;
 
   if (mdb_env_open(thread.env, path, MDB_NOSUBDIR | MDB_NOSYNC, 0664) != MDB_SUCCESS)
@@ -197,7 +197,7 @@ int main(int argc, char* argv[])
   // }
 
 
-  for (i = 0; i < 10000;i++)
+  for (i = 0; i < 1000;i++)
   {
     char name[256];
     snprintf(name,256,"actor/%d",i);
@@ -245,39 +245,41 @@ int main(int argc, char* argv[])
     //   return 0;
   }
   printf("DBs created. Inserting pages\n");
-  for (i = 0; i < 100; i++)
+  for (j = 0; j < 10; j++)
   {
-    db_connection con;
-    con.wal.thread = &thread;
-    con.wal.index = 0;
-    thread.curConn = &con;
-
-    con.writeTermNumber = i / 10;
-    con.writeNumber = i;
-
-    PgHdr pgList;
-    memset(&pgList,0,sizeof(PgHdr));
-    pgList.pgno = i % 10;
-    pgList.pData = page;
-    if (sqlite3WalFrames(&con.wal, sizeof(page), &pgList, 10, i % 10, 0) != SQLITE_OK)
+    for (i = 0; i < 100; i++)
     {
-      printf("Write frames failed\n");
-      break;
-    }
+      db_connection con;
+      con.wal.thread = &thread;
+      con.wal.index = j;
+      thread.curConn = &con;
 
-    if (i % 10 == 0)
-    {
-      if (mdb_txn_commit(thread.wtxn) != MDB_SUCCESS)
+      con.writeTermNumber = i / 10;
+      con.writeNumber = i;
+
+      PgHdr pgList;
+      memset(&pgList,0,sizeof(PgHdr));
+      pgList.pgno = i % 10;
+      pgList.pData = page;
+      if (sqlite3WalFrames(&con.wal, sizeof(page), &pgList, 10, i % 10, 0) != SQLITE_OK)
       {
-        DBG((g_log,"COmmit failed!\r\n"));
-        return 0;
-      }
-      if (open_wtxn(&thread) == NULL)
-      {
-        printf("Cant reopen txn?!\n");
-        return 0;
+        printf("Write frames failed\n");
+        break;
       }
 
+      // if (i % 10 == 0)
+      {
+        if ((rc = mdb_txn_commit(thread.wtxn)) != MDB_SUCCESS)
+        {
+          DBG((g_log,"COmmit failed! %d\r\n",rc));
+          return 0;
+        }
+        if (open_wtxn(&thread) == NULL)
+        {
+          printf("Cant reopen txn?!\n");
+          return 0;
+        }
+      }
     }
   }
 
@@ -292,24 +294,63 @@ int main(int argc, char* argv[])
     return 0;
   }
 
-  for (i = 0; i < 10; i++)
+  // Print pages db. It must be correctly sorted.
   {
-    db_connection con;
-    u32 n;
-    con.wal.thread = &thread;
-    con.wal.index = 0;
-    thread.curConn = &con;
-    con.wal.curFrame.mv_size = 0;
-    con.wal.curFrame.mv_data = NULL;
+    MDB_val key, data;
+    u64 term,evnum,actor;
+    u32 pgno;
+    int op = MDB_FIRST;
 
-    sqlite3WalFindFrame(&con.wal, i, &n);
-    if (!n)
+    while (mdb_cursor_get(thread.cursorPages,&key,&data,op) == MDB_SUCCESS)
     {
-      printf("Frame not found!!\n");
-      break;
+      actor = *(u64*)key.mv_data;
+      pgno = *(u32*)(key.mv_data+sizeof(u64));
+      term = readUInt64(data.mv_data);
+      evnum = readUInt64(data.mv_data+sizeof(u64));
+
+      printf("pages key: actor=%lld,pgno=%u --- value: evterm=%lld,evnum=%lld\n",actor,pgno,term,evnum);
+      op = MDB_NEXT;
     }
-    sqlite3WalReadFrame(&con.wal, n, sizeof(page), page);
   }
+
+  // Print log db. It must be correctly sorted.
+  {
+    MDB_val key, data;
+    u64 term,evnum,actor;
+    u32 pgno;
+    int op = MDB_FIRST;
+
+    while (mdb_cursor_get(thread.cursorLog,&key,&data,op) == MDB_SUCCESS)
+    {
+      actor = *(u64*)key.mv_data;
+      term = *(u64*)(key.mv_data+sizeof(u64));
+      evnum = *(u64*)(key.mv_data+sizeof(u64)*2);
+      pgno = sqlite3Get4byte(data.mv_data);
+
+      printf("log key: actor=%lld,evterm=%lld,evnum=%lld -- value: pgno=%u\n",actor,term,evnum,pgno);
+      op = MDB_NEXT;
+    }
+  }
+
+  // for (i = 0; i < 10; i++)
+  // {
+  //   db_connection con;
+  //   u32 n;
+  //   con.wal.thread = &thread;
+  //   con.wal.index = 0;
+  //   thread.curConn = &con;
+  //   con.wal.curFrame.mv_size = 0;
+  //   con.wal.curFrame.mv_data = NULL;
+  //
+  //   sqlite3WalFindFrame(&con.wal, i, &n);
+  //   if (!n)
+  //   {
+  //     printf("Frame not found!!\n");
+  //     break;
+  //   }
+  //   sqlite3WalReadFrame(&con.wal, n, sizeof(page), page);
+  // }
+
 
   mdb_txn_commit(thread.wtxn);
   // mdb_dbi_close(thread.env,thread.infodb);
