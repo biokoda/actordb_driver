@@ -199,7 +199,7 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
   int rc;
   u8 pagesKeyBuf[sizeof(i64)+sizeof(u32)];
 
-  DBG((g_log,"FIND FRAME\n"));
+  DBG((g_log,"FIND FRAME pgno=%u\n",pgno));
 
   // ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
   memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
@@ -207,7 +207,7 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
   key.mv_size = sizeof(pagesKeyBuf);
   key.mv_data = pagesKeyBuf;
 
-  rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST);
+  rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
   if (rc == MDB_SUCCESS)
   {
     pWal->curFrame = data;
@@ -234,7 +234,8 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
   if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2),(char*)pOut,
                           pWal->curFrame.mv_size-sizeof(i64)*2,nOut) > 0)
   {
-    printf("Term=%lld, evnum=%lld\n",*(i64*)pWal->curFrame.mv_data, *(i64*)(pWal->curFrame.mv_data+sizeof(i64)));
+    printf("Term=%lld, evnum=%lld, framesize=%d\n",readUInt64(pWal->curFrame.mv_data),
+    readUInt64(pWal->curFrame.mv_data+sizeof(i64)),(int)pWal->curFrame.mv_size);
     return SQLITE_OK;
   }
   return SQLITE_ERROR;

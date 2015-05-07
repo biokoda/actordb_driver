@@ -335,7 +335,11 @@ int main(int argc, char* argv[])
   {
     char name[256];
     db_connection con;
+    char val[512];
+    char txt[600];
 
+    memset(val,0,sizeof(val));
+    memset(val,'a',500);
     memset(&con,0,sizeof(db_connection));
     snprintf(name,256,"sqlitedb");
     con.wal.thread = &thread;
@@ -356,20 +360,20 @@ int main(int argc, char* argv[])
       return 0;
     }
 
-    for (i = 0; i < 10; i++)
+    for (i = 0; i < 1000; i++)
     {
-      char txt[256];
-      sprintf(txt,"insert into tab values (%d,'text for %d');",i,i);
-      printf("calling: %s\n",txt);
+      con.writeNumber = i;
+      con.writeTermNumber = i / 10;
+      sprintf(txt,"insert into tab values (%d,'text for %s');",i,val);
+      // printf("calling: %s\n",txt);
       rc = sqlite3_exec(con.db,txt,NULL,NULL,NULL);
       if (rc != SQLITE_OK)
         break;
       // rc = sqlite3_prepare_v2(con.db, txt, strlen(txt), &(statement), NULL);
     }
 
-    for (i = 0; i < 10; i++)
+    for (i = 0; i < 1000; i++)
     {
-      char txt[256];
       sprintf(txt,"select * from tab where id=%d;",i);
       printf("calling: %s\n",txt);
       rc = sqlite3_exec(con.db,txt,NULL,NULL,NULL);
