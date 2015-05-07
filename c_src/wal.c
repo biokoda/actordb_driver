@@ -43,11 +43,14 @@
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
-int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName, int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
+int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
+  int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
 {
   MDB_val key, data;
   int rc;
   db_thread *thr = (db_thread*)walData;
+  if (thr == NULL)
+  printf("THREAD == NULL\n");
   Wal *pWal = &thr->curConn->wal;
   MDB_dbi actorsdb = thr->actorsdb, infodb = thr->infodb;
   MDB_txn *txn;
@@ -196,6 +199,8 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
   int rc;
   u8 pagesKeyBuf[sizeof(i64)+sizeof(u32)];
 
+  DBG((g_log,"FIND FRAME\n"));
+
   // ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
   memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
   memcpy(pagesKeyBuf + sizeof(i64), &pgno,       sizeof(u32));
@@ -225,6 +230,7 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
   i64 term, evnum;
+  DBG((g_log,"READ FRAME\n"));
   if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2),(char*)pOut,
                           pWal->curFrame.mv_size-sizeof(i64)*2,nOut) > 0)
   {
@@ -237,6 +243,8 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 /* If the WAL is not empty, return the size of the database. */
 Pgno sqlite3WalDbsize(Wal *pWal)
 {
+  if (pWal)
+    return pWal->mxPage;
   return 0;
 }
 
@@ -339,6 +347,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
       pWal->lastCompleteTerm = pCon->writeTermNumber;
       pWal->lastCompleteEvnum = pCon->writeNumber;
       pWal->inProgressTerm = pWal->inProgressEvnum = 0;
+      pWal->mxPage = nTruncate;
     }
     else
     {

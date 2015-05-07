@@ -205,7 +205,6 @@ int main(int argc, char* argv[])
     db_connection con;
     memset(&con,0,sizeof(db_connection));
     con.dbpath = name;
-    int rc;
 
     thread.curConn = &con;
 
@@ -329,6 +328,53 @@ int main(int argc, char* argv[])
 
       printf("log key: actor=%lld,evterm=%lld,evnum=%lld -- value: pgno=%u\n",actor,term,evnum,pgno);
       op = MDB_NEXT;
+    }
+  }
+
+  // Test with sqlite
+  {
+    char name[256];
+    db_connection con;
+
+    memset(&con,0,sizeof(db_connection));
+    snprintf(name,256,"sqlitedb");
+    con.wal.thread = &thread;
+    con.dbpath = name;
+    thread.curConn = &con;
+
+    rc = sqlite3_open(name,&(con.db));
+    if (rc != SQLITE_OK)
+    {
+      printf("Cant open=%d\n",rc);
+      return 0;
+    }
+    sqlite3_wal_data(con.db,&thread);
+    rc = sqlite3_exec(con.db,"PRAGMA journal_mode=wal;create table tab (id integer primary key, val text);",NULL,NULL,NULL);
+    if (rc != SQLITE_OK)
+    {
+      printf("Exec failed=%d\n",rc);
+      return 0;
+    }
+
+    for (i = 0; i < 10; i++)
+    {
+      char txt[256];
+      sprintf(txt,"insert into tab values (%d,'text for %d');",i,i);
+      printf("calling: %s\n",txt);
+      rc = sqlite3_exec(con.db,txt,NULL,NULL,NULL);
+      if (rc != SQLITE_OK)
+        break;
+      // rc = sqlite3_prepare_v2(con.db, txt, strlen(txt), &(statement), NULL);
+    }
+
+    for (i = 0; i < 10; i++)
+    {
+      char txt[256];
+      sprintf(txt,"select * from tab where id=%d;",i);
+      printf("calling: %s\n",txt);
+      rc = sqlite3_exec(con.db,txt,NULL,NULL,NULL);
+      if (rc != SQLITE_OK)
+        break;
     }
   }
 

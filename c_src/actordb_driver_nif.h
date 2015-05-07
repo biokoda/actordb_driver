@@ -96,6 +96,7 @@ struct Wal {
   u64 inProgressTerm;
   u64 inProgressEvnum;
   MDB_val curFrame;
+  Pgno mxPage;
 
   // const char *zWalName;      /* Name of WAL file */
   // Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
