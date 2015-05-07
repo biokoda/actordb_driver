@@ -331,11 +331,20 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
   /** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
                                         LastCompleteTerm:64,LastCompleteEvnum:64,
                                         InprogressTerm:64,InProgressEvnum:64>>} */
-  if (isCommit)
+  // if (isCommit)
   {
     u8 infoBuf[1+6*sizeof(i64)];
-    pWal->lastCompleteTerm = pCon->writeTermNumber;
-    pWal->lastCompleteEvnum = pCon->writeNumber;
+    if (isCommit)
+    {
+      pWal->lastCompleteTerm = pCon->writeTermNumber;
+      pWal->lastCompleteEvnum = pCon->writeNumber;
+      pWal->inProgressTerm = pWal->inProgressEvnum = 0;
+    }
+    else
+    {
+      pWal->inProgressTerm = pCon->writeTermNumber;
+      pWal->inProgressEvnum = pCon->writeNumber;
+    }
 
     infoBuf[0] = 1;
     memcpy(infoBuf+1,               &pWal->firstCompleteTerm,sizeof(i64));
@@ -354,7 +363,6 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
       printf("Cursor put failed to info\n");
       return SQLITE_ERROR;
     }
-
   }
 
   return SQLITE_OK;
