@@ -262,7 +262,89 @@ int sqlite3WalEndWriteTransaction(Wal *pWal)
 /* Undo any frames written (but not committed) to the log */
 int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 {
-  return SQLITE_OK;
+  MDB_val logKey, logVal;
+  MDB_val pgKey, pgVal;
+  u8 logKeyBuf[sizeof(u64)*3];
+  u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+  db_thread *thr = pWal->thread;
+  int logop, pgop, rc = SQLITE_OK, mrc;
+  u64 term,evnum;
+
+  if (pWal->inProgressTerm == 0)
+    return SQLITE_OK;
+
+  logKey.mv_data = logKeyBuf;
+  logKey.mv_size = sizeof(logKeyBuf);
+
+  // For every page here
+  // ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
+  // Delete from
+  // ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
+  memcpy(logKeyBuf,                 &pWal->index,          sizeof(i64));
+  memcpy(logKeyBuf + sizeof(i64),   &pWal->inProgressTerm, sizeof(i64));
+  memcpy(logKeyBuf + sizeof(i64)*2, &pWal->inProgressEvnum,sizeof(i64));
+
+  logop = MDB_FIRST_DUP;
+  if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+  {
+    DBG((g_log,"Key not found in log for undo\n"));
+    return SQLITE_OK;
+  }
+  while ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+  {
+    u32 pgno = sqlite3Get4byte(logVal.mv_data);
+    memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
+    memcpy(pagesKeyBuf + sizeof(i64), &pgno,       sizeof(u32));
+    pgKey.mv_data = pagesKeyBuf;
+    pgKey.mv_size = sizeof(pagesKeyBuf);
+
+    // DBG((g_log,"UNDO pgno=%d\n",pgno));
+
+    pgop = MDB_LAST_DUP;
+    if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+    {
+      // DBG((g_log,"Key not found in log for undo\n"));
+      continue;
+    }
+    while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
+    {
+      term = readUInt64(pgVal.mv_data);
+      evnum = readUInt64(pgVal.mv_data+sizeof(i64));
+      // DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
+      //   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
+      if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
+      {
+        // DBG((g_log,"DELETING!\n"));
+        mdb_cursor_del(thr->cursorPages,0);
+      }
+      else
+      {
+        // Pages are sorted so we can break if term/evnum is smaller
+        // This while should only execute once.
+        break;
+      }
+
+      pgop = MDB_PREV_DUP;
+    }
+    if (xUndo)
+      rc = xUndo(pUndoCtx, pgno);
+
+    logop = MDB_NEXT_DUP;
+  }
+  // if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+  // {
+  //   DBG((g_log,"Key not found in log for undo\n"));
+  //   return SQLITE_OK;
+  // }
+  if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
+  {
+    DBG((g_log,"Unable to cleanup key from logdb\n"));
+  }
+
+  // DBG((g_log,"Undo done!\n"));
+  pWal->inProgressTerm = pWal->inProgressEvnum = 0;
+
+  return rc;
 }
 
 /* Return an integer that records the current (uncommitted) write
@@ -285,6 +367,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
   db_thread *thr = pWal->thread;
   db_connection *pCon = thr->curConn;
   MDB_val key, data;
+  int rc;
 
   key.mv_size = sizeof(i64);
   key.mv_data = (void*)&pWal->index;
@@ -307,14 +390,17 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
     data.mv_size = sizeof(i64)*2 + LZ4_compress((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2,szPage);
     data.mv_data = pagesBuf;
 
-    if (mdb_cursor_put(thr->cursorPages,&key,&data,0) != MDB_SUCCESS)
+    // printf(" | pgno=%u (pgsize=%zu)",p->pgno, data.mv_size);
+
+    if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
     {
-      printf("Cursor put failed to pages\n");
+      printf("Cursor put failed to pages %d\n",rc);
       return SQLITE_ERROR;
     }
 
     thr->pagesChanged++;
   }
+  // printf("\n");
   // ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
   for(p=pList; p; p=p->pDirty)
   {

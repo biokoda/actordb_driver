@@ -6003,6 +6003,7 @@ fetchm:
 		mfunc = mdb_cursor_first;
 	mmove:
 		if (data == NULL || !(mc->mc_flags & C_INITIALIZED)) {
+			printf("INIT1 %d\n",mc->mc_flags & C_INITIALIZED);
 			rc = EINVAL;
 			break;
 		}
@@ -6019,6 +6020,7 @@ fetchm:
 			}
 		}
 		if (!(mc->mc_xcursor->mx_cursor.mc_flags & C_INITIALIZED)) {
+			printf("INIT2\n");
 			rc = EINVAL;
 			break;
 		}

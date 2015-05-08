@@ -246,21 +246,41 @@ int main(int argc, char* argv[])
   printf("DBs created. Inserting pages\n");
   for (j = 0; j < 10; j++)
   {
-    for (i = 0; i < 100; i++)
+    for (i = 0; i <= 100; i++)
     {
       db_connection con;
       con.wal.thread = &thread;
       con.wal.index = j;
       thread.curConn = &con;
 
+      if (i == 100)
+      {
+        if ((rc = mdb_txn_commit(thread.wtxn)) != MDB_SUCCESS)
+        {
+          DBG((g_log,"COmmit failed! %d\r\n",rc));
+          return 0;
+        }
+        if (open_wtxn(&thread) == NULL)
+        {
+          printf("Cant reopen txn?!\n");
+          return 0;
+        }
+
+        // Undo evnum = 9, evterm = 9
+        DBG((g_log,"%lld %lld\n",con.wal.inProgressTerm, con.wal.inProgressEvnum));
+        sqlite3WalUndo(&con.wal, NULL, NULL);
+        continue;
+      }
+
       con.writeTermNumber = i / 10;
-      con.writeNumber = i;
+      con.writeNumber = i / 10;
 
       PgHdr pgList;
       memset(&pgList,0,sizeof(PgHdr));
       pgList.pgno = i % 10;
       pgList.pData = page;
-      if (sqlite3WalFrames(&con.wal, sizeof(page), &pgList, 10, i % 10, 0) != SQLITE_OK)
+
+      if (sqlite3WalFrames(&con.wal, sizeof(page), &pgList, 10, (i % 10) == 0, 0) != SQLITE_OK)
       {
         printf("Write frames failed\n");
         break;
@@ -294,6 +314,7 @@ int main(int argc, char* argv[])
   }
 
   // Print pages db. It must be correctly sorted.
+  // pages should be missing for term 9 and evnum 9
   {
     MDB_val key, data;
     u64 term,evnum,actor;
@@ -368,7 +389,21 @@ int main(int argc, char* argv[])
       // printf("calling: %s\n",txt);
       rc = sqlite3_exec(con.db,txt,NULL,NULL,NULL);
       if (rc != SQLITE_OK)
+      {
+        printf("Exec failed\n");
         break;
+      }
+
+      if ((rc = mdb_txn_commit(thread.wtxn)) != MDB_SUCCESS)
+      {
+        DBG((g_log,"COmmit failed! %d\r\n",rc));
+        return 0;
+      }
+      if (open_wtxn(&thread) == NULL)
+      {
+        printf("Cant reopen txn?!\n");
+        return 0;
+      }
       // rc = sqlite3_prepare_v2(con.db, txt, strlen(txt), &(statement), NULL);
     }
 
@@ -381,6 +416,8 @@ int main(int argc, char* argv[])
         break;
     }
   }
+
+
 
   // for (i = 0; i < 10; i++)
   // {
