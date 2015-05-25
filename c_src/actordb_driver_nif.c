@@ -45,7 +45,7 @@
 // Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
 #include "queue.c"
-
+#include "nullvfs.c"
 
 void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 static ERL_NIF_TERM

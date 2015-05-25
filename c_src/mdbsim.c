@@ -42,7 +42,7 @@
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
 // Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
-// #include "tool_do.c"
+#include "nullvfs.c"
 
 static int logdb_cmp(const MDB_val *a, const MDB_val *b)
 {
@@ -359,6 +359,8 @@ int main(int argc, char* argv[])
     char val[512];
     char txt[600];
 
+    sqlite3_vfs_register(sqlite3_nullvfs(), 1);
+
     memset(val,0,sizeof(val));
     memset(val,'a',500);
     memset(&con,0,sizeof(db_connection));
@@ -374,12 +376,14 @@ int main(int argc, char* argv[])
       return 0;
     }
     sqlite3_wal_data(con.db,&thread);
-    rc = sqlite3_exec(con.db,"PRAGMA journal_mode=wal;create table tab (id integer primary key, val text);",NULL,NULL,NULL);
+    rc = sqlite3_exec(con.db,"PRAGMA locking_mode=EXCLUSIVE;PRAGMA journal_mode=wal;create table tab (id integer primary key, val text);",NULL,NULL,NULL);
     if (rc != SQLITE_OK)
     {
       printf("Exec failed=%d\n",rc);
       return 0;
     }
+    printf("FIRST EXEC DONE\n");
+    // return 1;
 
     for (i = 0; i < 1000; i++)
     {

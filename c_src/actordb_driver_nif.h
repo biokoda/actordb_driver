@@ -59,32 +59,6 @@ struct priv_data
     ErlNifResourceType *iterate_type;
     #endif
 };
-//
-// struct WalIterator {
-//   int iPrior;                     /* Last result returned from the iterator */
-//   int nSegment;                   /* Number of entries in aSegment[] */
-//   struct WalSegment {
-//     int iNext;                    /* Next slot in aIndex[] not yet returned */
-//     ht_slot *aIndex;              /* i0, i1, i2... such that aPgno[iN] ascend */
-//     u32 *aPgno;                   /* Array of page numbers. */
-//     int nEntry;                   /* Nr. of entries in aPgno[] and aIndex[] */
-//     int iZero;                    /* Frame number associated with aPgno[0] */
-//   } aSegment[1];                  /* One for every 32KB page in the wal-index */
-// };
-//
-// struct WalIndexHdr {
-//   u32 iVersion;                   /* Wal-index version */
-//   u32 unused;                     /* Unused (padding) field */
-//   u32 iChange;                    /* Counter incremented each transaction */
-//   u8 isInit;                      /* 1 when initialized */
-//   u8 bigEndCksum;                 /* True if checksums in WAL are big-endian */
-//   u16 szPage;                     /* Database page size in bytes. 1==64K */
-//   u32 mxFrame;                    /* Index of last valid frame in the WAL */
-//   u32 nPage;                      /* Size of database in pages */
-//   u32 aFrameCksum[2];             /* Checksum of last frame in log */
-//   u32 aSalt[2];                   /* Two salt values copied from WAL header */
-//   u32 aCksum[2];                  /* Checksum over all prior fields */
-// };
 
 struct Wal {
   db_thread *thread;
@@ -97,42 +71,7 @@ struct Wal {
   u64 inProgressEvnum;
   MDB_val curFrame;
   Pgno mxPage;
-
-  // const char *zWalName;      /* Name of WAL file */
-  // Wal *prev;     /* One instance per wal file. If new log file created, we create new wal structure for every actor
-  //                 that does a write in new file. Once actor has checkpointed out of old file, the old Wal is discarded
-  //                 for new. Writes are always to new file, reads always start with new file and they move to previous files
-  //                 if not found. */
-  // sqlite3_vfs *pVfs;         /* The VFS used to create pDbFd */
-  // sqlite3_file *pDbFd;       /* File handle for the database file */
-  // sqlite3_file *pWalFd;      /* File handle for WAL file */
-  // u32 **apWiData;            /* Pointer to wal-index content in memory (ActorDB change remove volatile, access is single threaded) */
-  // i64 mxWalSize;             /* Truncate WAL to this size upon reset */
-  // u64 walIndex;
-  // u32 iCallback;             /* Value to pass to log callback (or 0) */
-  // int nWiData;               /* Size of array apWiData */
-  // int szFirstBlock;          /* Size of first block written to WAL file */
-  // WalIndexHdr hdr;           /* Wal-index header for current transaction */
-  // u32 nCkpt;                 /* Checkpoint sequence counter in the wal-header */
-  // u32 prevFrameOffset;       /* Offset of last written frame to wal file. Regardless if commited or not. */
-  // u32 szPage;                /* Database page size */
-  // i16 readLock;              /* Which read lock is being held.  -1 for none */
-  // u8 syncFlags;              /* Flags to use to sync header writes */
-  // u8 exclusiveMode;          /* Non-zero if connection is in exclusive mode */
-  // u8 writeLock;              /* True if in a write transaction */
-  // u8 ckptLock;               /* True if holding a checkpoint lock */
-  // u8 readOnly;               /* WAL_RDWR, WAL_RDONLY, or WAL_SHM_RDONLY */
-  // u8 truncateOnCommit;       /* True to truncate WAL file on commit */
-  // u8 syncHeader;             /* Fsync the WAL header if true */
-  // u8 padToSectorBoundary;    /* Pad transactions out to the next sector */
-  // u8 init;
-  // u8 lockError;
-  // u8 dirty;                  /* 1 when between commit flags */
 };
-// struct WalCkptInfo {
-//   u32 nBackfill;        /* Number of WAL frames backfilled into DB */
-//   u32 aReadMark[1];     /* Reader marks */
-// };
 
 
 struct control_data

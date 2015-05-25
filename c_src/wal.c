@@ -73,7 +73,6 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
   {
     i64 index = 0;
     MDB_val key1 = {1,(void*)"?"};
-    MDB_val data1;
 
     rc = mdb_get(txn,actorsdb,&key1,&data);
     if (rc == MDB_NOTFOUND)
@@ -229,13 +228,13 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 
 int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
-  i64 term, evnum;
+  // i64 term, evnum;
   DBG((g_log,"READ FRAME\n"));
   if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2),(char*)pOut,
                           pWal->curFrame.mv_size-sizeof(i64)*2,nOut) > 0)
   {
-    printf("Term=%lld, evnum=%lld, framesize=%d\n",readUInt64(pWal->curFrame.mv_data),
-    readUInt64(pWal->curFrame.mv_data+sizeof(i64)),(int)pWal->curFrame.mv_size);
+    // printf("Term=%lld, evnum=%lld, framesize=%d\n",readUInt64(pWal->curFrame.mv_data),
+    // readUInt64(pWal->curFrame.mv_data+sizeof(i64)),(int)pWal->curFrame.mv_size);
     return SQLITE_OK;
   }
   return SQLITE_ERROR;
