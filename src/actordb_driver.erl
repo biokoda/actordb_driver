@@ -16,7 +16,7 @@
          tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
          tcp_reconnect/0,bind_insert/3]).
 
-% {{ThreadPath1,ThreadPath2,...},{StaticSql1,StaticSql2,...}}
+% {{Path1,Path2,...},{StaticSql1,StaticSql2,...}}
 init(Threads) ->
     actordb_driver_nif:init(Threads).
 
@@ -24,7 +24,7 @@ open(Filename) ->
     open(Filename,0,wal).
 open(Filename,ThreadNumber) ->
     open(Filename,ThreadNumber,wal).
-open(Filename,ThreadNumber,Mode) when Mode == wal; Mode == off; Mode == delete; Mode == persist; Mode == truncate ->
+open(Filename,ThreadNumber,Mode) when Mode == wal -> %; Mode == off; Mode == delete; Mode == persist; Mode == truncate ->
     Ref = make_ref(),
     ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode),
     case receive_answer(Ref) of

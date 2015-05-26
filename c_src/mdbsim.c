@@ -101,30 +101,30 @@ static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
 
 static MDB_txn* open_wtxn(db_thread *data)
 {
-  if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
-    return NULL;
+    if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
+        return NULL;
 
-  if (mdb_dbi_open(data->wtxn, "info", MDB_INTEGERKEY | MDB_CREATE, &data->infodb) != MDB_SUCCESS)
-    return NULL;
-  if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
-    return NULL;
-  if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
-    return NULL;
-  if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
-    return NULL;
-  // if (mdb_dbi_open(data->wtxn, "test1", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->testdb) != MDB_SUCCESS)
-  //   return NULL;
-  if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
-    return NULL;
-  if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
-    return NULL;
-  if (mdb_cursor_open(data->wtxn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
-    return NULL;
-  if (mdb_cursor_open(data->wtxn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
-    return NULL;
-  if (mdb_cursor_open(data->wtxn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
-    return NULL;
-  // if (mdb_cursor_open(data->wtxn, data->testdb, &data->cursorTest) != MDB_SUCCESS)
+    if (mdb_dbi_open(data->wtxn, "info", MDB_INTEGERKEY | MDB_CREATE, &data->infodb) != MDB_SUCCESS)
+        return NULL;
+    if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
+        return NULL;
+    if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
+        return NULL;
+    if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
+        return NULL;
+    // if (mdb_dbi_open(data->wtxn, "test1", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->testdb) != MDB_SUCCESS)
+    //   return NULL;
+    if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
+        return NULL;
+    if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
+        return NULL;
+    if (mdb_cursor_open(data->wtxn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
+        return NULL;
+    if (mdb_cursor_open(data->wtxn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
+        return NULL;
+    if (mdb_cursor_open(data->wtxn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
+        return NULL;
+    // if (mdb_cursor_open(data->wtxn, data->testdb, &data->cursorTest) != MDB_SUCCESS)
   //   return NULL;
 
   return data->wtxn;
@@ -139,6 +139,7 @@ int main(int argc, char* argv[])
   int i = 0, j, rc;
   u8 page[SQLITE_DEFAULT_PAGE_SIZE];
 
+  memset(&thread,0,sizeof(thread));
   for (i = 0; i < SQLITE_DEFAULT_PAGE_SIZE; i++)
     page[i] = i;
 

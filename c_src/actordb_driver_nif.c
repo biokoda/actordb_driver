@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -90,16 +90,16 @@ make_error_tuple(ErlNifEnv *env, const char *reason)
 void
 write32bit(char *p, int v)
 {
-  p[0] = (char)(v>>24);
-  p[1] = (char)(v>>16);
-  p[2] = (char)(v>>8);
-  p[3] = (char)v;
+	p[0] = (char)(v>>24);
+	p[1] = (char)(v>>16);
+	p[2] = (char)(v>>8);
+	p[3] = (char)v;
 }
 void
 write16bit(char *p, int v)
 {
-  p[0] = (char)(v>>8);
-  p[1] = (char)v;
+	p[0] = (char)(v>>8);
+	p[1] = (char)v;
 }
 
 
@@ -550,6 +550,8 @@ do_open(db_command *cmd, db_thread *thread)
 	filename[thread->pathlen] = '/';
 
 	enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
+	if (strcmp(mode,"wal") != 0)
+		return atom_false;
 
 	// DB can actually already be opened in thread->conns
 	// Check there with filename first.
@@ -613,16 +615,16 @@ do_open(db_command *cmd, db_thread *thread)
 			*pActorIndex = i;
 			sqlite3HashInsert(&thread->walHash, cmd->conn->dbpath, pActorIndex);
 
-			if (strcmp(mode,"wal") == 0)
-				sqlite3_exec(cmd->conn->db,"PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
-			else if (strcmp(mode,"off") == 0)
-				sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=off;",NULL,NULL,NULL);
-			else if (strcmp(mode,"delete") == 0)
-				sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=delete;",NULL,NULL,NULL);
-			else if (strcmp(mode,"truncate") == 0)
-				sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=truncate;",NULL,NULL,NULL);
-			else if (strcmp(mode,"persist") == 0)
-				sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=persist;",NULL,NULL,NULL);
+			// if (strcmp(mode,"wal") == 0)
+			sqlite3_exec(cmd->conn->db,"PRAGMA locking_mode=EXCLUSIVE;PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
+			// else if (strcmp(mode,"off") == 0)
+			// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=off;",NULL,NULL,NULL);
+			// else if (strcmp(mode,"delete") == 0)
+			// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=delete;",NULL,NULL,NULL);
+			// else if (strcmp(mode,"truncate") == 0)
+			// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=truncate;",NULL,NULL,NULL);
+			// else if (strcmp(mode,"persist") == 0)
+			// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=persist;",NULL,NULL,NULL);
 		}
 	}
 	else
@@ -1358,7 +1360,16 @@ do_exec_script(db_command *cmd, db_thread *thread)
 		enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
 	}
 
-	DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
+#ifdef _TESTDBG_
+	if (bin.size > 1024*10)
+	{
+		DBG((g_log,"Executing %.*s...\n",1024*10,bin.data));
+	}
+	else
+	{
+		DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
+	}
+#endif
 	end = (char*)bin.data + bin.size;
 	readpoint = (char*)bin.data;
 	results = enif_make_list(cmd->env,0);
@@ -1644,6 +1655,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 	// Call a rollback.
 	if (rc > 0 && rc < 100 && pagesPre != thread->pagesChanged)
 	{
+		DBG((g_log,"ROLLBACK %d\n",rc));
 		sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
 		sqlite3_step(statement);
 		sqlite3_finalize(statement);
@@ -1954,7 +1966,6 @@ evaluate_command(db_command cmd,db_thread *thread)
 		}
 	}
 
-
 	thread->curConn = cmd.conn;
 
 	switch(cmd.type)
@@ -2082,126 +2093,107 @@ make_answer(db_command *cmd, ERL_NIF_TERM answer)
 
 static int logdb_cmp(const MDB_val *a, const MDB_val *b)
 {
-  // <<ActorIndex:64, Evterm:64, Evnum:64>>
-  i64 aActor,aEvterm,aEvnum,bActor,bEvterm,bEvnum;
-  int diff;
+	// <<ActorIndex:64, Evterm:64, Evnum:64>>
+	i64 aActor,aEvterm,aEvnum,bActor,bEvterm,bEvnum;
+	int diff;
 
-  aActor = *(i64*)a->mv_data;
-  bActor = *(i64*)b->mv_data;
-  diff = aActor - bActor;
-  if (diff == 0)
-  {
-	aEvterm = *((i64*)a->mv_data+sizeof(i64));
-	bEvterm = *((i64*)b->mv_data+sizeof(i64));
-	diff = aEvterm - bEvterm;
+	aActor = *(i64*)a->mv_data;
+	bActor = *(i64*)b->mv_data;
+	diff = aActor - bActor;
 	if (diff == 0)
 	{
-	  aEvnum  = *((i64*)a->mv_data+sizeof(i64)*2);
-	  bEvnum  = *((i64*)a->mv_data+sizeof(i64)*2);
-	  return aEvnum - bEvnum;
+		aEvterm = *(i64*)(a->mv_data+sizeof(i64));
+		bEvterm = *(i64*)(b->mv_data+sizeof(i64));
+		diff = aEvterm - bEvterm;
+		if (diff == 0)
+		{
+			aEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+			bEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+			return aEvnum - bEvnum;
+		}
+		else
+		{
+			return diff;
+		}
 	}
 	else
 	{
-	  return diff;
+		return diff;
 	}
-  }
-  else
-  {
-	return diff;
-  }
 }
 
 static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
 {
-  // <<ActorIndex:64, Pgno:32/unsigned>>
-  i64 aActor;
-  i64 bActor;
-  u32 aPgno;
-  u32 bPgno;
-  int diff;
+	// <<ActorIndex:64, Pgno:32/unsigned>>
+	i64 aActor;
+	i64 bActor;
+	u32 aPgno;
+	u32 bPgno;
+	int diff;
 
-  aActor = *(i64*)a->mv_data;
-  bActor = *(i64*)b->mv_data;
-  diff = aActor - bActor;
-  if (diff == 0)
-  {
-	aPgno = *((u32*)a->mv_data+sizeof(i64));
-	bPgno = *((u32*)b->mv_data+sizeof(i64));
-	return aPgno - bPgno;
-  }
-  else
-  {
-	return diff;
-  }
+	aActor = *(i64*)a->mv_data;
+	bActor = *(i64*)b->mv_data;
+	diff = aActor - bActor;
+	if (diff == 0)
+	{
+		aPgno = *(u32*)(a->mv_data+sizeof(i64));
+		bPgno = *(u32*)(b->mv_data+sizeof(i64));
+		return aPgno - bPgno;
+	}
+	else
+	{
+		return diff;
+	}
 }
 
 static MDB_txn* open_wtxn(db_thread *data)
 {
-  if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
-	return NULL;
-
-  if (mdb_dbi_open(data->wtxn, "info", MDB_INTEGERKEY | MDB_CREATE, &data->infodb) != MDB_SUCCESS)
-	return NULL;
-  if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
-	return NULL;
-  if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
-	return NULL;
-  if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
-	return NULL;
-  if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
-	return NULL;
-  if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
-	return NULL;
+	if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->wtxn, "info", MDB_INTEGERKEY | MDB_CREATE, &data->infodb) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_cursor_open(data->wtxn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_cursor_open(data->wtxn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_cursor_open(data->wtxn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
+		return NULL;
 
   return data->wtxn;
 }
-
 static void *
 thread_func(void *arg)
 {
 	int i,j,chkCounter = 0;
 	db_thread* data = (db_thread*)arg;
 	db_command clcmd;
-	char path[MAX_PATHNAME];
 	u32 pagesChanged = 0;
-	// MDB_dbi infodb;
-	// MDB_dbi logdb;
-	// MDB_dbi pagesdb;
-	// MDB_dbi actorsdb;
-	// wal_file *wFile;
-
-	snprintf(path,MAX_PATHNAME,"%s/lmdb",data->path);
 
 	memset(&clcmd,0,sizeof(db_command));
 	data->isopen = 1;
 	sqlite3HashInit(&data->walHash);
 
-	if (mdb_env_create(&data->env) != MDB_SUCCESS)
-	  return NULL;
-
-	if (mdb_env_set_maxdbs(data->env,4) != MDB_SUCCESS)
-	  return NULL;
-
-	// TODO: set this as an input parameter, right now 549GB
-	if (mdb_env_set_mapsize(data->env,4096*1024*1024*128) != MDB_SUCCESS)
-	  return NULL;
-
-	if (mdb_env_open(data->env, path, MDB_NOSUBDIR | MDB_NOSYNC, 0664) != MDB_SUCCESS)
-	  return NULL;
-
-	if (open_wtxn(data) == NULL)
-	  return NULL;
-
-	// if db empty, our 4 databases were created. Commit.
-	if (mdb_txn_commit(data->wtxn) != MDB_SUCCESS)
-	  return NULL;
-
-	// Now reopen.
-	if (open_wtxn(data) == NULL)
-	  return NULL;
-
-	// if (data->index >= 0)
-	//     read_thread_wal(data);
+	if (data->env)
+	{
+		if (open_wtxn(data) == NULL)
+			return NULL;
+		// if db empty, our 4 databases were created. Commit.
+		if (mdb_txn_commit(data->wtxn) != MDB_SUCCESS)
+			return NULL;
+		// Now reopen.
+		if (open_wtxn(data) == NULL)
+			return NULL;
+	}
 
 	while(1)
 	{
@@ -2237,28 +2229,11 @@ thread_func(void *arg)
 
 		if (data->pagesChanged != pagesChanged)
 		{
-		  data->forceCommit = 0;
-		  mdb_txn_commit(data->wtxn);
-		  if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
-			return NULL;
+			data->forceCommit = 0;
+			mdb_txn_commit(data->wtxn);
+			if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
+				return NULL;
 		}
-
-		// while (data->index >= 0 && (queue_size(data->tasks) == 0 || chkCounter > 3))
-		// {
-		//     chkCounter = 0;
-		//     i = checkpoint_continue(data);
-		//     DBG((g_log,"Do checkpoint res=%d\n",i));
-		//
-		//     if (i == 1)
-		//         continue;
-		//     else if (i == 2)
-		//     {
-		//         reopen_db(data->curConn,data);
-		//         continue;
-		//     }
-		//
-		//     break;
-		// }
 
 		DBG((g_log,"thread=%d command done 2.\n",data->index));
 	}
@@ -2292,13 +2267,11 @@ thread_func(void *arg)
 		}
 	}
 
-	// while (data->walFile != NULL)
-	// {
-	//     wFile = data->walFile;
-	//     data->walFile = data->walFile->prev;
-	//     sqlite3OsCloseFree(wFile->pWalFd);
-	//     free(wFile);
-	// }
+
+	// mdb_dbi_close(data->env, data->infodb);
+	// mdb_dbi_close(data->env, data->logdb);
+	// mdb_dbi_close(data->env, data->pagesdb);
+	// mdb_dbi_close(data->env, data->actorsdb);
 
 	sqlite3HashClear(&data->walHash);
 	free(data->conns);
@@ -3251,8 +3224,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 	sqlite3_initialize();
 	sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
-
-	// sqlite3_vfs_register(sqlite3_vfs_find("unix-nolock"), 1);
+	sqlite3_vfs_register(sqlite3_nullvfs(), 1);
 
 	atom_false = enif_make_atom(env,"false");
 	atom_ok = enif_make_atom(env,"ok");
@@ -3314,7 +3286,6 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	if(!priv->iterate_type)
 		return -1;
 
-
 	priv->tasks = malloc(sizeof(queue*)*(priv->nthreads+1));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nthreads+1));
 
@@ -3336,11 +3307,26 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 	for (i = 0; i < priv->nthreads; i++)
 	{
+		MDB_env *menv;
 		db_thread *curThread = malloc(sizeof(db_thread));
 		memset(curThread,0,sizeof(db_thread));
 
 		if (!(enif_get_string(env,param1[i],curThread->path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
 			return -1;
+
+		strcat(curThread->path,"/lmdb");
+
+		// MDB INIT
+		if (mdb_env_create(&menv) != MDB_SUCCESS)
+	    	return -1;
+		if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
+		    return -1;
+		if (mdb_env_set_mapsize(menv,4096*1024*128*10) != MDB_SUCCESS)
+		    return -1;
+		if (mdb_env_open(menv, curThread->path, MDB_NOSUBDIR, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+			return -1;
+
+		curThread->env = menv;
 		curThread->pathlen = strlen(curThread->path);
 		curThread->index = i;
 		sqlite3_randomness(4,&curThread->threadNum);
@@ -3358,6 +3344,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		for (j = 0; j < nstaticSqls; j++)
 		  memcpy(curThread->staticSqls[j], staticSqls[j], 256);
 
+		DBG((g_log,"CREATING worker\n"));
 		if(enif_thread_create("db_connection", &(priv->tids[i]), thread_func, curThread, NULL) != 0)
 		{
 			printf("Unable to create esqlite3 thread\r\n");

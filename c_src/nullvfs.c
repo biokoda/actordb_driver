@@ -67,10 +67,6 @@ static int nullDirectWrite(
   return SQLITE_OK;
 }
 
-static int nullFlushBuffer(NullFile *p){
-  // printf("flush\n");
-  return SQLITE_OK;
-}
 
 static int nullClose(sqlite3_file *pFile){
   // printf("close\n");
@@ -182,7 +178,7 @@ static int nullSync(sqlite3_file *pFile, int flags){
 ** Write the size of the file in bytes to *pSize.
 */
 static int nullFileSize(sqlite3_file *pFile, sqlite_int64 *pSize){
-  NullFile *p = (NullFile*)pFile;
+  // NullFile *p = (NullFile*)pFile;
   // *pSize = p->size;
   *pSize = SQLITE_DEFAULT_PAGE_SIZE;
 
@@ -300,7 +296,7 @@ static int nullShmUnmap(
   int deleteFlag                  /* Delete shared-memory if true */
 ){return SQLITE_OK;}
 
-static void nullUnmapfile(unixFile *pFd){}
+// static void nullUnmapfile(unixFile *pFd){}
 
 static int nullFetch(sqlite3_file *fd, i64 iOff, int nAmt, void **pp){ return SQLITE_OK; }
 
@@ -337,11 +333,9 @@ static int nullOpen(
     nullUnfetch                 /* xUnfetch */
   };
   int isExclusive  = (flags & SQLITE_OPEN_EXCLUSIVE);
-  int isDelete     = (flags & SQLITE_OPEN_DELETEONCLOSE);
   int isCreate     = (flags & SQLITE_OPEN_CREATE);
   int isReadonly   = (flags & SQLITE_OPEN_READONLY);
   int isReadWrite  = (flags & SQLITE_OPEN_READWRITE);
-  int isAutoProxy  = (flags & SQLITE_OPEN_AUTOPROXY);
 
   NullFile *p = (NullFile*)pFile; /* Populate this structure */
 
