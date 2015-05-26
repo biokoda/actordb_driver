@@ -1616,6 +1616,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 			rowcount = 0;
 			while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
 			{
+				DBG((g_log,"STEP LOOP\n"));
 				ERL_NIF_TERM *array = (ERL_NIF_TERM*)malloc(sizeof(ERL_NIF_TERM)*column_count);
 
 				for(i = 0; i < column_count; i++)
@@ -1625,6 +1626,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 				free(array);
 				rowcount++;
 			}
+			DBG((g_log,"STEP DONE %d\n",rc));
 		}
 
 		if (rc > 0 && rc < 100)
@@ -3310,20 +3312,22 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		MDB_env *menv;
 		db_thread *curThread = malloc(sizeof(db_thread));
 		memset(curThread,0,sizeof(db_thread));
+		char lmpath[MAX_PATHNAME];
 
 		if (!(enif_get_string(env,param1[i],curThread->path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
 			return -1;
 
-		strcat(curThread->path,"/lmdb");
+		// strcat(curThread->path,"/lmdb");
+		sprintf(lmpath,"%s/lmdb",curThread->path);
 
 		// MDB INIT
 		if (mdb_env_create(&menv) != MDB_SUCCESS)
-	    	return -1;
+			return -1;
 		if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
-		    return -1;
+			return -1;
 		if (mdb_env_set_mapsize(menv,4096*1024*128*10) != MDB_SUCCESS)
-		    return -1;
-		if (mdb_env_open(menv, curThread->path, MDB_NOSUBDIR, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+			return -1;
+		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR, 0664) != MDB_SUCCESS) //MDB_NOSYNC
 			return -1;
 
 		curThread->env = menv;

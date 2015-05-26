@@ -57,7 +57,7 @@ static int nullDirectWrite(
   int iAmt,                       /* Size of data to write in bytes */
   sqlite_int64 iOfst              /* File offset to write to */
 ){
-  // printf("drwite offset=%lld, size=%d\n",iOfst,iAmt);
+  // DBG((g_log,"drwite offset=%lld, size=%d\n",iOfst,iAmt));
 
   // if ((iOfst + iAmt) > p->size)
   //   p->size += ((iOfst+iAmt)-p->size);
@@ -84,7 +84,7 @@ static int nullRead(
 ){
   // NullFile *p = (NullFile*)pFile;
 
-  // printf("read bytes=%d offset=%lld\n",iAmt,iOfst);
+  // DBG((g_log,"read bytes=%d offset=%lld\n",iAmt,iOfst));
 
   if ((iOfst + iAmt) > SQLITE_DEFAULT_PAGE_SIZE)
     return SQLITE_IOERR_SHORT_READ;
@@ -180,6 +180,7 @@ static int nullSync(sqlite3_file *pFile, int flags){
 static int nullFileSize(sqlite3_file *pFile, sqlite_int64 *pSize){
   // NullFile *p = (NullFile*)pFile;
   // *pSize = p->size;
+
   *pSize = SQLITE_DEFAULT_PAGE_SIZE;
 
   return SQLITE_OK;
@@ -206,7 +207,6 @@ static int nullCheckReservedLock(sqlite3_file *pFile, int *pResOut){
 }
 
 static int nullFileControl(sqlite3_file *pFile, int op, void *pArg){
-    // printf("FILECONTROL %d\n",op);
   // if (op == SQLITE_FCNTL_SIZE_HINT)
   // {
   //     printf("SIZEHINT %lld\n",*(i64*)pArg);
@@ -278,14 +278,14 @@ static int nullShmMap(
   int szRegion,                   /* Size of regions */
   int bExtend,                    /* True to extend file if necessary */
   void volatile **pp              /* OUT: Mapped memory */
-){ return SQLITE_OK; }
+){return SQLITE_OK; }
 
 static int nullShmLock(
   sqlite3_file *fd,          /* Database file holding the shared memory */
   int ofst,                  /* First lock to acquire or release */
   int n,                     /* Number of locks to acquire or release */
   int flags                  /* What to do with the lock */
-){ return SQLITE_OK; }
+){return SQLITE_OK; }
 
 static void nullShmBarrier(
   sqlite3_file *fd                /* Database file holding the shared memory */
@@ -298,9 +298,9 @@ static int nullShmUnmap(
 
 // static void nullUnmapfile(unixFile *pFd){}
 
-static int nullFetch(sqlite3_file *fd, i64 iOff, int nAmt, void **pp){ return SQLITE_OK; }
+static int nullFetch(sqlite3_file *fd, i64 iOff, int nAmt, void **pp){return SQLITE_OK; }
 
-static int nullUnfetch(sqlite3_file *fd, i64 iOff, void *p){ return SQLITE_OK; }
+static int nullUnfetch(sqlite3_file *fd, i64 iOff, void *p){return SQLITE_OK; }
 
 
 static int nullOpen(

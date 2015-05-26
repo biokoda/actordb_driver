@@ -16,13 +16,13 @@
 **   that have changed.
 
 ** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
-									  LastCompleteTerm:64,LastCompleteEvnum:64,
-									  InprogressTerm:64,InProgressEvnum:64>>}
+									LastCompleteTerm:64,LastCompleteEvnum:64,
+									 InprogressTerm:64,InProgressEvnum:64>>}
 **   V (version) = 1
 **   FirstComplete(term/evnum) - First entry for actor in Log DB.
 **   LastComplete(term/evnum) - Last entry in log that is commited.
 **   InProgress(term/evnum) - pages from this evnum+evterm combination are not commited. If actor has just opened
-**                            and it has these values set, it must delete pages to continue.
+**and it has these values set, it must delete pages to continue.
 
 ** On writes log, pages and info db are updated.
 ** Non-live replication is simply a matter of looking up log and sending the right pages.
@@ -51,7 +51,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	db_thread *thr = (db_thread*)walData;
 
 	Wal *pWal = &thr->curConn->wal;
-    pWal->thread = thr;
+	pWal->thread = thr;
 	MDB_dbi actorsdb = thr->actorsdb, infodb = thr->infodb;
 	MDB_txn *txn;
 
@@ -178,11 +178,14 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 */
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
+	DBG((g_log,"BEGINREAD\n"));
+
 	return SQLITE_OK;
 }
 
 void sqlite3WalEndReadTransaction(Wal *pWal)
 {
+DBG((g_log,"ENDREAD\n"));
 }
 
 /* Read a page from the write-ahead log, if it is present. */
@@ -206,13 +209,13 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 	key.mv_size = sizeof(pagesKeyBuf);
 	key.mv_data = pagesKeyBuf;
 
-    u32 pgno2 = *(u32*)(key.mv_data+sizeof(i64));
-    DBG((g_log,"RUN %d\n",pgno2));
+	u32 pgno2 = *(u32*)(key.mv_data+sizeof(i64));
+	DBG((g_log,"RUN %d\n",pgno2));
 	rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
 	if (rc == MDB_SUCCESS)
 	{
-        u32 pgno1 = *(u32*)(key.mv_data+sizeof(i64));
-        DBG((g_log,"SUCCESS? %d\n",pgno1));
+		u32 pgno1 = *(u32*)(key.mv_data+sizeof(i64));
+		DBG((g_log,"SUCCESS? %d\n",pgno1));
 		pWal->curFrame = data;
 		*piRead = 1;
 	}
@@ -233,7 +236,7 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
 	// i64 term, evnum;
-	DBG((g_log,"READ FRAME\n"));
+	DBG((g_log,"READ FRAME %d\n",nOut));
 	if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2),(char*)pOut,
 						  pWal->curFrame.mv_size-sizeof(i64)*2,nOut) > 0)
 	{
@@ -255,10 +258,12 @@ Pgno sqlite3WalDbsize(Wal *pWal)
 /* Obtain or release the WRITER lock. */
 int sqlite3WalBeginWriteTransaction(Wal *pWal)
 {
+	DBG((g_log,"BEGINWRITE\n"));
 	return SQLITE_OK;
 }
 int sqlite3WalEndWriteTransaction(Wal *pWal)
 {
+	DBG((g_log,"ENDWRITE\n"));
 	return SQLITE_OK;
 }
 
@@ -278,6 +283,8 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 
 	logKey.mv_data = logKeyBuf;
 	logKey.mv_size = sizeof(logKeyBuf);
+
+	DBG((g_log,"Undo\r\n"));
 
 	// For every page here
 	// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
@@ -354,12 +361,14 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 ** position in the WAL */
 void sqlite3WalSavepoint(Wal *pWal, u32 *aWalData)
 {
+	DBG((g_log,"SAVEPOINT\n"));
 }
 
 /* Move the write position of the WAL back to iFrame.  Called in
 ** response to a ROLLBACK TO command. */
 int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 {
+	DBG((g_log,"SAVEPOINT UNDO\n"));
 	return SQLITE_OK;
 }
 
@@ -391,8 +400,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		data.mv_size = sizeof(i64)*2 + LZ4_compress((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2,szPage);
 		data.mv_data = pagesBuf;
 
-        DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%ld\n",
-        pWal->index,p->pgno,pCon->writeTermNumber,pCon->writeNumber,isCommit,nTruncate,data.mv_size));
+		DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%ld\n",
+		pWal->index,p->pgno,pCon->writeTermNumber,pCon->writeNumber,isCommit,nTruncate,data.mv_size));
 
 		// printf(" | pgno=%u (pgsize=%zu)",p->pgno, data.mv_size);
 
