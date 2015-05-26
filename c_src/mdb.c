@@ -390,7 +390,7 @@ static txnid_t mdb_debug_start;
 	 */
 # define DPRINTF(args) ((void) ((mdb_debug) && DPRINTF0 args))
 # define DPRINTF0(fmt, ...) \
-	fprintf(stderr, "%s:%d " fmt "\n", mdb_func_, __LINE__, __VA_ARGS__)
+	fprintf(stdout, "%s:%d " fmt "\n", mdb_func_, __LINE__, __VA_ARGS__)
 #else
 # define DPRINTF(args)	((void) 0)
 #endif
