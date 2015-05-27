@@ -390,7 +390,7 @@ static txnid_t mdb_debug_start;
 	 */
 # define DPRINTF(args) ((void) ((mdb_debug) && DPRINTF0 args))
 # define DPRINTF0(fmt, ...) \
-	fprintf(stdout, "%s:%d " fmt "\n", mdb_func_, __LINE__, __VA_ARGS__)
+	fprintf(stderr, "%s:%d " fmt "\n", mdb_func_, __LINE__, __VA_ARGS__)
 #else
 # define DPRINTF(args)	((void) 0)
 #endif
@@ -5752,15 +5752,21 @@ set1:
 					return rc;
 			}
 		} else if (op == MDB_GET_BOTH || op == MDB_GET_BOTH_RANGE) {
-			MDB_val d2;
-			if ((rc = mdb_node_read(mc->mc_txn, leaf, &d2)) != MDB_SUCCESS)
+			MDB_val olddata;
+			MDB_cmp_func *dcmp;
+			if ((rc = mdb_node_read(mc->mc_txn, leaf, &olddata)) != MDB_SUCCESS)
 				return rc;
-			rc = mc->mc_dbx->md_dcmp(data, &d2);
+			dcmp = mc->mc_dbx->md_dcmp;
+#if UINT_MAX < SIZE_MAX
+			if (dcmp == mdb_cmp_int && olddata.mv_size == sizeof(size_t))
+				dcmp = mdb_cmp_clong;
+#endif
+			rc = dcmp(data, &olddata);
 			if (rc) {
 				if (op == MDB_GET_BOTH || rc > 0)
 					return MDB_NOTFOUND;
 				rc = 0;
-				*data = d2;
+				*data = olddata;
 			}
 
 		} else {
@@ -6003,7 +6009,6 @@ fetchm:
 		mfunc = mdb_cursor_first;
 	mmove:
 		if (data == NULL || !(mc->mc_flags & C_INITIALIZED)) {
-			printf("INIT1 %d\n",mc->mc_flags & C_INITIALIZED);
 			rc = EINVAL;
 			break;
 		}
@@ -6020,7 +6025,6 @@ fetchm:
 			}
 		}
 		if (!(mc->mc_xcursor->mx_cursor.mc_flags & C_INITIALIZED)) {
-			printf("INIT2\n");
 			rc = EINVAL;
 			break;
 		}
@@ -6272,16 +6276,17 @@ more:
 
 			/* Was a single item before, must convert now */
 			if (!F_ISSET(leaf->mn_flags, F_DUPDATA)) {
+				MDB_cmp_func *dcmp;
 				/* Just overwrite the current item */
 				if (flags == MDB_CURRENT)
 					goto current;
-
+				dcmp = mc->mc_dbx->md_dcmp;
 #if UINT_MAX < SIZE_MAX
-				if (mc->mc_dbx->md_dcmp == mdb_cmp_int && olddata.mv_size == sizeof(size_t))
-					mc->mc_dbx->md_dcmp = mdb_cmp_clong;
+				if (dcmp == mdb_cmp_int && olddata.mv_size == sizeof(size_t))
+					dcmp = mdb_cmp_clong;
 #endif
 				/* does data match? */
-				if (!mc->mc_dbx->md_dcmp(data, &olddata)) {
+				if (!dcmp(data, &olddata)) {
 					if (flags & MDB_NODUPDATA)
 						return MDB_KEYEXIST;
 					/* overwrite it */

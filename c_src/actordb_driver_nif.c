@@ -2156,9 +2156,9 @@ static MDB_txn* open_wtxn(db_thread *data)
 		return NULL;
 	if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
 		return NULL;
-	if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->logdb) != MDB_SUCCESS)
+	if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT, &data->logdb) != MDB_SUCCESS)
 		return NULL;
-	if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->pagesdb) != MDB_SUCCESS)
+	if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;

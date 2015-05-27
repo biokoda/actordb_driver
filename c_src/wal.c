@@ -381,11 +381,6 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	MDB_val key, data;
 	int rc;
 
-static FILE *f = NULL;
-
-	if (f == NULL)
-		f = fopen("data","wb");
-
 	key.mv_size = sizeof(i64);
 	key.mv_data = (void*)&pWal->index;
 
@@ -408,16 +403,8 @@ static FILE *f = NULL;
 		DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%ld\n",
 		pWal->index,p->pgno,pCon->writeTermNumber,pCon->writeNumber,isCommit,nTruncate,data.mv_size));
 
-		fwrite(&key.mv_size,sizeof(key.mv_size),1,f);
-		fwrite(key.mv_data,key.mv_size,1,f);
-		fwrite(&data.mv_size,sizeof(data.mv_size),1,f);
-		fwrite(data.mv_data,data.mv_size,1,f);
-
-		// printf(" | pgno=%u (pgsize=%zu)",p->pgno, data.mv_size);
-
 		if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 		{
-			fclose(f);
 			// printf("Cursor put failed to pages %d\n",rc);
 			DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%ld\r\n",rc,data.mv_size));
 			return SQLITE_ERROR;
