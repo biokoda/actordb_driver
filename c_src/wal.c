@@ -397,7 +397,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 
 		writeUInt64(pagesBuf, pCon->writeTermNumber);
 		writeUInt64(pagesBuf + sizeof(u64), pCon->writeNumber);
-		data.mv_size = sizeof(i64)*2 + LZ4_compress((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2,szPage);
+		data.mv_size = sizeof(i64)*2 + LZ4_compress_default((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2,szPage,sizeof(pagesBuf));
 		data.mv_data = pagesBuf;
 
 		DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%ld\n",
