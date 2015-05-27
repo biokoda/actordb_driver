@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1357,13 +1357,21 @@ do_exec_script(db_command *cmd, db_thread *thread)
 		enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->writeNumber));
 		enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
 	}
-
-	DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
+#ifdef _TESTDBG_
+	if (bin.size > 1024*10)
+	{
+		DBG((g_log,"Executing %.*s\n",1024*10,bin.data));
+	}
+	else
+	{
+		DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
+	}
+#endif
 	end = (char*)bin.data + bin.size;
 	readpoint = (char*)bin.data;
 	results = enif_make_list(cmd->env,0);
 
-	while (readpoint < end && headTop != 0)
+	while (readpoint < end || headTop != 0)
 	{
 		if (readpoint[0] == '$')
 			skip = 1;
@@ -1491,6 +1499,16 @@ do_exec_script(db_command *cmd, db_thread *thread)
 			else if (headTop == 0)
 			{
 				dofinalize = 1;
+				// #ifdef _TESTDBG_
+				//     if (statementlen > 1024)
+				//     {
+				//         DBG((g_log,"Executing %.*s\n",1024,readpoint));
+				//     }
+				//     else
+				//     {
+				//         DBG((g_log,"Executing %.*s\n",(int)statementlen,readpoint));
+				//     }
+				// #endif
 				rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &statement, &readpoint);
 				if(rc != SQLITE_OK)
 				{
@@ -1564,12 +1582,13 @@ do_exec_script(db_command *cmd, db_thread *thread)
 					dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
 					headTop = 0;
 					column_names = 0;
+					statement = NULL;
 					continue;
 				}
 			}
 
 			column_count = sqlite3_column_count(statement);
-			if (column_count > 0 && column_names != 0)
+			if (column_count > 0 && column_names == 0)
 			{
 				array = (ERL_NIF_TERM *)malloc(sizeof(ERL_NIF_TERM) * column_count);
 
@@ -1604,7 +1623,6 @@ do_exec_script(db_command *cmd, db_thread *thread)
 			dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
 			break;
 		}
-
 		if (skip == 0 && (rowcount > 0 || column_count > 0))
 		{
 			results = enif_make_list_cell(cmd->env, enif_make_list2(cmd->env,enif_make_tuple2(cmd->env,atom_columns,column_names),
@@ -1625,6 +1643,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 			continue;
 		}
 		dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
+		statement = NULL;
 		column_names = 0;
 	}
 
