@@ -2233,10 +2233,10 @@ thread_func(void *arg)
 	data->isopen = 1;
 	sqlite3HashInit(&data->walHash);
 
-	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
-
 	if (data->env)
 	{
+		data->maxvalsize = mdb_env_get_maxkeysize(data->env);
+
 		if (open_wtxn(data) == NULL)
 			return NULL;
 		// if db empty, our 4 databases were created. Commit.

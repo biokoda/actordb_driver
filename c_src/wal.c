@@ -5,13 +5,13 @@
 ** - Actors DB: {<<ActorName/binary>>, <<ActorIndex:64>>}
 **   {"?",MaxInteger} -> when adding actors, increment this value
 
-** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter:8,CompressedPage/binary>>}
+** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,FragIndex:8,CompressedPage/binary>>}
 **   Pages db is a dupsort database. It stores lz4 compressed sqlite pages. There can be multiple
 **   pages for one pgno. This is to leave room for replication.
 **   When a page is requested from sqlite, it will use the highest commited page.
 **   Once replication has run its course, old pages are deleted.
-**   Pages that are too large to be placed in a single value are added into multiple dupsort values. Counter
-**   counts down instead of up. If there are 3 pages, counter=2 is first.
+**   Pages that are too large to be placed in a single value are added into multiple dupsort values. FragIndex
+**   counts down. If there are 3 pages, first frag will be FragIndex=2. 
 
 ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 **   Also a dupsort. Every key is one sqlite write transaction. Values are a list of pages
@@ -386,12 +386,12 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	{
 		u8 pagesKeyBuf[sizeof(i64)+sizeof(u32)];
 		u8 pagesBuf[PAGE_BUFF_SIZE];
-        size_t full_size = 0;
-        size_t page_size = LZ4_compress_default((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2+1,szPage,sizeof(pagesBuf));
+        int full_size = 0;
+        int page_size = LZ4_compress_default((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2+1,szPage,sizeof(pagesBuf));
         char fragment_index = 0;
         int skipped = 0;
 
-        DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%ld\n",
+        DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
 		pWal->index,p->pgno,pCon->writeTermNumber,pCon->writeNumber,isCommit,nTruncate,page_size));
 
 		memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
@@ -407,7 +407,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
         //     fragment_index = (full_size / thr->maxvalsize) - 1;
         // else
         //     fragment_index = full_size / thr->maxvalsize;
-        full_size = page_size + sizeof(i64)*2 + 1);
+        full_size = page_size + sizeof(i64)*2 + 1;
         if (full_size < thr->maxvalsize)
             fragment_index = 0;
         else
@@ -417,25 +417,25 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
             full_size -= skipped;
             while(full_size > 0)
             {
-                // full_size -= sizeof(i64)*2+1
-                skipped += thr->maxvalsize - sizeof(i64)*2 -1;
-                full_size -= skipped;
+                full_size -= (thr->maxvalsize - sizeof(i64)*2 - 1);
                 fragment_index++;
             }
+            full_size = page_size + sizeof(i64)*2 +1;
         }
 
         pagesBuf[sizeof(i64)*2] = fragment_index;
         data.mv_size = fragment_index == 0 ? full_size : thr->maxvalsize;
 		data.mv_data = pagesBuf;
-        fragment_index--;
-        skipped = data.mv_size;
 
 		if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 		{
 			// printf("Cursor put failed to pages %d\n",rc);
-			DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%ld\r\n",rc,full_size));
+			DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%d\r\n",rc,full_size));
 			return SQLITE_ERROR;
 		}
+
+        fragment_index--;
+        skipped = data.mv_size;
         while (fragment_index >= 0)
         {
             if (fragment_index == 0)
@@ -449,28 +449,13 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 
             if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
             {
-                DBG((g_log,"CURSOR secondary PUT FAILED: err=%d, datasize=%ld, skipped=%d, frag=%d\r\n",
+                DBG((g_log,"CURSOR secondary PUT FAILED: err=%d, datasize=%d, skipped=%d, frag=%d\r\n",
                 rc,full_size, skipped, (int)fragment_index));
+                return SQLITE_ERROR;
             }
             skipped += data.mv_size - sizeof(i64)*2 - 1;
             fragment_index--;
         }
-
-        // if (prev_size > 0)
-        // {
-        //     writeUInt64(pagesBuf + 2983, pCon->writeTermNumber);
-    	// 	writeUInt64(pagesBuf + 2991, pCon->writeNumber);
-        //     pagesBuf[2999] = 0;
-        //     data.mv_data = pagesBuf+2983;
-        //     data.mv_size = prev_size - 3000 + 17;
-        //
-        //     DBG((g_log,"CURSOR PUT second part %ld %ld\r\n",data.mv_size,prev_size));
-        //     if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
-    	// 	{
-    	// 		DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%ld\r\n",rc,data.mv_size));
-    	// 		return SQLITE_ERROR;
-    	// 	}
-        // }
 
 		thr->pagesChanged++;
 	}
