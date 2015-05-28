@@ -118,6 +118,7 @@ struct db_thread
 	db_connection *curConn;
 	db_connection* conns;
 	int nconns;
+	int maxvalsize;
 
 	// wal_file *walFile;
 

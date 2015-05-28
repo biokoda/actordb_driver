@@ -2099,29 +2099,29 @@ static int logdb_cmp(const MDB_val *a, const MDB_val *b)
 	i64 aActor,aEvterm,aEvnum,bActor,bEvterm,bEvnum;
 	int diff;
 
-	aActor = *(i64*)a->mv_data;
-	bActor = *(i64*)b->mv_data;
+	// aActor = *(i64*)a->mv_data;
+	memcpy(&aActor,a->mv_data,sizeof(i64));
+	// bActor = *(i64*)b->mv_data;
+	memcpy(&bActor,b->mv_data,sizeof(i64));
 	diff = aActor - bActor;
 	if (diff == 0)
 	{
-		aEvterm = *(i64*)(a->mv_data+sizeof(i64));
-		bEvterm = *(i64*)(b->mv_data+sizeof(i64));
+		// aEvterm = *(i64*)(a->mv_data+sizeof(i64));
+		memcpy(&aEvterm, a->mv_data+sizeof(i64), sizeof(i64));
+		// bEvterm = *(i64*)(b->mv_data+sizeof(i64));
+		memcpy(&bEvterm, b->mv_data+sizeof(i64), sizeof(i64));
 		diff = aEvterm - bEvterm;
 		if (diff == 0)
 		{
-			aEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
-			bEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+			// aEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+			memcpy(&aEvnum, a->mv_data+sizeof(i64)*2, sizeof(i64));
+			// bEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+			memcpy(&bEvnum, b->mv_data+sizeof(i64)*2, sizeof(i64));
 			return aEvnum - bEvnum;
 		}
-		else
-		{
-			return diff;
-		}
-	}
-	else
-	{
 		return diff;
 	}
+	return diff;
 }
 
 static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
@@ -2133,19 +2133,63 @@ static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
 	u32 bPgno;
 	int diff;
 
-	aActor = *(i64*)a->mv_data;
-	bActor = *(i64*)b->mv_data;
+	// aActor = *(i64*)a->mv_data;
+	memcpy(&aActor,a->mv_data,sizeof(i64));
+	// bActor = *(i64*)b->mv_data;
+	memcpy(&bActor,b->mv_data,sizeof(i64));
 	diff = aActor - bActor;
 	if (diff == 0)
 	{
-		aPgno = *(u32*)(a->mv_data+sizeof(i64));
-		bPgno = *(u32*)(b->mv_data+sizeof(i64));
+		// aPgno = *(u32*)(a->mv_data+sizeof(i64));
+		memcpy(&aPgno,a->mv_data + sizeof(i64),sizeof(u32));
+		// bPgno = *(u32*)(b->mv_data+sizeof(i64));
+		memcpy(&bPgno,b->mv_data + sizeof(i64),sizeof(u32));
 		return aPgno - bPgno;
 	}
-	else
+	return diff;
+}
+
+static int logdb_val_cmp(const MDB_val *a, const MDB_val *b)
+{
+	u32 aPgno;
+	u32 bPgno;
+	memcpy(&aPgno,a->mv_data,sizeof(u32));
+	memcpy(&bPgno,b->mv_data,sizeof(u32));
+	return aPgno - bPgno;
+}
+
+static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
+{
+	// <<Evterm:64,Evnum:64,Counter:8,CompressedPage/binary>>}
+	i64 aEvterm,aEvnum;
+	i64 bEvterm,bEvnum;
+	u8 aCounter, bCounter;
+	int diff;
+
+	// aEvterm = *(i64*)a->mv_data;
+	memcpy(&aEvterm, a->mv_data, sizeof(i64));
+	// bEvterm = *(i64*)b->mv_data;
+	memcpy(&bEvterm, b->mv_data, sizeof(i64));
+	diff = aEvterm - bEvterm;
+	if (diff == 0)
 	{
+		// aEvnum = *(i64*)(a->mv_data+sizeof(i64));
+		memcpy(&aEvnum, a->mv_data+sizeof(i64), sizeof(i64));
+		// bEvnum = *(i64*)(b->mv_data+sizeof(i64));
+		memcpy(&bEvnum, b->mv_data+sizeof(i64), sizeof(i64));
+		diff = aEvnum - bEvnum;
+		if (diff == 0)
+		{
+			aCounter = ((u8*)a->mv_data)[sizeof(i64)*2];
+			bCounter = ((u8*)b->mv_data)[sizeof(i64)*2];
+			// We want counters with higher numbers to be first
+			if (aCounter > bCounter)
+				return -1;
+			return 1;
+		}
 		return diff;
 	}
+	return diff;
 }
 
 static MDB_txn* open_wtxn(db_thread *data)
@@ -2162,7 +2206,11 @@ static MDB_txn* open_wtxn(db_thread *data)
 		return NULL;
 	if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;
+	if (mdb_set_dupsort(data->wtxn, data->logdb, logdb_val_cmp) != MDB_SUCCESS)
+		return NULL;
 	if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_set_dupsort(data->wtxn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_cursor_open(data->wtxn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
 		return NULL;
@@ -2184,6 +2232,8 @@ thread_func(void *arg)
 	memset(&clcmd,0,sizeof(db_command));
 	data->isopen = 1;
 	sqlite3HashInit(&data->walHash);
+
+	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 
 	if (data->env)
 	{

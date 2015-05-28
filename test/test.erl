@@ -3,7 +3,7 @@
 
 run_test_() ->
     [file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
-    [file:delete(Fn) || Fn <- filelib:wildcard("*.db")],
+    [file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
     [fun lz4/0,
      fun modes/0,
      fun bigtrans/0

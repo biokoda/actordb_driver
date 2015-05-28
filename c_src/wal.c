@@ -5,11 +5,13 @@
 ** - Actors DB: {<<ActorName/binary>>, <<ActorIndex:64>>}
 **   {"?",MaxInteger} -> when adding actors, increment this value
 
-** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
+** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter:8,CompressedPage/binary>>}
 **   Pages db is a dupsort database. It stores lz4 compressed sqlite pages. There can be multiple
 **   pages for one pgno. This is to leave room for replication.
 **   When a page is requested from sqlite, it will use the highest commited page.
 **   Once replication has run its course, old pages are deleted.
+**   Pages that are too large to be placed in a single value are added into multiple dupsort values. Counter
+**   counts down instead of up. If there are 3 pages, counter=2 is first.
 
 ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 **   Also a dupsort. Every key is one sqlite write transaction. Values are a list of pages
@@ -178,14 +180,11 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 */
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
-	DBG((g_log,"BEGINREAD\n"));
-
 	return SQLITE_OK;
 }
 
 void sqlite3WalEndReadTransaction(Wal *pWal)
 {
-DBG((g_log,"ENDREAD\n"));
 }
 
 /* Read a page from the write-ahead log, if it is present. */
@@ -203,7 +202,7 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 
 	DBG((g_log,"FIND FRAME pgno=%u\n",pgno));
 
-	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
+	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
 	memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
 	memcpy(pagesKeyBuf + sizeof(i64), &pgno,       sizeof(u32));
 	key.mv_size = sizeof(pagesKeyBuf);
@@ -237,8 +236,8 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
 	// i64 term, evnum;
 	DBG((g_log,"READ FRAME %d\n",nOut));
-	if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2),(char*)pOut,
-						  pWal->curFrame.mv_size-sizeof(i64)*2,nOut) > 0)
+	if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2+1),(char*)pOut,
+						  pWal->curFrame.mv_size-(sizeof(i64)*2+1),nOut) > 0)
 	{
 		DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",readUInt64(pWal->curFrame.mv_data),
 		readUInt64(pWal->curFrame.mv_data+sizeof(i64)),(int)pWal->curFrame.mv_size));
@@ -258,12 +257,10 @@ Pgno sqlite3WalDbsize(Wal *pWal)
 /* Obtain or release the WRITER lock. */
 int sqlite3WalBeginWriteTransaction(Wal *pWal)
 {
-	DBG((g_log,"BEGINWRITE\n"));
 	return SQLITE_OK;
 }
 int sqlite3WalEndWriteTransaction(Wal *pWal)
 {
-	DBG((g_log,"ENDWRITE\n"));
 	return SQLITE_OK;
 }
 
@@ -289,7 +286,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 	// For every page here
 	// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 	// Delete from
-	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
+	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
 	memcpy(logKeyBuf,                 &pWal->index,          sizeof(i64));
 	memcpy(logKeyBuf + sizeof(i64),   &pWal->inProgressTerm, sizeof(i64));
 	memcpy(logKeyBuf + sizeof(i64)*2, &pWal->inProgressEvnum,sizeof(i64));
@@ -384,11 +381,18 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	key.mv_size = sizeof(i64);
 	key.mv_data = (void*)&pWal->index;
 
-	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,CompressedPage/binary>>}
+	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
 	for(p=pList; p; p=p->pDirty)
 	{
 		u8 pagesKeyBuf[sizeof(i64)+sizeof(u32)];
 		u8 pagesBuf[PAGE_BUFF_SIZE];
+        size_t full_size = 0;
+        size_t page_size = LZ4_compress_default((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2+1,szPage,sizeof(pagesBuf));
+        char fragment_index = 0;
+        int skipped = 0;
+
+        DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%ld\n",
+		pWal->index,p->pgno,pCon->writeTermNumber,pCon->writeNumber,isCommit,nTruncate,page_size));
 
 		memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
 		memcpy(pagesKeyBuf + sizeof(i64), &p->pgno,    sizeof(u32));
@@ -396,19 +400,77 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		key.mv_data = pagesKeyBuf;
 
 		writeUInt64(pagesBuf, pCon->writeTermNumber);
-		writeUInt64(pagesBuf + sizeof(u64), pCon->writeNumber);
-		data.mv_size = sizeof(i64)*2 + LZ4_compress_default((char*)p->pData,(char*)pagesBuf+sizeof(i64)*2,szPage,sizeof(pagesBuf));
-		data.mv_data = pagesBuf;
+		writeUInt64(pagesBuf + sizeof(i64), pCon->writeNumber);
+        // full_size = sizeof(i64)*2 + 1 + page_size;
 
-		DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%ld\n",
-		pWal->index,p->pgno,pCon->writeTermNumber,pCon->writeNumber,isCommit,nTruncate,data.mv_size));
+        // if ((full_size % thr->maxvalsize) == 0)
+        //     fragment_index = (full_size / thr->maxvalsize) - 1;
+        // else
+        //     fragment_index = full_size / thr->maxvalsize;
+        full_size = page_size + sizeof(i64)*2 + 1);
+        if (full_size < thr->maxvalsize)
+            fragment_index = 0;
+        else
+        {
+            full_size = page_size;
+            skipped = thr->maxvalsize - sizeof(i64)*2 - 1;
+            full_size -= skipped;
+            while(full_size > 0)
+            {
+                // full_size -= sizeof(i64)*2+1
+                skipped += thr->maxvalsize - sizeof(i64)*2 -1;
+                full_size -= skipped;
+                fragment_index++;
+            }
+        }
+
+        pagesBuf[sizeof(i64)*2] = fragment_index;
+        data.mv_size = fragment_index == 0 ? full_size : thr->maxvalsize;
+		data.mv_data = pagesBuf;
+        fragment_index--;
+        skipped = data.mv_size;
 
 		if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 		{
 			// printf("Cursor put failed to pages %d\n",rc);
-			DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%ld\r\n",rc,data.mv_size));
+			DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%ld\r\n",rc,full_size));
 			return SQLITE_ERROR;
 		}
+        while (fragment_index >= 0)
+        {
+            if (fragment_index == 0)
+                data.mv_size = full_size - skipped + sizeof(i64)*2 + 1;
+            else
+                data.mv_size = thr->maxvalsize;
+            data.mv_data = pagesBuf + skipped - (sizeof(i64)*2+1);
+            writeUInt64(pagesBuf + skipped - (sizeof(i64)*2+1), pCon->writeTermNumber);
+            writeUInt64(pagesBuf + skipped - (sizeof(i64)+1), pCon->writeNumber);
+            pagesBuf[skipped-1] = fragment_index;
+
+            if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
+            {
+                DBG((g_log,"CURSOR secondary PUT FAILED: err=%d, datasize=%ld, skipped=%d, frag=%d\r\n",
+                rc,full_size, skipped, (int)fragment_index));
+            }
+            skipped += data.mv_size - sizeof(i64)*2 - 1;
+            fragment_index--;
+        }
+
+        // if (prev_size > 0)
+        // {
+        //     writeUInt64(pagesBuf + 2983, pCon->writeTermNumber);
+    	// 	writeUInt64(pagesBuf + 2991, pCon->writeNumber);
+        //     pagesBuf[2999] = 0;
+        //     data.mv_data = pagesBuf+2983;
+        //     data.mv_size = prev_size - 3000 + 17;
+        //
+        //     DBG((g_log,"CURSOR PUT second part %ld %ld\r\n",data.mv_size,prev_size));
+        //     if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
+    	// 	{
+    	// 		DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%ld\r\n",rc,data.mv_size));
+    	// 		return SQLITE_ERROR;
+    	// 	}
+        // }
 
 		thr->pagesChanged++;
 	}

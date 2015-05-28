@@ -125,7 +125,7 @@ static MDB_txn* open_wtxn(db_thread *data)
     if (mdb_cursor_open(data->wtxn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
         return NULL;
     // if (mdb_cursor_open(data->wtxn, data->testdb, &data->cursorTest) != MDB_SUCCESS)
-  //   return NULL;
+    return NULL;
 
   return data->wtxn;
 }
@@ -175,7 +175,7 @@ int main(int argc, char* argv[])
   //   int j = 0;
   //   key.mv_data = &j;
   //   key.mv_size = sizeof(j);
-  //   for (i = 0; i < 1000; i++)
+  //   for (i = 0; i < 10000; i++)
   //   {
   //     u8 buf[10];
   //     sqlite3Put4byte(buf, i / 10);
@@ -184,15 +184,20 @@ int main(int argc, char* argv[])
   //     buf[9] = i;
   //     data.mv_data = buf;
   //     data.mv_size = sizeof(buf);
-  //     mdb_put(thread.wtxn,thread.testdb,&key,&data,0);
+  //     rc = mdb_put(thread.wtxn,thread.testdb,&key,&data,0);
+  //     if (rc != MDB_SUCCESS)
+  //     {
+  //         printf("Failed %d\n",rc);
+  //         return 0;
+  //     }
   //   }
   //
   //   mdb_cursor_get(thread.cursorTest,&key,&data,MDB_FIRST_DUP);
   //   printf("First %d\n",*(int*)data.mv_data);
-  //   for (i = 0; i < 100; i++)
+  //   for (i = 0; i < 10000; i++)
   //   {
   //     mdb_cursor_get(thread.cursorTest,&key,&data,MDB_NEXT_DUP);
-  //     printf("Next %d %d\n",sqlite3Get4byte(data.mv_data),sqlite3Get4byte(data.mv_data+4));
+  //     printf("Next %d %d %d\n",sqlite3Get4byte(data.mv_data),sqlite3Get4byte(data.mv_data+4),mdb_env_get_maxkeysize(thread.env));
   //   }
   //   return 0;
   // }
