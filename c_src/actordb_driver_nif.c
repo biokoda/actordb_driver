@@ -1616,7 +1616,6 @@ do_exec_script(db_command *cmd, db_thread *thread)
 			rowcount = 0;
 			while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
 			{
-				DBG((g_log,"STEP LOOP\n"));
 				ERL_NIF_TERM *array = (ERL_NIF_TERM*)malloc(sizeof(ERL_NIF_TERM)*column_count);
 
 				for(i = 0; i < column_count; i++)
@@ -2200,7 +2199,7 @@ static MDB_txn* open_wtxn(db_thread *data)
 		return NULL;
 	if (mdb_dbi_open(data->wtxn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
 		return NULL;
-	if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT, &data->logdb) != MDB_SUCCESS)
+	if (mdb_dbi_open(data->wtxn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &data->logdb) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
 		return NULL;

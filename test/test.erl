@@ -6,26 +6,27 @@ run_test_() ->
     [file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
     [fun lz4/0,
      fun modes/0,
-     fun bigtrans/0
+     fun bigtrans/0,
+     fun bigtrans_check/0
     %  fun repl/0,
     %  fun check/0
          ].
 
-check() ->
-    ?debugFmt("Reload and checking result of repl",[]),
-    file:copy("drv_nonode.txt","prev_drv_nonode.txt"),
-    garbage_collect(),
-    code:delete(actordb_driver_nif),
-    code:purge(actordb_driver_nif),
-    false = code:is_loaded(actordb_driver_nif),
-    actordb_driver:init({{"."},{},100}),
-    Sql = "select name, sql from sqlite_master where type='table';",
-    {ok,_Db,{ok,[[{columns,_},{rows,[]}]]}} = actordb_driver:open("t1.db",1,Sql),
-    {ok,Db2} = actordb_driver:open("t2.db"),
-    {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
-    {ok,Db3} = actordb_driver:open("t3.db"),
-    {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
-    ok.
+% check() ->
+%     ?debugFmt("Reload and checking result of repl",[]),
+%     file:copy("drv_nonode.txt","prev_drv_nonode.txt"),
+%     garbage_collect(),
+%     code:delete(actordb_driver_nif),
+%     code:purge(actordb_driver_nif),
+%     false = code:is_loaded(actordb_driver_nif),
+%     actordb_driver:init({{"."},{},100}),
+%     Sql = "select name, sql from sqlite_master where type='table';",
+%     {ok,_Db,{ok,[[{columns,_},{rows,[]}]]}} = actordb_driver:open("t1.db",1,Sql),
+%     {ok,Db2} = actordb_driver:open("t2.db"),
+%     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
+%     {ok,Db3} = actordb_driver:open("t3.db"),
+%     {ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
+%     ok.
 
 lz4() ->
     actordb_driver:init({{"."},{},100}),
@@ -55,6 +56,7 @@ modes() ->
 
 bigtrans() ->
   actordb_driver:init({{"."},{},100}),
+  application:ensure_all_started(crypto),
   Sql = [<<"SAVEPOINT 'adb';",
     "CREATE TABLE IF NOT EXISTS __transactions (id INTEGER PRIMARY KEY, tid INTEGER, updater INTEGER, node TEXT,",
       "schemavers INTEGER, sql TEXT);",
@@ -78,12 +80,26 @@ bigtrans() ->
     "INSERT OR REPLACE INTO __adb (id,val) VALUES (3,'7');INSERT OR REPLACE INTO __adb (id,val) VALUES (4,'task');",
     "INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'0');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'0');",
     "INSERT OR REPLACE INTO __adb (id,val) VALUES (7,'614475188');">>,
-    "INSERT INTO __adb (id,val) VALUES (10,'",binary:copy(<<"a">>,1024*1024*10),"');",
-    "DELETE from __adb;",
+    "INSERT INTO __adb (id,val) VALUES (10,'",base64:encode(crypto:rand_bytes(1024*1024*10)),"');",
+    "DELETE from __adb where id=10;",
     "RELEASE SAVEPOINT 'adb';"],
-    {ok,Db,{ok,Res}} = actordb_driver:open("big.db",0,Sql,wal).
-    % ?debugFmt("Result: ~p, select=~p",[Res,actordb_driver:exec_script("SELECT * FROM __adb;",Db)]).
+    {ok,Db,{ok,Res}} = actordb_driver:open("big.db",0,Sql,wal),
+    ?debugFmt("Result: ~p, select=~p",[Res,actordb_driver:exec_script("SELECT * FROM __adb;",Db)]).
 
+bigtrans_check() ->
+    ?debugFmt("Reload and checking result of repl",[]),
+    file:copy("drv_nonode.txt","prev_drv_nonode.txt"),
+    garbage_collect(),
+    code:delete(actordb_driver_nif),
+    code:purge(actordb_driver_nif),
+    false = code:is_loaded(actordb_driver_nif),
+    actordb_driver:init({{"."},{},100}),
+
+    Sql = "select * from __adb;",
+    {ok,Db2} = actordb_driver:open("big.db"),
+    R = actordb_driver:exec_script(Sql,Db2),
+    ?debugFmt("~p",[R]),
+    ok.
 
 
 % repl() ->

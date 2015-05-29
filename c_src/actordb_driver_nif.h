@@ -67,8 +67,10 @@ struct Wal {
 	u64 lastCompleteEvnum;
 	u64 inProgressTerm;
 	u64 inProgressEvnum;
-	MDB_val curFrame;
+	MDB_val curFrame1, curFrame2, curFrame3;
 	Pgno mxPage;
+	u8 nResframes;
+	u8 changed;
 };
 
 

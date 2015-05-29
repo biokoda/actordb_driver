@@ -15,11 +15,11 @@
 
 ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 **   Also a dupsort. Every key is one sqlite write transaction. Values are a list of pages
-**   that have changed.
+**   that have changed. Pgno is written big endian because memcmp will return correct sort order.
 
 ** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
 									LastCompleteTerm:64,LastCompleteEvnum:64,
-									 InprogressTerm:64,InProgressEvnum:64>>}
+									 InprogressTerm:64,InProgressEvnum:64, DbSize:32>>}
 **   V (version) = 1
 **   FirstComplete(term/evnum) - First entry for actor in Log DB.
 **   LastComplete(term/evnum) - Last entry in log that is commited.
@@ -32,14 +32,7 @@
 ** the end.
 ** Undo is a matter of checking the pages of last write in log db and deleting them in log and pages db.
 
-** Endianess
-** Sort order is quite important for performance. We are assuming the platform this is running on
-** is little endian. No relevant platform uses bigendian.
-** Tables with integer keys (everything except actorsdb), use little endian encoding for keys. This is because they are
-** set to integer keys and they will be interpreted correctly.
-** Values for dbs that have integers (pages and log dbs) and are dupsort use big endian integer encoding.
-** This is because memcmp sort for little endian does not return right sort order, but it does
-** for big endian.
+** Endianess: Data is written as is (i.e. little endian). Practicaly no relevant platforms are in big endian.
 */
 
 
@@ -125,18 +118,24 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 		if (rc == MDB_SUCCESS)
 		{
-			i64 *v = (i64*)(data.mv_data+1);
 			if (*(u8*)data.mv_data != 1)
 			{
 				mdb_txn_abort(txn);
 				return SQLITE_ERROR;
 			}
-			pWal->firstCompleteTerm = *(v);
-			pWal->firstCompleteEvnum = *(v+sizeof(i64));
-			pWal->lastCompleteTerm = *(v+sizeof(i64)*2);
-			pWal->lastCompleteEvnum = *(v+sizeof(i64)*3);
-			pWal->inProgressTerm = *(v+sizeof(i64)*4);
-			pWal->inProgressEvnum = *(v+sizeof(i64)*5);
+			// pWal->firstCompleteTerm = *(v);
+            memcpy(&pWal->firstCompleteTerm, data.mv_data+1, sizeof(i64));
+			// pWal->firstCompleteEvnum = *(v+sizeof(i64));
+            memcpy(&pWal->firstCompleteEvnum, data.mv_data+1+sizeof(i64), sizeof(i64));
+			// pWal->lastCompleteTerm = *(v+sizeof(i64)*2);
+            memcpy(&pWal->lastCompleteTerm, data.mv_data+1+sizeof(i64)*2, sizeof(i64));
+			// pWal->lastCompleteEvnum = *(v+sizeof(i64)*3);
+            memcpy(&pWal->lastCompleteEvnum, data.mv_data+1+sizeof(i64)*3, sizeof(i64));
+			// pWal->inProgressTerm = *(v+sizeof(i64)*4);
+            memcpy(&pWal->inProgressTerm, data.mv_data+1+sizeof(i64)*4, sizeof(i64));
+			// pWal->inProgressEvnum = *(v+sizeof(i64)*5);
+            memcpy(&pWal->inProgressEvnum, data.mv_data+1+sizeof(i64)*5, sizeof(i64));
+            memcpy(&pWal->mxPage, data.mv_data+1+sizeof(i64)*6,sizeof(u32));
 
 			if (pWal->inProgressTerm != 0)
 			{
@@ -156,6 +155,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 	mdb_txn_abort(txn);
 
+    pWal->changed = 1;
 	(*ppWal) = pWal;
 	return SQLITE_OK;
 }
@@ -180,6 +180,9 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 */
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
+    DBG((g_log,"Begin read trans\n"));
+    *pChanged = pWal->changed;
+    pWal->changed = 0;
 	return SQLITE_OK;
 }
 
@@ -214,7 +217,8 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 	if (rc == MDB_SUCCESS)
 	{
 		u32 pgno1 = *(u32*)(key.mv_data+sizeof(i64));
-		DBG((g_log,"SUCCESS? %d\n",pgno1));
+        u8 frag = *(u8*)(key.mv_data+sizeof(i64)+sizeof(u32));
+		DBG((g_log,"SUCCESS? %d frag=%d\n",pgno1,(int)frag));
 		pWal->curFrame = data;
 		*piRead = 1;
 	}
@@ -239,8 +243,14 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 	if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2+1),(char*)pOut,
 						  pWal->curFrame.mv_size-(sizeof(i64)*2+1),nOut) > 0)
 	{
-		DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",readUInt64(pWal->curFrame.mv_data),
-		readUInt64(pWal->curFrame.mv_data+sizeof(i64)),(int)pWal->curFrame.mv_size));
+#ifdef _TESTDBG_
+        {
+            i64 term, evnum;
+            memcpy(&term,  pWal->curFrame.mv_data,             sizeof(i64));
+            memcpy(&evnum, pWal->curFrame.mv_data+sizeof(i64), sizeof(i64));
+    		DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",term,evnum,(int)pWal->curFrame.mv_size));
+        }
+#endif
 		return SQLITE_OK;
 	}
 	return SQLITE_ERROR;
@@ -250,7 +260,9 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 Pgno sqlite3WalDbsize(Wal *pWal)
 {
 	if (pWal)
-		return pWal->mxPage;
+    {
+        return pWal->mxPage;
+    }
 	return 0;
 }
 
@@ -299,7 +311,8 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 	}
 	while ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 	{
-		u32 pgno = sqlite3Get4byte(logVal.mv_data);
+		u32 pgno;
+        memcpy(&pgno,logVal.mv_data,sizeof(u32));
 		memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
 		memcpy(pagesKeyBuf + sizeof(i64), &pgno,       sizeof(u32));
 		pgKey.mv_data = pagesKeyBuf;
@@ -315,8 +328,8 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 		}
 		while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 		{
-			term = readUInt64(pgVal.mv_data);
-			evnum = readUInt64(pgVal.mv_data+sizeof(i64));
+            memcpy(&term, pgVal.mv_data,            sizeof(i64));
+            memcpy(&evnum,pgVal.mv_data+sizeof(i64),sizeof(i64));
 			// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
 			//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
 			if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
@@ -381,7 +394,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	key.mv_size = sizeof(i64);
 	key.mv_data = (void*)&pWal->index;
 
-	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
+	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Fragment,CompressedPage/binary>>}
 	for(p=pList; p; p=p->pDirty)
 	{
 		u8 pagesKeyBuf[sizeof(i64)+sizeof(u32)];
@@ -399,8 +412,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		key.mv_size = sizeof(pagesKeyBuf);
 		key.mv_data = pagesKeyBuf;
 
-		writeUInt64(pagesBuf, pCon->writeTermNumber);
-		writeUInt64(pagesBuf + sizeof(i64), pCon->writeNumber);
+		memcpy(pagesBuf,               &pCon->writeTermNumber, sizeof(i64));
+		memcpy(pagesBuf + sizeof(i64), &pCon->writeNumber,     sizeof(i64));
 
 		full_size = page_size + sizeof(i64)*2 + 1;
 		if (full_size < thr->maxvalsize)
@@ -433,13 +446,14 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		skipped = data.mv_size;
 		while (fragment_index >= 0)
 		{
+            DBG((g_log,"Insert fragment %d\n",(int)fragment_index));
 			if (fragment_index == 0)
 				data.mv_size = full_size - skipped + sizeof(i64)*2 + 1;
 			else
 				data.mv_size = thr->maxvalsize;
 			data.mv_data = pagesBuf + skipped - (sizeof(i64)*2+1);
-			writeUInt64(pagesBuf + skipped - (sizeof(i64)*2+1), pCon->writeTermNumber);
-			writeUInt64(pagesBuf + skipped - (sizeof(i64)+1), pCon->writeNumber);
+            memcpy(pagesBuf + skipped - (sizeof(i64)*2+1), &pCon->writeTermNumber, sizeof(i64));
+    		memcpy(pagesBuf + skipped - (sizeof(i64)+1),   &pCon->writeNumber,     sizeof(i64));
 			pagesBuf[skipped-1] = fragment_index;
 
 			if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
@@ -459,7 +473,6 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	for(p=pList; p; p=p->pDirty)
 	{
 		u8 logKeyBuf[sizeof(i64)*3];
-		u8 logBuf[sizeof(u32)];
 
 		memcpy(logKeyBuf,                 &pWal->index,           sizeof(i64));
 		memcpy(logKeyBuf + sizeof(i64),   &pCon->writeTermNumber, sizeof(i64));
@@ -467,9 +480,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		key.mv_size = sizeof(logKeyBuf);
 		key.mv_data = logKeyBuf;
 
-		sqlite3Put4byte(logBuf,p->pgno);
 		data.mv_size = sizeof(u32);
-		data.mv_data = logBuf;
+		data.mv_data = &p->pgno;
 
 		if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
 		{
@@ -481,9 +493,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
   /** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
 										LastCompleteTerm:64,LastCompleteEvnum:64,
 										InprogressTerm:64,InProgressEvnum:64>>} */
-	// if (isCommit)
 	{
-		u8 infoBuf[1+6*sizeof(i64)];
+		u8 infoBuf[1+6*sizeof(i64)+sizeof(u32)];
 		if (isCommit)
 		{
 			pWal->lastCompleteTerm = pCon->writeTermNumber;
@@ -504,6 +515,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		memcpy(infoBuf+1+sizeof(i64)*3, &pWal->lastCompleteEvnum,sizeof(i64));
 		memcpy(infoBuf+1+sizeof(i64)*4, &pWal->inProgressTerm,sizeof(i64));
 		memcpy(infoBuf+1+sizeof(i64)*5, &pWal->inProgressEvnum,sizeof(i64));
+        memcpy(infoBuf+1+sizeof(i64)*6, &pWal->mxPage,sizeof(u32));
 
 		key.mv_size = sizeof(i64);
 		key.mv_data = &pWal->index;
@@ -596,24 +608,4 @@ SQLITE_API int sqlite3_wal_data(
 		}
 	}
 	return rt;
-}
-
-// write u64 to big endian
-void writeUInt64(unsigned char* buf, u64 num)
-{
-	buf[0] = num >> 56;
-	buf[1] = num >> 48;
-	buf[2] = num >> 40;
-	buf[3] = num >> 32;
-	buf[4] = num >> 24;
-	buf[5] = num >> 16;
-	buf[6] = num >> 8;
-	buf[7] = num;
-}
-
-// read big endian encoded u64
-u64 readUInt64(u8* buf)
-{
-  return ((u64)buf[0] << 56) + ((u64)buf[1] << 48) + ((u64)buf[2] << 40) + ((u64)buf[3] << 32) +
-	   ((u64)buf[4] << 24) + ((u64)buf[5] << 16)  + ((u64)buf[6] << 8) + buf[7];
 }
