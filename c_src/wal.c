@@ -184,7 +184,6 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
 	DBG((g_log,"Begin read trans %d\n",pWal->changed));
 	*pChanged = pWal->changed;
-	pWal->changed = 0;
 	return SQLITE_OK;
 }
 
@@ -535,11 +534,13 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			pWal->lastCompleteEvnum = pCon->writeNumber;
 			pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 			pWal->mxPage = nTruncate;
+            pWal->changed = 0;
 		}
 		else
 		{
 			pWal->inProgressTerm = pCon->writeTermNumber;
 			pWal->inProgressEvnum = pCon->writeNumber;
+            pWal->changed = 1;
 		}
 
 		infoBuf[0] = 1;
