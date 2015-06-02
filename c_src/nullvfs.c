@@ -339,11 +339,6 @@ static int nullOpen(
 
   NullFile *p = (NullFile*)pFile; /* Populate this structure */
 
-  // printf("open %d\n", isExclusive);
-  if( zName==0 ){
-    return SQLITE_IOERR;
-  }
-
   memset(p, 0, sizeof(NullFile));
 
   if( isReadonly )  openflags |= O_RDONLY;
