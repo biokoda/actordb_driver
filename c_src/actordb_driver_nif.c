@@ -546,8 +546,8 @@ do_open(db_command *cmd, db_thread *thread)
 	char mode[10];
 
 	memset(filename,0,MAX_PATHNAME);
-	memcpy(filename, thread->path, thread->pathlen);
-	filename[thread->pathlen] = '/';
+	// memcpy(filename, thread->path, thread->pathlen);
+	// filename[thread->pathlen] = '/';
 
 	enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
 	if (strcmp(mode,"wal") != 0)
@@ -555,7 +555,7 @@ do_open(db_command *cmd, db_thread *thread)
 
 	// DB can actually already be opened in thread->conns
 	// Check there with filename first.
-	size = enif_get_string(cmd->env, cmd->arg, filename+thread->pathlen+1, MAX_PATHNAME-thread->pathlen-1, ERL_NIF_LATIN1);
+	size = enif_get_string(cmd->env, cmd->arg, filename, MAX_PATHNAME, ERL_NIF_LATIN1);
 	// Actor path name must be written to wal. Filename slot is MAX_ACTOR_NAME bytes.
 	if(size <= 0 || size >= MAX_ACTOR_NAME)
 		return make_error_tuple(cmd->env, "invalid_filename");
@@ -565,8 +565,8 @@ do_open(db_command *cmd, db_thread *thread)
 		return make_error_tuple(cmd->env, "no_memory");
 	memset(res,0,sizeof(conn_resource));
 
-	pActorIndex = sqlite3HashFind(&thread->walHash,filename+thread->pathlen+1);
-	if (pActorIndex == NULL || filename[thread->pathlen+1] == ':')
+	pActorIndex = sqlite3HashFind(&thread->walHash,filename);
+	if (pActorIndex == NULL || filename[0] == ':')
 	{
 		for (i = 0; i < thread->nconns; i++)
 		{
@@ -588,9 +588,9 @@ do_open(db_command *cmd, db_thread *thread)
 		thread->curConn = cmd->conn;
 
 		// in case of :memory: db name
-		if (filename[thread->pathlen+1] == ':')
+		if (filename[0] == ':')
 		{
-			rc = sqlite3_open(filename+thread->pathlen+1,&(cmd->conn->db));
+			rc = sqlite3_open(filename,&(cmd->conn->db));
 		}
 		else
 		{
@@ -608,7 +608,7 @@ do_open(db_command *cmd, db_thread *thread)
 		memset(cmd->conn->dbpath,0,MAX_ACTOR_NAME);
 		enif_get_string(cmd->env, cmd->arg, cmd->conn->dbpath, MAX_PATHNAME, ERL_NIF_LATIN1);
 
-		if (filename[thread->pathlen+1] != ':')
+		if (filename[0] != ':')
 		{
 			cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 			pActorIndex = malloc(sizeof(int));
@@ -1818,30 +1818,6 @@ do_close(db_command *cmd,db_thread *thread)
 
 		close_prepared(conn);
 	}
-	if (cmd->arg && cmd->env && enif_is_ref(cmd->env,cmd->arg))
-	{
-		char filename[MAX_PATHNAME];
-
-		DBG((g_log,"Deleting actor\n"));
-
-		// wal_rewind(cmd->conn,0);
-		conn->needRestart = 0;
-		rc = sqlite3_close(conn->db);
-		if(rc != SQLITE_OK)
-		{
-			DBG((g_log,"Error closing %d, erlopen=%d\n",rc,conn->nErlOpen));
-			return make_error_tuple(cmd->env,"sqlite3_close in do_close");
-		}
-		snprintf(filename,MAX_PATHNAME,"%s/%s",thread->path,conn->dbpath);
-		remove(filename);
-
-		pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
-		sqlite3HashInsert(&thread->walHash, conn->dbpath, NULL);
-		free(pActorPos);
-		free(conn->dbpath);
-		memset(conn,0,sizeof(db_connection));
-		return ret;
-	}
 	else if (!conn->wal.thread)
 	{
 		conn->needRestart = 0;
@@ -2276,13 +2252,15 @@ thread_func(void *arg)
 			queue_recycle(data->tasks,item);
 		}
 
-		DBG((g_log,"thread=%d command done 1.\n",data->index));
+		DBG((g_log,"thread=%d command done 1. pagesChanged=%d\n",data->index,data->pagesChanged));
 
 		if (data->pagesChanged != pagesChanged)
 		{
 			data->forceCommit = 0;
 			mdb_txn_commit(data->wtxn);
-			if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
+			// if (mdb_txn_begin(data->env, NULL, 0, &data->wtxn) != MDB_SUCCESS)
+			// 	return NULL;
+			if (open_wtxn(data) == NULL)
 				return NULL;
 		}
 
@@ -2401,8 +2379,6 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	thread %= nthreads;
 	item = command_create(thread,pd);
-
-	DBG((g_log,"db_open %d\n",(int)item->cmd.env));
 
 	item->cmd.type = cmd_open;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);

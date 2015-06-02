@@ -11,7 +11,7 @@
 
 #define MAX_ATOM_LENGTH 255
 #define MAX_PATHNAME 512
-#define PAGE_BUFF_SIZE 5300
+#define PAGE_BUFF_SIZE 4200
 #define MAX_CONNECTIONS 8
 #define PACKET_ITEMS 9
 #define MAX_STATIC_SQLS 11
@@ -67,9 +67,9 @@ struct Wal {
 	u64 lastCompleteEvnum;
 	u64 inProgressTerm;
 	u64 inProgressEvnum;
-	MDB_val curFrame1, curFrame2, curFrame3;
+	MDB_val resFrames[3];
 	Pgno mxPage;
-	u8 nResframes;
+	u8 nResFrames;
 	u8 changed;
 };
 

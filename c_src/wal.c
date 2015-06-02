@@ -50,6 +50,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	MDB_dbi actorsdb = thr->actorsdb, infodb = thr->infodb;
 	MDB_txn *txn;
 
+    DBG((g_log,"Wal name=%s\n",zWalName));
+
 	if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return SQLITE_ERROR;
 
@@ -59,8 +61,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	// if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY, &infodb) != MDB_SUCCESS)
 	//   return SQLITE_ERROR;
 
-	key.mv_size = strlen(thr->curConn->dbpath);
-	key.mv_data = thr->curConn->dbpath;
+	key.mv_size = strlen(zWalName);
+	key.mv_data = (void*)zWalName;//thr->curConn->dbpath;
 	rc = mdb_get(txn,actorsdb,&key,&data);
 
 	// This is new actor, assign an index
@@ -124,18 +126,18 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 				return SQLITE_ERROR;
 			}
 			// pWal->firstCompleteTerm = *(v);
-            memcpy(&pWal->firstCompleteTerm, data.mv_data+1, sizeof(i64));
+			memcpy(&pWal->firstCompleteTerm, data.mv_data+1, sizeof(i64));
 			// pWal->firstCompleteEvnum = *(v+sizeof(i64));
-            memcpy(&pWal->firstCompleteEvnum, data.mv_data+1+sizeof(i64), sizeof(i64));
+			memcpy(&pWal->firstCompleteEvnum, data.mv_data+1+sizeof(i64), sizeof(i64));
 			// pWal->lastCompleteTerm = *(v+sizeof(i64)*2);
-            memcpy(&pWal->lastCompleteTerm, data.mv_data+1+sizeof(i64)*2, sizeof(i64));
+			memcpy(&pWal->lastCompleteTerm, data.mv_data+1+sizeof(i64)*2, sizeof(i64));
 			// pWal->lastCompleteEvnum = *(v+sizeof(i64)*3);
-            memcpy(&pWal->lastCompleteEvnum, data.mv_data+1+sizeof(i64)*3, sizeof(i64));
+			memcpy(&pWal->lastCompleteEvnum, data.mv_data+1+sizeof(i64)*3, sizeof(i64));
 			// pWal->inProgressTerm = *(v+sizeof(i64)*4);
-            memcpy(&pWal->inProgressTerm, data.mv_data+1+sizeof(i64)*4, sizeof(i64));
+			memcpy(&pWal->inProgressTerm, data.mv_data+1+sizeof(i64)*4, sizeof(i64));
 			// pWal->inProgressEvnum = *(v+sizeof(i64)*5);
-            memcpy(&pWal->inProgressEvnum, data.mv_data+1+sizeof(i64)*5, sizeof(i64));
-            memcpy(&pWal->mxPage, data.mv_data+1+sizeof(i64)*6,sizeof(u32));
+			memcpy(&pWal->inProgressEvnum, data.mv_data+1+sizeof(i64)*5, sizeof(i64));
+			memcpy(&pWal->mxPage, data.mv_data+1+sizeof(i64)*6,sizeof(u32));
 
 			if (pWal->inProgressTerm != 0)
 			{
@@ -155,7 +157,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 	mdb_txn_abort(txn);
 
-    pWal->changed = 1;
+	pWal->changed = 1;
 	(*ppWal) = pWal;
 	return SQLITE_OK;
 }
@@ -180,9 +182,9 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 */
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
-    DBG((g_log,"Begin read trans\n"));
-    *pChanged = pWal->changed;
-    pWal->changed = 0;
+	DBG((g_log,"Begin read trans %d\n",pWal->changed));
+	*pChanged = pWal->changed;
+	pWal->changed = 0;
 	return SQLITE_OK;
 }
 
@@ -191,11 +193,6 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 }
 
 /* Read a page from the write-ahead log, if it is present. */
-// TODO: We are making an assumption that an actor is being called from a single process,
-//       and there is no per actor read/write concurrency. Once there is read/write concurrency,
-//       find frame on a read transaction must not read intermediate frames that a write thread is
-//       flushing out.
-//       i.e. do not use thread->wtxn on read transactions.
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
 	db_thread *thr = pWal->thread;
@@ -211,16 +208,30 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 	key.mv_size = sizeof(pagesKeyBuf);
 	key.mv_data = pagesKeyBuf;
 
-	u32 pgno2 = *(u32*)(key.mv_data+sizeof(i64));
-	DBG((g_log,"RUN %d\n",pgno2));
+	// u32 pgno2 = *(u32*)(key.mv_data+sizeof(i64));
+	// DBG((g_log,"RUN %d\n",pgno2));
 	rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
 	if (rc == MDB_SUCCESS)
 	{
-		u32 pgno1 = *(u32*)(key.mv_data+sizeof(i64));
-        u8 frag = *(u8*)(key.mv_data+sizeof(i64)+sizeof(u32));
-		DBG((g_log,"SUCCESS? %d frag=%d\n",pgno1,(int)frag));
-		pWal->curFrame = data;
-		*piRead = 1;
+		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_FIRST_DUP);
+		if (rc == MDB_SUCCESS)
+		{
+			// u32 pgno1 = *(u32*)(key.mv_data+sizeof(i64));
+			char frag1 = *(char*)(data.mv_data+sizeof(i64)*2);
+			int frag = frag1;
+			// DBG((g_log,"SUCCESS? %d frag=%d\n",pgno1,frag));
+			pWal->nResFrames = frag;
+			pWal->resFrames[frag--] = data;
+
+			while (frag >= 0)
+			{
+				rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_NEXT_DUP);
+				frag = *(u8*)(data.mv_data+sizeof(i64)*2);
+				DBG((g_log,"SUCCESS? %d frag=%d\n",pgno,frag));
+				pWal->resFrames[frag--] = data;
+			}
+			*piRead = 1;
+		}
 	}
 	else if (rc == MDB_NOTFOUND)
 	{
@@ -233,25 +244,46 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 		*piRead = 0;
 	}
 
-  return SQLITE_OK;
+    return SQLITE_OK;
 }
 
 int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
+    DBG((g_log,"Read frame\n"));
 	// i64 term, evnum;
-	DBG((g_log,"READ FRAME %d\n",nOut));
-	if (LZ4_decompress_safe((char*)(pWal->curFrame.mv_data+sizeof(i64)*2+1),(char*)pOut,
-						  pWal->curFrame.mv_size-(sizeof(i64)*2+1),nOut) > 0)
+	if (pWal->nResFrames == 0)
 	{
-#ifdef _TESTDBG_
-        {
-            i64 term, evnum;
-            memcpy(&term,  pWal->curFrame.mv_data,             sizeof(i64));
-            memcpy(&evnum, pWal->curFrame.mv_data+sizeof(i64), sizeof(i64));
-    		DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",term,evnum,(int)pWal->curFrame.mv_size));
-        }
-#endif
-		return SQLITE_OK;
+		if (LZ4_decompress_safe((char*)(pWal->resFrames[0].mv_data+sizeof(i64)*2+1),(char*)pOut,
+							  pWal->resFrames[0].mv_size-(sizeof(i64)*2+1),nOut) > 0)
+		{
+	#ifdef _TESTDBG_
+			{
+				i64 term, evnum;
+				memcpy(&term,  pWal->resFrames[0].mv_data,             sizeof(i64));
+				memcpy(&evnum, pWal->resFrames[0].mv_data+sizeof(i64), sizeof(i64));
+				DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",term,evnum,(int)pWal->resFrames[0].mv_size));
+			}
+	#endif
+			return SQLITE_OK;
+		}
+	}
+	else
+	{
+		u8 pagesBuf[PAGE_BUFF_SIZE];
+		int frags = pWal->nResFrames;
+		int pos = 0;
+
+		while (frags >= 0)
+		{
+			// DBG((g_log,"Read frame %d\n",pos));
+			memcpy(pagesBuf + pos, pWal->resFrames[frags].mv_data+sizeof(i64)*2+1, pWal->resFrames[frags].mv_size-(sizeof(i64)*2+1));
+			pos += pWal->resFrames[frags].mv_size-(sizeof(i64)*2+1);
+			frags--;
+		}
+		pWal->nResFrames = 0;
+
+		if (LZ4_decompress_safe((char*)pagesBuf,(char*)pOut,pos,nOut) > 0)
+			return SQLITE_OK;
 	}
 	return SQLITE_ERROR;
 }
@@ -260,9 +292,11 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 Pgno sqlite3WalDbsize(Wal *pWal)
 {
 	if (pWal)
-    {
-        return pWal->mxPage;
-    }
+	{
+        DBG((g_log,"Dbsize %u\n",pWal->mxPage));
+		return pWal->mxPage;
+	}
+    DBG((g_log,"Dbsize 0\n"));
 	return 0;
 }
 
@@ -312,7 +346,7 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 	while ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 	{
 		u32 pgno;
-        memcpy(&pgno,logVal.mv_data,sizeof(u32));
+		memcpy(&pgno,logVal.mv_data,sizeof(u32));
 		memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
 		memcpy(pagesKeyBuf + sizeof(i64), &pgno,       sizeof(u32));
 		pgKey.mv_data = pagesKeyBuf;
@@ -328,8 +362,8 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 		}
 		while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 		{
-            memcpy(&term, pgVal.mv_data,            sizeof(i64));
-            memcpy(&evnum,pgVal.mv_data+sizeof(i64),sizeof(i64));
+			memcpy(&term, pgVal.mv_data,            sizeof(i64));
+			memcpy(&evnum,pgVal.mv_data+sizeof(i64),sizeof(i64));
 			// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
 			//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
 			if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
@@ -446,14 +480,14 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		skipped = data.mv_size;
 		while (fragment_index >= 0)
 		{
-            DBG((g_log,"Insert fragment %d\n",(int)fragment_index));
+			DBG((g_log,"Insert fragment %d\n",(int)fragment_index));
 			if (fragment_index == 0)
 				data.mv_size = full_size - skipped + sizeof(i64)*2 + 1;
 			else
 				data.mv_size = thr->maxvalsize;
 			data.mv_data = pagesBuf + skipped - (sizeof(i64)*2+1);
-            memcpy(pagesBuf + skipped - (sizeof(i64)*2+1), &pCon->writeTermNumber, sizeof(i64));
-    		memcpy(pagesBuf + skipped - (sizeof(i64)+1),   &pCon->writeNumber,     sizeof(i64));
+			memcpy(pagesBuf + skipped - (sizeof(i64)*2+1), &pCon->writeTermNumber, sizeof(i64));
+			memcpy(pagesBuf + skipped - (sizeof(i64)+1),   &pCon->writeNumber,     sizeof(i64));
 			pagesBuf[skipped-1] = fragment_index;
 
 			if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
@@ -515,7 +549,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		memcpy(infoBuf+1+sizeof(i64)*3, &pWal->lastCompleteEvnum,sizeof(i64));
 		memcpy(infoBuf+1+sizeof(i64)*4, &pWal->inProgressTerm,sizeof(i64));
 		memcpy(infoBuf+1+sizeof(i64)*5, &pWal->inProgressEvnum,sizeof(i64));
-        memcpy(infoBuf+1+sizeof(i64)*6, &pWal->mxPage,sizeof(u32));
+		memcpy(infoBuf+1+sizeof(i64)*6, &pWal->mxPage,sizeof(u32));
 
 		key.mv_size = sizeof(i64);
 		key.mv_data = &pWal->index;
@@ -545,6 +579,7 @@ int sqlite3WalCheckpoint(
   int *pnCkpt                     /* OUT: Number of backfilled frames in WAL */
 )
 {
+    DBG((g_log,"Checkpoint\n"));
 	return SQLITE_OK;
 }
 
@@ -557,6 +592,7 @@ int sqlite3WalCheckpoint(
 */
 int sqlite3WalCallback(Wal *pWal)
 {
+    DBG((g_log,"Callback\n"));
 	return SQLITE_OK;
 }
 
@@ -574,6 +610,7 @@ int sqlite3WalExclusiveMode(Wal *pWal, int op)
 */
 int sqlite3WalHeapMemory(Wal *pWal)
 {
+    DBG((g_log,"heap\n"));
 	return pWal != NULL;
 }
 
