@@ -24,7 +24,7 @@ open(Filename) ->
 	open(Filename,0,wal).
 open(Filename,ThreadNumber) ->
 	open(Filename,ThreadNumber,wal).
-open(Filename,ThreadNumber,Mode) when Mode == off; Mode == delete; Mode == persist; Mode == truncate ->
+open(Filename,ThreadNumber,Mode) when Mode == wal; Mode == off; Mode == delete; Mode == persist; Mode == truncate ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode),
 	case receive_answer(Ref) of

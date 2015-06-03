@@ -79,7 +79,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		}
 		else if (rc == MDB_SUCCESS)
 		{
-			index = *(i64*)data.mv_data;
+			// index = *(i64*)data.mv_data;
+            memcpy(&index,data.mv_data,sizeof(i64));
 			DBG((g_log,"index assigned=%lld\r\n",index));
 		}
 		else
@@ -89,6 +90,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		}
 
 		pWal->index = index++;
+        key1.mv_size = 1;
+        key1.mv_data = (void*)"?";
 		data.mv_size = sizeof(i64);
 		data.mv_data = (void*)&index;
 		DBG((g_log,"Writing index %lld\r\n",index));
@@ -106,6 +109,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 			mdb_txn_abort(txn);
 			return SQLITE_ERROR;
 		}
+        thr->pagesChanged++;
 
 		thr->forceCommit = 1;
 	}
@@ -212,7 +216,7 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 	rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
 	if (rc == MDB_SUCCESS)
 	{
-		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_FIRST_DUP);
+		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
 		if (rc == MDB_SUCCESS)
 		{
 			// u32 pgno1 = *(u32*)(key.mv_data+sizeof(i64));
@@ -224,13 +228,15 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 
 			while (frag >= 0)
 			{
-				rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_NEXT_DUP);
+				rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
 				frag = *(u8*)(data.mv_data+sizeof(i64)*2);
 				DBG((g_log,"SUCCESS? %d frag=%d\n",pgno,frag));
 				pWal->resFrames[frag--] = data;
 			}
 			*piRead = 1;
 		}
+        else
+            *piRead = 0;
 	}
 	else if (rc == MDB_NOTFOUND)
 	{
