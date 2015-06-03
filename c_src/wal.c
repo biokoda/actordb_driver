@@ -4,6 +4,7 @@
 ** LMDB schema:
 ** - Actors DB: {<<ActorName/binary>>, <<ActorIndex:64>>}
 **   {"?",MaxInteger} -> when adding actors, increment this value
+**                    -> Indexes start at 100
 
 ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,FragIndex:8,CompressedPage/binary>>}
 **   Pages db is a dupsort database. It stores lz4 compressed sqlite pages. There can be multiple
@@ -30,9 +31,11 @@
 ** Non-live replication is simply a matter of looking up log and sending the right pages.
 ** If stale replication or actor copy, simply traverse actor pages from 0 forward until reaching
 ** the end.
+
 ** Undo is a matter of checking the pages of last write in log db and deleting them in log and pages db.
 
-** Endianess: Data is written as is (i.e. little endian). Practicaly no relevant platforms are in big endian.
+** Endianess: Data is written as is. Practicaly no relevant platforms are in big endian and I can't see
+** a scenario where a lmdb file would be moved between different endian platforms.
 */
 
 
