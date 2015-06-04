@@ -12,11 +12,6 @@
          close/3,
          noop/3,
          parse_helper/2,
-         % wal_pages/1,
-         % backup_init/4,
-         % backup_finish/3,
-         % backup_step/4,
-         % backup_pages/1,
          interrupt_query/1,
          lz4_compress/1,
          lz4_decompress/2,
@@ -25,21 +20,22 @@
          tcp_connect/7,
          tcp_reconnect/0,
          replicate_opts/5,
-         %wal_header/1,
-        %  wal_checksum/4,
          page_size/0,
          iterate_wal/4,
          iterate_wal/5,
          iterate_close/1,
-         % replicate_status/1,
          bind_insert/5,
          all_tunnel_call/3,
          checkpoint_lock/4,
          inject_page/4,
          inject_page/5,
          wal_rewind/4,
-         delete_actor/1
+         delete_actor/1,
+         checkpoint/5
 ]).
+
+checkpoint(_,_,_,_,_) ->
+    exit(nif_library_not_loaded).
 
 delete_actor(_) ->
     exit(nif_library_not_loaded).

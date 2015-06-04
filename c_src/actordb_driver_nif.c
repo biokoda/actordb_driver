@@ -47,7 +47,10 @@
 #include "queue.c"
 #include "nullvfs.c"
 
+static MDB_txn* open_wtxn(db_thread *data);
 void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
+
+
 static ERL_NIF_TERM
 make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -1283,6 +1286,25 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	return atom_ok;
 }
 
+static ERL_NIF_TERM
+do_checkpoint(db_command *cmd, db_thread *thread)
+{
+	ErlNifUInt64 evterm;
+	ErlNifUInt64 evnum;
+	db_connection *con = cmd->conn;
+
+	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&(evterm));
+	enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(evnum));
+
+	if (con->wal.firstCompleteTerm >= evterm && con->wal.firstCompleteEvnum >= evnum)
+		return atom_ok;
+
+	checkpoint(&con->wal, evterm, evnum);
+
+
+	return atom_ok;
+}
+
 
 static ERL_NIF_TERM
 do_exec_script(db_command *cmd, db_thread *thread)
@@ -1313,40 +1335,8 @@ do_exec_script(db_command *cmd, db_thread *thread)
 	if (!thread->threadNum)
 		thread->threadNum++;
 
-	// if (cmd->conn->needRestart)
-	// {
-	//     if (!reopen_db(cmd->conn,thread))
-	//         return atom_false;
-	// }
-
 	if (!cmd->conn->wal_configured)
 		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
-
-
-	// if (cmd->conn->wal && cmd->conn->wal->writeLock)
-	// {
-	//     DBG((g_log,"Ending write transaction %d\n",(int)cmd->conn->wal->dirty));
-	//     if (cmd->conn->wal->dirty)
-	//     {
-	//         cmd->conn->writeNumToIgnore = cmd->conn->lastWriteThreadNum;
-	//         sqlite3WalUndo(cmd->conn->wal, NULL, NULL);
-	//     }
-	//     sqlite3WalEndWriteTransaction(cmd->conn->wal);
-	//     sqlite3WalEndReadTransaction(cmd->conn->wal);
-	// }
-	// else if (cmd->conn->wal)
-	// {
-	//     Wal *tmpWal = cmd->conn->wal->prev;
-	//     while (tmpWal != NULL)
-	//     {
-	//         if (tmpWal->writeLock)
-	//         {
-	//             sqlite3WalEndWriteTransaction(tmpWal);
-	//             sqlite3WalEndReadTransaction(tmpWal);
-	//         }
-	//         tmpWal = tmpWal->prev;
-	//     }
-	// }
 
 	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
 		return make_error_tuple(cmd->env, "not iolist");
@@ -1660,6 +1650,11 @@ do_exec_script(db_command *cmd, db_thread *thread)
 		sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
 		sqlite3_step(statement);
 		sqlite3_finalize(statement);
+
+		// Abort transaction to get rid of all writes.
+		mdb_txn_abort(thread->wtxn);
+		open_wtxn(thread);
+		thread->pagesChanged = pagesPre;
 	}
 
 	// enif_release_resource(cmd->conn);
@@ -1976,6 +1971,8 @@ evaluate_command(db_command cmd,db_thread *thread)
 	//     return do_backup_step(cmd,thread);
 	case cmd_replicate_opts:
 		return do_replicate_opts(&cmd,thread);
+	case cmd_checkpoint:
+		return do_checkpoint(&cmd,thread);
 	case cmd_inject_page:
 		return do_inject_page(&cmd,thread);
 	case cmd_wal_rewind:
@@ -2866,6 +2863,42 @@ store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	return atom_ok;
 }
 
+static ERL_NIF_TERM
+db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	conn_resource *res;
+	ErlNifPid pid;
+	qitem *item;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	DBG((g_log,"Checkpoint\r\n"));
+
+	if (argc != 5)
+		return enif_make_badarg(env);
+
+	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		return enif_make_badarg(env);
+	if(!enif_is_ref(env, argv[1]))
+		return make_error_tuple(env, "invalid_ref");
+	if(!enif_get_local_pid(env, argv[2], &pid))
+		return make_error_tuple(env, "invalid_pid");
+	if (!enif_is_number(env,argv[3]) || !enif_is_number(env,argv[4]))
+		return make_error_tuple(env, "evnum or evterm NaN");
+
+	item = command_create(res->thread,pd);
+
+	/* command */
+	item->cmd.type = cmd_checkpoint;
+	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+	item->cmd.pid = pid;
+	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // evterm
+	item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]); // evnum
+	item->cmd.connindex = res->connindex;
+
+	enif_consume_timeslice(env,500);
+	return push_command(res->thread, pd, item);
+}
+
 /*
  * Execute the sql statement
  */
@@ -3412,18 +3445,13 @@ static ErlNifFunc nif_funcs[] = {
 	{"open", 5, db_open},
 	{"open", 6, db_open},
 	{"close", 3, db_close},
+	{"checkpoint",5,db_checkpoint},
 	{"replicate_opts",5,replicate_opts},
-	// {"replicate_status",1,replicate_status},
 	{"exec_script", 7, exec_script},
 	{"exec_script", 8, exec_script},
 	{"bind_insert",5,bind_insert},
 	{"noop", 3, noop},
 	{"parse_helper",2,parse_helper},
-	// {"wal_pages",1,wal_pages},
-	// {"backup_init",4,backup_init},
-	// {"backup_finish",3,backup_finish},
-	// {"backup_step",4,backup_step},
-	// {"backup_pages",1,backup_pages},
 	{"interrupt_query",1,interrupt_query},
 	{"lz4_compress",1,lz4_compress},
 	{"lz4_decompress",2,lz4_decompress},
@@ -3431,7 +3459,6 @@ static ErlNifFunc nif_funcs[] = {
 	{"tcp_connect",6,tcp_connect},
 	{"tcp_connect",7,tcp_connect},
 	{"tcp_reconnect",0,tcp_reconnect},
-	// {"wal_checksum",4,wal_checksum},
 	{"all_tunnel_call",3,all_tunnel_call},
 	{"store_prepared_table",2,store_prepared_table},
 	{"checkpoint_lock",4,checkpoint_lock},

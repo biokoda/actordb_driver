@@ -262,7 +262,8 @@ typedef enum
 	cmd_iterate_wal  = 16,
 	cmd_inject_page  = 17,
 	cmd_wal_rewind  = 18,
-	cmd_replicate_opts = 19
+	cmd_replicate_opts = 19,
+	cmd_checkpoint = 20
 } command_type;
 
 typedef struct
