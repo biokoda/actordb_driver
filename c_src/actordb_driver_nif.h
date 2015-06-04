@@ -218,10 +218,9 @@ struct conn_resource
 
 struct iterate_resource
 {
-	i64 iOffset;
 	u64 evnumFrom;
 	u64 evtermFrom;
-	u64 walIndex;
+	u32 pgnoPos;
 
 	int thread;
 	int connindex;
@@ -230,15 +229,15 @@ struct iterate_resource
 	char closed;
 };
 
-/* backup object */
-struct db_backup
-{
-	sqlite3_backup *b;
-	sqlite3 *dst;
-	sqlite3 *src;
-	int pages_for_step;
-	int thread;
-};
+// /* backup object */
+// struct db_backup
+// {
+// 	sqlite3_backup *b;
+// 	sqlite3 *dst;
+// 	sqlite3 *src;
+// 	int pages_for_step;
+// 	int thread;
+// };
 
 
 typedef enum
@@ -259,7 +258,7 @@ typedef enum
 	cmd_alltunnel_call  = 13,
 	cmd_store_prepared  = 14,
 	cmd_checkpoint_lock  = 15,
-	cmd_iterate_wal  = 16,
+	cmd_iterate  = 16,
 	cmd_inject_page  = 17,
 	cmd_wal_rewind  = 18,
 	cmd_replicate_opts = 19,

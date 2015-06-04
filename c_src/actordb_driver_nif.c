@@ -1065,47 +1065,45 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 
 
 static ERL_NIF_TERM
-do_iterate_wal(db_command *cmd, db_thread *thread)
+do_iterate(db_command *cmd, db_thread *thread)
 {
-  return atom_false;
-	// char activeWal;
-	// ErlNifBinary bin;
-	// ERL_NIF_TERM tBin;
-	// ERL_NIF_TERM res;
-	// int rc;
-	// u64 evnumFrom, evtermFrom;
-	// iterate_resource *iter;
-	// int nfilled = 0;
-	// char dorel = 0;
-	//
-	// if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
-	// {
-	//     dorel = 1;
-	//     if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnumFrom))
-	//         return enif_make_badarg(cmd->env);
-	//     if (cmd->arg1 == 0 || !enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evtermFrom))
-	//     {
-	//         evtermFrom = 0;
-	//     }
-	//
-	//     iter = enif_alloc_resource(thread->pd->iterate_type, sizeof(iterate_resource));
-	//     if(!iter)
-	//         return make_error_tuple(cmd->env, "no_memory");
-	//     memset(iter,0,sizeof(iterate_resource));
-	//     iter->thread = thread->index;
-	//     iter->connindex = cmd->conn->connindex;
-	//     iter->evnumFrom = evnumFrom;
-	//     iter->evtermFrom = evtermFrom;
-	//     // Creating a iterator requires checkpoint lock.
-	//     // On iterator destruct checkpoint will be released.
-	//     cmd->conn->checkpointLock++;
-	//
-	//     res = enif_make_resource(cmd->env,iter);
-	// }
-	// else
-	// {
-	//     res = cmd->arg;
-	// }
+	char activeWal;
+	ErlNifBinary bin;
+	ERL_NIF_TERM tBin;
+	ERL_NIF_TERM res;
+	u64 evnumFrom, evtermFrom;
+	iterate_resource *iter;
+	int nfilled = 0;
+	char dorel = 0;
+
+	if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
+	{
+		dorel = 1;
+		if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evtermFrom))
+			return enif_make_badarg(cmd->env);
+		if (cmd->arg1 == 0 || !enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evnumFrom))
+		{
+			return enif_make_badarg(cmd->env);
+		}
+
+		iter = enif_alloc_resource(thread->pd->iterate_type, sizeof(iterate_resource));
+		if(!iter)
+			return make_error_tuple(cmd->env, "no_memory");
+		memset(iter,0,sizeof(iterate_resource));
+		iter->thread = thread->index;
+		iter->connindex = cmd->conn->connindex;
+		iter->evnumFrom = evnumFrom;
+		iter->evtermFrom = evtermFrom;
+		// Creating a iterator requires checkpoint lock.
+		// On iterator destruct checkpoint will be released.
+		cmd->conn->checkpointLock++;
+
+		res = enif_make_resource(cmd->env,iter);
+	}
+	else
+	{
+		res = cmd->arg;
+	}
 
 	// enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
 	// rc = wal_iterate_from(cmd->conn,iter,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(u8*)bin.data,&nfilled,&activeWal);
@@ -1979,8 +1977,8 @@ evaluate_command(db_command cmd,db_thread *thread)
 		return do_wal_rewind(&cmd,thread);
 	case cmd_interrupt:
 		return do_interrupt(&cmd,thread);
-	case cmd_iterate_wal:
-		return do_iterate_wal(&cmd,thread);
+	case cmd_iterate:
+		return do_iterate(&cmd,thread);
 	case cmd_unknown:
 		return atom_ok;
 	case cmd_tcp_connect:
@@ -3000,14 +2998,14 @@ page_size(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
-iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	conn_resource *res;
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"iterate_wal\n"));
+	DBG((g_log,"iterate_db\n"));
 
 	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
@@ -3022,13 +3020,13 @@ iterate_wal(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	item = command_create(res->thread,pd);
 
 	/* command */
-	item->cmd.type = cmd_iterate_wal;
+	item->cmd.type = cmd_iterate;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
 	item->cmd.connindex = res->connindex;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
+	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]); // evterm or iterator resource
 	if (argc == 5)
-	  item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]);
+	  item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // evnum
 
 	enif_consume_timeslice(env,500);
 	return push_command(res->thread, pd, item);
@@ -3462,8 +3460,8 @@ static ErlNifFunc nif_funcs[] = {
 	{"all_tunnel_call",3,all_tunnel_call},
 	{"store_prepared_table",2,store_prepared_table},
 	{"checkpoint_lock",4,checkpoint_lock},
-	{"iterate_wal",4,iterate_wal},
-	{"iterate_wal",5,iterate_wal},
+	{"iterate_db",4,iterate_db},
+	{"iterate_db",5,iterate_db},
 	{"iterate_close",1,iterate_close},
 	{"page_size",0,page_size},
 	{"inject_page",4,inject_page},
