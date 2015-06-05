@@ -1076,6 +1076,7 @@ do_iterate(db_command *cmd, db_thread *thread)
 	iterate_resource *iter;
 	int nfilled = 0;
 	char dorel = 0;
+	u32 done = 0;
 
 	if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
 	{
@@ -1110,26 +1111,18 @@ do_iterate(db_command *cmd, db_thread *thread)
 	enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE*4,&bin);
 	memset(bin.data,0, bin.size);
 
-	nfilled = iterate(&cmd->conn->wal, iter, (u8*)bin.data, bin.size);
+	nfilled = iterate(&cmd->conn->wal, iter, (u8*)bin.data, bin.size, &done);
 
-	if (nfilled == 0)
-	{
-	    enif_release_binary(&bin);
-	    enif_release_resource(iter);
-	    return atom_done;
-	}
-	else
-	{
-		ERL_NIF_TERM tev, tt;
-	    if (dorel)
-	        enif_release_resource(iter);
-	    tBin = enif_make_binary(cmd->env,&bin);
-	    enif_release_binary(&bin);
+	ERL_NIF_TERM tev, tt,tdone;
+	if (dorel || done)
+		enif_release_resource(iter);
+	tBin = enif_make_binary(cmd->env,&bin);
+	enif_release_binary(&bin);
 
-		tev = enif_make_uint64(cmd->env,iter->evnum);
-		tt = enif_make_uint64(cmd->env,iter->evterm);
-	    return enif_make_tuple5(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tt,tev);
-	}
+	tev = enif_make_uint64(cmd->env,iter->evnum);
+	tt = enif_make_uint64(cmd->env,iter->evterm);
+	tdone = enif_make_uint(cmd->env,done);
+	return enif_make_tuple6(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tt,tev, tdone);
 }
 
 static ERL_NIF_TERM
@@ -1187,6 +1180,15 @@ do_wal_rewind(db_command *cmd, db_thread *thread)
 static ERL_NIF_TERM
 do_inject_page(db_command *cmd, db_thread *thread)
 {
+	// ErlNifBinary bin;
+	// u64 evnum,evterm;
+	// u32 pgno;
+	//
+	// enif_inspect_binary(cmd->env,cmd->arg,&bin);
+	// enif_get_uint64(cmd->env,cmd->arg1,&evterm);
+	// enif_get_uint64(cmd->env,cmd->arg2,&evnum);
+	// enif_get_uint32(cmd->env,cmd->arg3,&pgno);
+
 	// PgHdr page;
 	// ErlNifBinary bin;
 	// ErlNifBinary binhead;
@@ -3068,7 +3070,7 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	DBG((g_log,"inject_page\n"))
 
-	if(argc != 4 && argc != 5)
+	if(argc != 7)
 		return enif_make_badarg(env);
 	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
@@ -3079,16 +3081,18 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_pid");
 	if (!enif_is_binary(env,argv[3]))
 		return make_error_tuple(env,"not binary");
+	if (!enif_is_number(env,argv[4]) || !enif_is_number(env,argv[5]) || !enif_is_number(env,argv[6]))
+		return make_error_tuple(env,"NaN");
 
 	item = command_create(res->thread,pd);
 
-	/* command */
 	item->cmd.type = cmd_inject_page;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
 	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
-	if (argc == 5)
-	  item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]);
+	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]);
+	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[5]);
+	item->cmd.arg3 = enif_make_copy(item->cmd.env,argv[6]);
 	item->cmd.connindex = res->connindex;
 
 	enif_consume_timeslice(env,500);
@@ -3465,8 +3469,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"iterate_db",5,iterate_db},
 	{"iterate_close",1,iterate_close},
 	{"page_size",0,page_size},
-	{"inject_page",4,inject_page},
-	{"inject_page",5,inject_page},
+	{"inject_page",7,inject_page},
 	{"wal_rewind",4,drv_wal_rewind},
 	{"delete_actor",1,delete_actor},
 };

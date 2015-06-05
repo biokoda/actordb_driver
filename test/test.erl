@@ -66,25 +66,34 @@ dbcopy() ->
   {ok,Select} = actordb_driver:exec_script("select * from tab;",Db),
   % ?debugFmt("Select ~p",[Select]),
   {ok,Copy} = actordb_driver:open("copy"),
-  {ok,Iter,Bin,Evterm,Evnum1} =  actordb_driver:iterate_db(Db,0,0),
+  {ok,Iter,Bin,Evterm,Evnum1,Done} =  actordb_driver:iterate_db(Db,0,0),
   % This will export into an sqlite file named sq.
   {ok,F} = file:open("sq",[write,binary,raw]),
-  ?debugFmt("Exporting actor into an sqlite file",[]),
+  ?debugFmt("Exporting actor into an sqlite file ~p",[Done]),
   readpages(Bin,F),
+  case Done > 0 of
+      true ->
+          ok;
+      _ ->
+          copy(Db,Iter,F,Copy)
+  end,
   % ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum1]),
   file:close(F),
   ?debugFmt("Reading from exported sqlite file: ~p",[os:cmd("sqlite3 sq \"select * from tab\"")]),
-  file:delete("sq"),
-  copy(Db,Iter,F,Copy).
+  file:delete("sq").
+
 
 copy(Orig,Iter,F,Copy) ->
     case actordb_driver:iterate_db(Orig,Iter) of
-        done ->
-            ok;
-        {ok,Iter1,Bin,Evterm,Evnum} ->
+        {ok,Iter1,Bin,Evterm,Evnum,Done} ->
             ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum]),
             readpages(Bin,F),
-            copy(Orig,Iter1,F,Copy)
+            case Done > 0 of
+                true ->
+                    ok;
+                _ ->
+                    copy(Orig,Iter1,F,Copy)
+            end
     end.
 
 readpages(<<Num:16/big,Bin:Num/binary,Rem/binary>>,F) when Num > 0 ->

@@ -228,6 +228,8 @@ struct iterate_resource
 	char started;
 	char closed;
 	char entiredb;
+
+	u32 mxPage;
 };
 
 // /* backup object */

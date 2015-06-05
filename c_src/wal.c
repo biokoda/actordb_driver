@@ -38,7 +38,7 @@
 ** a scenario where a lmdb file would be moved between different endian platforms.
 */
 int checkpoint(Wal *pWal, u64 evterm, u64 evnum);
-int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize);
+int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done);
 int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum);
 
 // 1. Figure out actor index, create one if it does not exist
@@ -346,7 +346,7 @@ int sqlite3WalEndWriteTransaction(Wal *pWal)
 }
 
 // return number of bytes written
-int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize)
+int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 {
 	// MDB_val logKey, logVal;
 	// MDB_val pgKey, pgVal;
@@ -367,6 +367,7 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize)
 			iter->evterm = pWal->lastCompleteTerm;
 			iter->pgnoPos = 1;
 			iter->entiredb = 1;
+            iter->mxPage = pWal->mxPage;
 		}
 		iter->started = 1;
 	}
@@ -382,7 +383,11 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize)
 			findframe(pWal, iter->pgnoPos, &iRead, iter->evterm, iter->evnum);
 
 			if (!iRead)
+			{
+				*done = iter->mxPage;
 				return bufused;
+			}
+
 
 			// page is compressed into single frame
 			if (pWal->nResFrames == 0)
