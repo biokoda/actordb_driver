@@ -1054,9 +1054,11 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 
 	if (rc == SQLITE_DONE)
 	{
-		result = enif_make_list1(cmd->env, enif_make_tuple3(cmd->env,atom_changes,
-											 enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db)),
-											enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db))));
+		ERL_NIF_TERM changetuple, rowid, changes;
+		rowid = enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db));
+		changes = enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db));
+		changetuple = enif_make_tuple3(cmd->env,atom_changes,rowid,changes);
+		result = enif_make_list1(cmd->env, changetuple);
 		return enif_make_tuple2(cmd->env,atom_ok,result);
 	}
 	else
@@ -1067,7 +1069,6 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 static ERL_NIF_TERM
 do_iterate(db_command *cmd, db_thread *thread)
 {
-	char activeWal;
 	ErlNifBinary bin;
 	ERL_NIF_TERM tBin;
 	ERL_NIF_TERM res;
@@ -1092,8 +1093,8 @@ do_iterate(db_command *cmd, db_thread *thread)
 		memset(iter,0,sizeof(iterate_resource));
 		iter->thread = thread->index;
 		iter->connindex = cmd->conn->connindex;
-		iter->evnumFrom = evnumFrom;
-		iter->evtermFrom = evtermFrom;
+		iter->evnum = evnumFrom;
+		iter->evterm = evtermFrom;
 		// Creating a iterator requires checkpoint lock.
 		// On iterator destruct checkpoint will be released.
 		cmd->conn->checkpointLock++;
@@ -1104,31 +1105,31 @@ do_iterate(db_command *cmd, db_thread *thread)
 	{
 		res = cmd->arg;
 	}
+	// 4 pages of buffer size
+	// This might contain many more actual db pages because data is compressed
+	enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE*4,&bin);
+	memset(bin.data,0, bin.size);
 
-	// enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,&bin);
-	// rc = wal_iterate_from(cmd->conn,iter,SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE,(u8*)bin.data,&nfilled,&activeWal);
-	// if (rc == SQLITE_ABORT)
-	// {
-	//     // found evterm does not match evterm we are looking for
-	//     enif_release_binary(&bin);
-	//     enif_release_resource(iter);
-	//     return enif_make_tuple2(cmd->env,atom_ok,enif_make_int(cmd->env,iter->evtermFrom));
-	// }
-	// else if (rc == SQLITE_DONE)
-	// {
-	//     enif_release_binary(&bin);
-	//     enif_release_resource(iter);
-	//     return atom_done;
-	// }
-	// else
-	// {
-	//     if (dorel)
-	//         enif_release_resource(iter);
-	//     tBin = enif_make_binary(cmd->env,&bin);
-	//     enif_release_binary(&bin);
-	//     return enif_make_tuple4(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res),
-	//                     tBin, enif_make_int(cmd->env,(int)activeWal));
-	// }
+	nfilled = iterate(&cmd->conn->wal, iter, (u8*)bin.data, bin.size);
+
+	if (nfilled == 0)
+	{
+	    enif_release_binary(&bin);
+	    enif_release_resource(iter);
+	    return atom_done;
+	}
+	else
+	{
+		ERL_NIF_TERM tev, tt;
+	    if (dorel)
+	        enif_release_resource(iter);
+	    tBin = enif_make_binary(cmd->env,&bin);
+	    enif_release_binary(&bin);
+
+		tev = enif_make_uint64(cmd->env,iter->evnum);
+		tt = enif_make_uint64(cmd->env,iter->evterm);
+	    return enif_make_tuple5(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tt,tev);
+	}
 }
 
 static ERL_NIF_TERM
@@ -1294,7 +1295,7 @@ do_checkpoint(db_command *cmd, db_thread *thread)
 	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&(evterm));
 	enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(evnum));
 
-	if (con->wal.firstCompleteTerm >= evterm && con->wal.firstCompleteEvnum >= evnum)
+	if ((con->wal.firstCompleteTerm >= evterm && con->wal.firstCompleteEvnum >= evnum) || con->checkpointLock)
 		return atom_ok;
 
 	checkpoint(&con->wal, evterm, evnum);
@@ -1343,8 +1344,8 @@ do_exec_script(db_command *cmd, db_thread *thread)
 	{
 		if (cmd->conn->writeNumToIgnore)
 			cmd->conn->writeNumToIgnore = 0;
-		enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->writeTermNumber));
-		enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->writeNumber));
+		enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->wal.inProgressTerm));
+		enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->wal.inProgressEvnum));
 		enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
 	}
 

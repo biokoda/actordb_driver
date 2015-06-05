@@ -123,11 +123,11 @@ iterate_close({iter,Iter}) ->
 
 iterate_db({actordb_driver, _Ref, Connection},{iter,Iter}) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:iterate_wal(Connection, Ref, self(),Iter),
+	ok = actordb_driver_nif:iterate_db(Connection, Ref, self(),Iter),
 	receive_answer(Ref).
 iterate_db({actordb_driver, _Ref, Connection},Evterm,Evnum) when is_integer(Evnum) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:iterate_wal(Connection, Ref, self(), Evterm,Evnum),
+	ok = actordb_driver_nif:iterate_db(Connection, Ref, self(), Evterm,Evnum),
 	receive_answer(Ref).
 
 inject_page({actordb_driver, _Ref, Connection},Bin) ->

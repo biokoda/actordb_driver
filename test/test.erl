@@ -6,6 +6,7 @@ run_test_() ->
     [file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
     [fun lz4/0,
      fun modes/0,
+     fun dbcopy/0,
      fun bigtrans/0,
      fun bigtrans_check/0
     %  fun repl/0,
@@ -53,6 +54,46 @@ modes() ->
     %     "$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db1),
     % {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db1),
     % {ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db1).
+
+dbcopy() ->
+  actordb_driver:init({{"."},{},100}),
+  {ok,Db} = actordb_driver:open("original"),
+  {ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
+  N = 100,
+  [ {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (",integer_to_list(N+100),",'aaa',2)"],Db,infinity,1,N,<<>>) || N <- lists:seq(2,N)],
+  {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,N+1,<<>>),
+  {ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,N+2,<<>>),
+  {ok,Select} = actordb_driver:exec_script("select * from tab;",Db),
+  % ?debugFmt("Select ~p",[Select]),
+  {ok,Copy} = actordb_driver:open("copy"),
+  {ok,Iter,Bin,Evterm,Evnum1} =  actordb_driver:iterate_db(Db,0,0),
+  % This will export into an sqlite file named sq.
+  {ok,F} = file:open("sq",[write,binary,raw]),
+  ?debugFmt("Exporting actor into an sqlite file",[]),
+  readpages(Bin,F),
+  % ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum1]),
+  file:close(F),
+  ?debugFmt("Reading from exported sqlite file: ~p",[os:cmd("sqlite3 sq \"select * from tab\"")]),
+  file:delete("sq"),
+  copy(Db,Iter,F,Copy).
+
+copy(Orig,Iter,F,Copy) ->
+    case actordb_driver:iterate_db(Orig,Iter) of
+        done ->
+            ok;
+        {ok,Iter1,Bin,Evterm,Evnum} ->
+            ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum]),
+            readpages(Bin,F),
+            copy(Orig,Iter1,F,Copy)
+    end.
+
+readpages(<<Num:16/big,Bin:Num/binary,Rem/binary>>,F) when Num > 0 ->
+    ?debugFmt("Page size=~pB",[Num]),
+    file:write(F,actordb_driver:lz4_decompress(Bin,4096)),
+    readpages(Rem,F);
+readpages(_,_) ->
+    ok.
+
 
 bigtrans() ->
   actordb_driver:init({{"."},{},100}),

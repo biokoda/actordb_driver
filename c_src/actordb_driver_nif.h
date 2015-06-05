@@ -169,8 +169,8 @@ struct db_thread
 struct db_connection
 {
 	struct Wal wal;
-	u64 writeNumber;
-	u64 writeTermNumber;
+	// u64 writeNumber;
+	// u64 writeTermNumber;
 	sqlite3 *db;
 	char *dbpath;
 	sqlite3_stmt **staticPrepared;
@@ -218,8 +218,8 @@ struct conn_resource
 
 struct iterate_resource
 {
-	u64 evnumFrom;
-	u64 evtermFrom;
+	u64 evnum;
+	u64 evterm;
 	u32 pgnoPos;
 
 	int thread;
@@ -227,6 +227,7 @@ struct iterate_resource
 
 	char started;
 	char closed;
+	char entiredb;
 };
 
 // /* backup object */
