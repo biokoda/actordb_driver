@@ -1164,126 +1164,79 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
 }
 
 
-static ERL_NIF_TERM
-do_wal_rewind(db_command *cmd, db_thread *thread)
-{
-	// int rc;
-	// u64 evnum;
-	//
-	// enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
-	// rc = wal_rewind(cmd->conn,evnum);
-
-	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
-	return atom_ok;
-}
+// static ERL_NIF_TERM
+// do_wal_rewind(db_command *cmd, db_thread *thread)
+// {
+// 	// int rc;
+// 	// u64 evnum;
+// 	//
+// 	// enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
+// 	// rc = wal_rewind(cmd->conn,evnum);
+//
+// 	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
+// 	return atom_ok;
+// }
 
 static ERL_NIF_TERM
 do_inject_page(db_command *cmd, db_thread *thread)
 {
-	// ErlNifBinary bin;
-	// u64 evnum,evterm;
-	// u32 pgno;
-	//
-	// enif_inspect_binary(cmd->env,cmd->arg,&bin);
-	// enif_get_uint64(cmd->env,cmd->arg1,&evterm);
-	// enif_get_uint64(cmd->env,cmd->arg2,&evnum);
-	// enif_get_uint32(cmd->env,cmd->arg3,&pgno);
+	ErlNifBinary bin;
+	u64 evnum,evterm;
+	u32 commit;
+	int pos;
+	int rc;
 
-	// PgHdr page;
-	// ErlNifBinary bin;
-	// ErlNifBinary binhead;
-	// u8 *head;
-	// u32 commit;
-	// int rc = SQLITE_OK,j;
-	// sqlite3 *db = cmd->conn->db;
-	// u32 wnum = thread->threadNum;
-	// Btree *pBt = NULL;
-	// Pager *pPager = NULL;
-	// int doReplicate;
-	//
-	// if (db->nDb <= 0)
-	//     return atom_false;
-	// pBt = db->aDb[0].pBt;
-	// if(!pBt)
-	//     return atom_false;
-	// pPager = sqlite3BtreePager(pBt);
-	// if (!pPager)
-	//     return atom_false;
-	//
-	// enif_inspect_binary(cmd->env,cmd->arg,&bin);
-	// memset(&page,0,sizeof(PgHdr));
-	//
-	// for (j = 0; j < bin.size; j += WAL_FRAME_HDRSIZE+SQLITE_DEFAULT_PAGE_SIZE)
-	// {
-	//     if (cmd->arg1)
-	//     {
-	//         enif_inspect_binary(cmd->env,cmd->arg1,&binhead);
-	//         head = binhead.data;
-	//         page.pData = bin.data;
-	//     }
-	//     else
-	//     {
-	//         head = bin.data + j;
-	//         page.pData = bin.data + WAL_FRAME_HDRSIZE + j;
-	//     }
-	//
-	//     page.pgno = sqlite3Get4byte(head);
-	//     commit = sqlite3Get4byte(&head[4]);
-	//
-	//     cmd->conn->writeNumber = readUInt64(&head[8]);
-	//     cmd->conn->writeTermNumber = readUInt64(&head[16]);
-	//     thread->threadNum = sqlite3Get4byte(&head[28]);
-	//
-	//     if (thread->threadNum != cmd->conn->writeNumToIgnore)
-	//     {
-	//         if (cmd->conn->writeNumToIgnore)
-	//             cmd->conn->writeNumToIgnore = 0;
-	//
-	//         if (!cmd->conn->wal->writeLock)
-	//         {
-	//             sqlite3WalBeginReadTransaction(cmd->conn->wal, &rc);
-	//             sqlite3WalBeginWriteTransaction(cmd->conn->wal);
-	//         }
-	//         if (thread->threadNum != cmd->conn->lastWriteThreadNum && cmd->conn->wal->dirty)
-	//         {
-	//             sqlite3WalUndo(cmd->conn->wal, NULL, NULL);
-	//             cmd->conn->wal->hdr.aSalt[0] = 123456789;
-	//             cmd->conn->wal->hdr.aSalt[1] = 987654321;
-	//         }
-	//         DBG((g_log,"Inject into wal=%lld, commit=%u\n",cmd->conn->wal->walIndex,commit));
-	//
-	//         page.pPager = pPager;
-	//         doReplicate = cmd->conn->doReplicate;
-	//         cmd->conn->doReplicate = 0;
-	//         rc = pagerWalFrames(pPager,&page,commit,commit);
-	//         cmd->conn->doReplicate = doReplicate;
-	//         // rc = sqlite3WalFrames(&pPager->pWal,SQLITE_DEFAULT_PAGE_SIZE,&page,commit,commit,0);
-	//         if (cmd->conn->wal)
-	//             cmd->conn->wal->init = 0;
-	//
-	//         if (commit)
-	//         {
-	//             sqlite3WalEndWriteTransaction(cmd->conn->wal);
-	//             sqlite3WalEndReadTransaction(cmd->conn->wal);
-	//         }
-	//     }
-	//     else
-	//     {
-	//         rc = SQLITE_ERROR;
-	//     }
-	//
-	//     thread->threadNum = wnum;
-	//
-	//     // cmd->conn->needRestart = 1;
-	//
-	//     DBG((g_log,"Inject done wal=%lld, dirty=%d\n",cmd->conn->wal->walIndex,(int)cmd->conn->wal->dirty));
-	//
-	//     if (cmd->arg1)
-	//         break;
-	// }
-	//
-	// if (rc != SQLITE_OK)
-	//     return atom_false;
+	enif_inspect_binary(cmd->env,cmd->arg,&bin);
+	enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evterm);
+	enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&evnum);
+	enif_get_uint(cmd->env,cmd->arg3,&commit);
+
+	cmd->conn->wal.inProgressTerm = evterm;
+	cmd->conn->wal.inProgressEvnum = evnum;
+
+	for (pos = 0; pos < bin.size-6;)
+	{
+		u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
+		PgHdr page;
+		u32 size = get2byte(bin.data+pos);
+		u32 iscommit = 0;
+
+		memset(&page,0,sizeof(page));
+		page.pgno = get4byte(bin.data+pos+2);
+		page.pData = pbuf;
+
+		if (size == 0)
+			break;
+
+		rc = LZ4_decompress_safe((char*)(bin.data+pos+6),(char*)pbuf,size,sizeof(pbuf));
+		if (rc != sizeof(pbuf))
+		{
+			DBG((g_log,"Unable to decompress inject page!!\r\n"));
+			return atom_false;
+		}
+
+		pos += size+6;
+
+		// if this is last page and if commmit > 0, use it
+		if (pos < bin.size-6)
+		{
+			size = get2byte(bin.data+pos);
+			if (size == 0 && commit)
+				iscommit = commit;
+		}
+		else if (commit)
+			iscommit = commit;
+
+		DBG((g_log,"Inject page=%u, commit=%d\r\n",page.pgno, iscommit));
+		rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, iscommit, iscommit, 0);
+		if (rc != SQLITE_OK)
+		{
+			DBG((g_log,"Unable to write inject page\r\n"));
+			return atom_false;
+		}
+		cmd->conn->wal.changed = 1;
+	}
+
 	return atom_ok;
 }
 
@@ -1976,8 +1929,8 @@ evaluate_command(db_command cmd,db_thread *thread)
 		return do_checkpoint(&cmd,thread);
 	case cmd_inject_page:
 		return do_inject_page(&cmd,thread);
-	case cmd_wal_rewind:
-		return do_wal_rewind(&cmd,thread);
+	// case cmd_wal_rewind:
+	// 	return do_wal_rewind(&cmd,thread);
 	case cmd_interrupt:
 		return do_interrupt(&cmd,thread);
 	case cmd_iterate:
@@ -3089,10 +3042,10 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	item->cmd.type = cmd_inject_page;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
-	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]);
-	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[5]);
-	item->cmd.arg3 = enif_make_copy(item->cmd.env,argv[6]);
+	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);  // bin
+	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // evterm
+	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[5]); // evnum
+	item->cmd.arg3 = enif_make_copy(item->cmd.env,argv[6]); // commit (0 if not, dbsize if yes)
 	item->cmd.connindex = res->connindex;
 
 	enif_consume_timeslice(env,500);
@@ -3116,40 +3069,40 @@ delete_actor(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	return atom_ok;
 }
 
-static ERL_NIF_TERM
-drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-	conn_resource *res;
-	ErlNifPid pid;
-	qitem *item;
-	priv_data *pd = (priv_data*)enif_priv_data(env);
-
-	DBG((g_log,"WAL REWIND\n"));
-
-	if(argc != 4)
-		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
-		return enif_make_badarg(env);
-
-	if(!enif_is_ref(env, argv[1]))
-		return make_error_tuple(env, "invalid_ref");
-	if(!enif_get_local_pid(env, argv[2], &pid))
-		return make_error_tuple(env, "invalid_pid");
-	if (!enif_is_number(env,argv[3]))
-		return make_error_tuple(env,"not evnum");
-
-	item = command_create(res->thread,pd);
-
-	/* command */
-	item->cmd.type = cmd_wal_rewind;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
-	item->cmd.connindex = res->connindex;
-
-	enif_consume_timeslice(env,500);
-	return push_command(res->thread, pd, item);
-}
+// static ERL_NIF_TERM
+// drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+// 	conn_resource *res;
+// 	ErlNifPid pid;
+// 	qitem *item;
+// 	priv_data *pd = (priv_data*)enif_priv_data(env);
+//
+// 	DBG((g_log,"WAL REWIND\n"));
+//
+// 	if(argc != 4)
+// 		return enif_make_badarg(env);
+// 	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+// 		return enif_make_badarg(env);
+//
+// 	if(!enif_is_ref(env, argv[1]))
+// 		return make_error_tuple(env, "invalid_ref");
+// 	if(!enif_get_local_pid(env, argv[2], &pid))
+// 		return make_error_tuple(env, "invalid_pid");
+// 	if (!enif_is_number(env,argv[3]))
+// 		return make_error_tuple(env,"not evnum");
+//
+// 	item = command_create(res->thread,pd);
+//
+// 	/* command */
+// 	item->cmd.type = cmd_wal_rewind;
+// 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+// 	item->cmd.pid = pid;
+// 	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
+// 	item->cmd.connindex = res->connindex;
+//
+// 	enif_consume_timeslice(env,500);
+// 	return push_command(res->thread, pd, item);
+// }
 
 
 static ERL_NIF_TERM
@@ -3289,6 +3242,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	sqlite3_initialize();
 	sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
 	sqlite3_vfs_register(sqlite3_nullvfs(), 1);
+	sqlite3_enable_shared_cache(1);
 
 	atom_false = enif_make_atom(env,"false");
 	atom_ok = enif_make_atom(env,"ok");
@@ -3470,7 +3424,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"iterate_close",1,iterate_close},
 	{"page_size",0,page_size},
 	{"inject_page",7,inject_page},
-	{"wal_rewind",4,drv_wal_rewind},
+	// {"wal_rewind",4,drv_wal_rewind},
 	{"delete_actor",1,delete_actor},
 };
 

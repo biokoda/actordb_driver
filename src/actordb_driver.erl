@@ -11,7 +11,7 @@
 		 parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0, %wal_pages/1,
 		 % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
 		 lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
-		 wal_rewind/2,delete_actor/1,iterate_close/1,
+		 delete_actor/1,iterate_close/1,
 		 replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
 		 checkpoint/3,
 		 tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
@@ -113,10 +113,10 @@ lz4_decompress(B,SizeOrig,SizeIn) ->
 % wal_pages({actordb_driver, _Ref, Connection}) ->
 %     actordb_driver_nif:wal_pages(Connection).
 
-wal_rewind({actordb_driver, _Ref, Connection},Evnum) ->
-	Ref = make_ref(),
-	ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),Evnum),
-	receive_answer(Ref).
+% wal_rewind({actordb_driver, _Ref, Connection},Evnum) ->
+% 	Ref = make_ref(),
+% 	ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),Evnum),
+% 	receive_answer(Ref).
 
 iterate_close({iter,Iter}) ->
 	ok = actordb_driver_nif:iterate_close(Iter).
@@ -130,9 +130,9 @@ iterate_db({actordb_driver, _Ref, Connection},Evterm,Evnum) when is_integer(Evnu
 	ok = actordb_driver_nif:iterate_db(Connection, Ref, self(), Evterm,Evnum),
 	receive_answer(Ref).
 
-inject_page({actordb_driver, _Ref, Connection},Evterm,Evnum,Pgno,Bin) ->
+inject_page({actordb_driver, _Ref, Connection},Evterm,Evnum,Commit,Bin) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:inject_page(Connection, Ref, self(),Bin,Evterm,Evnum,Pgno),
+	ok = actordb_driver_nif:inject_page(Connection, Ref, self(),Bin,Evterm,Evnum,Commit),
 	receive_answer(Ref).
 % inject_page({actordb_driver, _Ref, Connection},Bin,Head) ->
 % 	Ref = make_ref(),

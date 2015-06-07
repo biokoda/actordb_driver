@@ -367,7 +367,7 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 			iter->evterm = pWal->lastCompleteTerm;
 			iter->pgnoPos = 1;
 			iter->entiredb = 1;
-            iter->mxPage = pWal->mxPage;
+			iter->mxPage = pWal->mxPage;
 		}
 		iter->started = 1;
 	}
@@ -388,42 +388,32 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 				return bufused;
 			}
 
-
-			// page is compressed into single frame
-			if (pWal->nResFrames == 0)
+			int frags = pWal->nResFrames;
+			int frsize = 0;
+			while (frags >= 0)
 			{
-				const int pagesz = pWal->resFrames[0].mv_size - hsz;
-
-				if (bufsize < bufused+pagesz+2)
-					return bufused;
-				write16bit((char*)buf+bufused, pagesz);
-				memcpy(buf+bufused+2,pWal->resFrames[0].mv_data + hsz, pagesz);
-				bufused += pagesz+2;
+				frsize += pWal->resFrames[frags].mv_size-hsz;
+				frags--;
 			}
-			else
+			if (bufsize < bufused+frsize+6)
+				return bufused;
+
+			put2byte(buf+bufused, frsize);
+			put4byte(buf+bufused+2, iter->pgnoPos);
+
+			frags = pWal->nResFrames;
+			frsize = 0;
+			bufused += 6;
+			while (frags >= 0)
 			{
-				int frags = pWal->nResFrames;
-				int frsize = 0;
-				while (frags >= 0)
-				{
-					frsize += pWal->resFrames[frags].mv_size-hsz;
-					frags--;
-				}
-				if (bufsize < bufused+frsize+2)
-					return bufused;
+				const int pagesz = pWal->resFrames[frags].mv_size - hsz;
 
-				frags = pWal->nResFrames;
-				frsize = 0;
-				while (frags >= 0)
-				{
-					const int pagesz = pWal->resFrames[frags].mv_size - hsz;
-					write16bit((char*)buf+bufused, pagesz);
-					memcpy(buf+bufused+2, pWal->resFrames[frags].mv_data + hsz, pagesz);
-					bufused += pagesz+2;
-				}
-
-				pWal->nResFrames = 0;
+				memcpy(buf+bufused, pWal->resFrames[frags].mv_data + hsz, pagesz);
+				bufused += pagesz;
+				frags--;
 			}
+
+			pWal->nResFrames = 0;
 			iter->pgnoPos++;
 		}
 	}
@@ -669,13 +659,47 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
 		pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,isCommit,nTruncate,page_size));
 
-		memcpy(pagesKeyBuf,               &pWal->index,sizeof(i64));
+		memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 		memcpy(pagesKeyBuf + sizeof(i64), &p->pgno,    sizeof(u32));
 		key.mv_size = sizeof(pagesKeyBuf);
 		key.mv_data = pagesKeyBuf;
 
-		memcpy(pagesBuf,               &pWal->inProgressTerm,  sizeof(i64));
-		memcpy(pagesBuf + sizeof(i64), &pWal->inProgressEvnum, sizeof(i64));
+		// Check if there are pages with the same or higher evnum/evterm. If there are, delete them.
+		// This can happen if sqlite flushed some page to disk before commiting, because there were
+		// so many pages that they could not be held in memory. Or it could happen if pages need to be
+		// overwritten because there was a write that did not pass raft consensus.
+		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
+		if (rc == MDB_SUCCESS)
+		{
+			rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
+			if (rc == MDB_SUCCESS)
+			{
+				u64 evnum, evterm;
+				memcpy(&evterm, data.mv_data,               sizeof(u64));
+				memcpy(&evnum,  data.mv_data + sizeof(u64), sizeof(u64));
+
+				while (evterm >= pWal->inProgressTerm || evnum >= pWal->inProgressEvnum)
+				{
+					DBG((g_log,"Deleting pages higher or equal to current."
+					"Evterm=%llu, evnum=%llu, curterm=%llu, curevn=%llu\r\n",
+					evterm,evnum,pWal->inProgressTerm,pWal->inProgressEvnum));
+
+					if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
+					{
+						DBG((g_log,"Unable to delete invalid pages!\n"));
+						return SQLITE_ERROR;
+					}
+					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
+					if (rc != MDB_SUCCESS)
+						break;
+					memcpy(&evterm, data.mv_data,               sizeof(u64));
+					memcpy(&evnum,  data.mv_data + sizeof(u64), sizeof(u64));
+				}
+			}
+		}
+
+		memcpy(pagesBuf,               &pWal->inProgressTerm,  sizeof(u64));
+		memcpy(pagesBuf + sizeof(i64), &pWal->inProgressEvnum, sizeof(u64));
 
 		full_size = page_size + sizeof(i64)*2 + 1;
 		if (full_size < thr->maxvalsize)

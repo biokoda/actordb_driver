@@ -6,9 +6,9 @@ run_test_() ->
     [file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
     [fun lz4/0,
      fun modes/0,
-     fun dbcopy/0,
-     fun bigtrans/0,
-     fun bigtrans_check/0
+     fun dbcopy/0
+    %  fun bigtrans/0,
+    %  fun bigtrans_check/0
     %  fun repl/0,
     %  fun check/0
          ].
@@ -66,7 +66,8 @@ dbcopy() ->
   {ok,Select} = actordb_driver:exec_script("select * from tab;",Db),
   % ?debugFmt("Select ~p",[Select]),
   {ok,Copy} = actordb_driver:open("copy"),
-  {ok,Iter,Bin,Evterm,Evnum1,Done} =  actordb_driver:iterate_db(Db,0,0),
+  {ok,Iter,Bin,Evterm,Evnum,Done} =  actordb_driver:iterate_db(Db,0,0),
+  actordb_driver:inject_page(Copy,Evterm,Evnum,Done,Bin),
   % This will export into an sqlite file named sq.
   {ok,F} = file:open("sq",[write,binary,raw]),
   ?debugFmt("Exporting actor into an sqlite file ~p",[Done]),
@@ -80,6 +81,8 @@ dbcopy() ->
   % ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum1]),
   file:close(F),
   ?debugFmt("Reading from exported sqlite file: ~p",[os:cmd("sqlite3 sq \"select * from tab\"")]),
+  {ok,Select} = actordb_driver:exec_script("select * from tab;",Copy),
+  ?debugFmt("Reading from copy!: ~p",[Select]),
   file:delete("sq").
 
 
@@ -87,6 +90,7 @@ copy(Orig,Iter,F,Copy) ->
     case actordb_driver:iterate_db(Orig,Iter) of
         {ok,Iter1,Bin,Evterm,Evnum,Done} ->
             ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum]),
+            actordb_driver:inject_page(Copy,Evterm,Evnum,Done,Bin),
             readpages(Bin,F),
             case Done > 0 of
                 true ->
@@ -96,8 +100,8 @@ copy(Orig,Iter,F,Copy) ->
             end
     end.
 
-readpages(<<Num:16/big,Bin:Num/binary,Rem/binary>>,F) when Num > 0 ->
-    ?debugFmt("Page size=~pB",[Num]),
+readpages(<<Num:16/big,Pgno:32/unsigned,Bin:Num/binary,Rem/binary>>,F) when Num > 0 ->
+    ?debugFmt("Page size=~pB, pgno=~p",[Num,Pgno]),
     file:write(F,actordb_driver:lz4_decompress(Bin,4096)),
     readpages(Rem,F);
 readpages(_,_) ->
