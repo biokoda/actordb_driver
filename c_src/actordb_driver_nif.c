@@ -1183,6 +1183,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	ErlNifBinary bin;
 	u64 evnum,evterm;
 	u32 commit;
+	u32 curMxPage = cmd->conn->wal.mxPage;
 	int pos;
 	int rc;
 
@@ -1222,10 +1223,10 @@ do_inject_page(db_command *cmd, db_thread *thread)
 		{
 			size = get2byte(bin.data+pos);
 			if (size == 0 && commit)
-				iscommit = commit;
+				iscommit = commit > curMxPage ? commit : curMxPage;
 		}
 		else if (commit)
-			iscommit = commit;
+			iscommit = commit > curMxPage ? commit : curMxPage;
 
 		DBG((g_log,"Inject page=%u, commit=%d\r\n",page.pgno, iscommit));
 		rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, iscommit, iscommit, 0);

@@ -348,16 +348,8 @@ int sqlite3WalEndWriteTransaction(Wal *pWal)
 // return number of bytes written
 int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 {
-	// MDB_val logKey, logVal;
-	// MDB_val pgKey, pgVal;
-	// db_thread *thr = pWal->thread;
-	// u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-	// int pgop;
 	int bufused = 0;
 
-	// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
-	// Delete from
-	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
 	if (!iter->started)
 	{
 		if (iter->evnum + iter->evterm == 0)
@@ -369,6 +361,11 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 			iter->entiredb = 1;
 			iter->mxPage = pWal->mxPage;
 		}
+        else
+        {
+            // set mxPage to highest pgno we find.
+            iter->mxPage = 0;
+        }
 		iter->started = 1;
 	}
 
@@ -419,6 +416,17 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 	}
 	else
 	{
+        // MDB_val logKey, logVal;
+    	// MDB_val pgKey, pgVal;
+    	// db_thread *thr = pWal->thread;
+    	// u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+    	// int pgop;
+        
+        // Store highest page in iter->mxPage. Use it for commit result.
+        // ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
+    	// Delete from
+    	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
+
 		// memcpy(pagesKeyBuf,               &pWal->index,  sizeof(u64));
 		// memcpy(pagesKeyBuf + sizeof(i64), &iter->pgnoPos,sizeof(u32));
 		// pgKey.mv_data = pagesKeyBuf;
