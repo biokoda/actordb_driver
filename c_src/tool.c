@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #define _TESTAPP_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
@@ -32,9 +32,9 @@
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
 // If we were to just include "sqlite3.h" OSX would actually use /usr/lib/libsqlite3.dylib
-#define SQLITE_API static 
-#define SQLITE_EXTERN static 
-#include "sqlite3.c" 
+#define SQLITE_API static
+#define SQLITE_EXTERN static
+#include "sqlite3.c"
 
 
 #include "actordb_driver_nif.h"
@@ -42,111 +42,265 @@
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
 // Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
-#include "tool_do.c"
+#include "lz4.h"
+// #include "tool_do.c"
 
 
-void do_print(db_thread *thread)
+
+static int logdb_cmp(const MDB_val *a, const MDB_val *b)
 {
-    wal_file *wal = thread->walFile;
-    wal_file *tmpWal;
-    int rc;
-    i64 nSize = 0;
-    i64 iOffset;
-    u8 buf[1024*10];
-    char filename[512];
-    u64 curEvnum, curTerm;
-    u32 threadWriteNum;
-    i64 prevFrameOffset;
-    u32 pgno;
-    u32 nTruncate;
-    u32 actorIndex;
-    u32 iFrame = 0;
-    const int szFrame = SQLITE_DEFAULT_PAGE_SIZE+WAL_FRAME_HDRSIZE;
-    u32 aSalt[2];
+	// <<ActorIndex:64, Evterm:64, Evnum:64>>
+	i64 aActor,aEvterm,aEvnum,bActor,bEvterm,bEvnum;
+	int diff;
 
-    memset(buf,0,sizeof(buf));
-    memset(filename,0,sizeof(filename));
+	// aActor = *(i64*)a->mv_data;
+	memcpy(&aActor,a->mv_data,sizeof(i64));
+	// bActor = *(i64*)b->mv_data;
+	memcpy(&bActor,b->mv_data,sizeof(i64));
+	diff = aActor - bActor;
+	if (diff == 0)
+	{
+		// aEvterm = *(i64*)(a->mv_data+sizeof(i64));
+		memcpy(&aEvterm, a->mv_data+sizeof(i64), sizeof(i64));
+		// bEvterm = *(i64*)(b->mv_data+sizeof(i64));
+		memcpy(&bEvterm, b->mv_data+sizeof(i64), sizeof(i64));
+		diff = aEvterm - bEvterm;
+		if (diff == 0)
+		{
+			// aEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+			memcpy(&aEvnum, a->mv_data+sizeof(i64)*2, sizeof(i64));
+			// bEvnum  = *(i64*)(a->mv_data+sizeof(i64)*2);
+			memcpy(&bEvnum, b->mv_data+sizeof(i64)*2, sizeof(i64));
+			return aEvnum - bEvnum;
+		}
+		return diff;
+	}
+	return diff;
+}
 
-    aSalt[0] = 123456789;
-    aSalt[1] = 987654321;
+static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
+{
+	// <<ActorIndex:64, Pgno:32/unsigned>>
+	i64 aActor;
+	i64 bActor;
+	u32 aPgno;
+	u32 bPgno;
+	int diff;
 
-    while (wal->prev)
-        wal = wal->prev;
+	// aActor = *(i64*)a->mv_data;
+	memcpy(&aActor,a->mv_data,sizeof(i64));
+	// bActor = *(i64*)b->mv_data;
+	memcpy(&bActor,b->mv_data,sizeof(i64));
+	diff = aActor - bActor;
+	if (diff == 0)
+	{
+		// aPgno = *(u32*)(a->mv_data+sizeof(i64));
+		memcpy(&aPgno,a->mv_data + sizeof(i64),sizeof(u32));
+		// bPgno = *(u32*)(b->mv_data+sizeof(i64));
+		memcpy(&bPgno,b->mv_data + sizeof(i64),sizeof(u32));
+		return aPgno - bPgno;
+	}
+	return diff;
+}
 
-    DBG((g_log,"walfd %d\n",wal->pWalFd));
+static int logdb_val_cmp(const MDB_val *a, const MDB_val *b)
+{
+	u32 aPgno;
+	u32 bPgno;
+	memcpy(&aPgno,a->mv_data,sizeof(u32));
+	memcpy(&bPgno,b->mv_data,sizeof(u32));
+	return aPgno - bPgno;
+}
 
-    while (1)
+static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
+{
+	// <<Evterm:64,Evnum:64,Counter:8,CompressedPage/binary>>}
+	i64 aEvterm,aEvnum;
+	i64 bEvterm,bEvnum;
+	u8 aCounter, bCounter;
+	int diff;
+
+	// aEvterm = *(i64*)a->mv_data;
+	memcpy(&aEvterm, a->mv_data, sizeof(i64));
+	// bEvterm = *(i64*)b->mv_data;
+	memcpy(&bEvterm, b->mv_data, sizeof(i64));
+	diff = aEvterm - bEvterm;
+	if (diff == 0)
+	{
+		// aEvnum = *(i64*)(a->mv_data+sizeof(i64));
+		memcpy(&aEvnum, a->mv_data+sizeof(i64), sizeof(i64));
+		// bEvnum = *(i64*)(b->mv_data+sizeof(i64));
+		memcpy(&bEvnum, b->mv_data+sizeof(i64), sizeof(i64));
+		diff = aEvnum - bEvnum;
+		if (diff == 0)
+		{
+			aCounter = ((u8*)a->mv_data)[sizeof(i64)*2];
+			bCounter = ((u8*)b->mv_data)[sizeof(i64)*2];
+			// We want counters with higher  numbers to be first ---> actually no
+			// if (aCounter > bCounter)
+			// 	return -1;
+			// return 1;
+			return aCounter - bCounter;
+		}
+		return diff;
+	}
+	return diff;
+}
+
+static int do_print(char *pth)
+{
+	MDB_env *menv;
+	MDB_txn *txn;
+    MDB_dbi infodb;
+	MDB_dbi logdb;
+	MDB_dbi pagesdb;
+	MDB_dbi actorsdb;
+    MDB_cursor *cursorLog;
+	MDB_cursor *cursorPages;
+	MDB_cursor *cursorInfo;
+    MDB_cursor *cursorActors;
+    MDB_val key, data;
+    int rc, op;
+
+	if (mdb_env_create(&menv) != MDB_SUCCESS)
+		return -1;
+	if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
+		return -1;
+	if (mdb_env_set_mapsize(menv,4096*1024*128*10) != MDB_SUCCESS)
+		return -1;
+	if (mdb_env_open(menv, pth, MDB_NOSUBDIR | MDB_RDONLY, 0664) != MDB_SUCCESS)
+		return -1;
+	if (mdb_txn_begin(menv, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+		return -1;
+
+    if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != MDB_SUCCESS)
+		return -1;
+    if (mdb_dbi_open(txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
+		return -1;
+	if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
+		return -1;
+	if (mdb_dbi_open(txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
+		return -1;
+	if (mdb_set_compare(txn, logdb, logdb_cmp) != MDB_SUCCESS)
+		return -1;
+	if (mdb_set_dupsort(txn, logdb, logdb_val_cmp) != MDB_SUCCESS)
+		return -1;
+	if (mdb_set_compare(txn, pagesdb, pagesdb_cmp) != MDB_SUCCESS)
+		return -1;
+	if (mdb_set_dupsort(txn, pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
+		return -1;
+	if (mdb_cursor_open(txn, logdb, &cursorLog) != MDB_SUCCESS)
+		return -1;
+	if (mdb_cursor_open(txn, pagesdb, &cursorPages) != MDB_SUCCESS)
+		return -1;
+	if (mdb_cursor_open(txn, infodb, &cursorInfo) != MDB_SUCCESS)
+		return -1;
+    if (mdb_cursor_open(txn, actorsdb, &cursorActors) != MDB_SUCCESS)
+		return -1;
+
+    printf("-----------------------actorsdb--------------------------\n");
+    rc = mdb_cursor_get(cursorActors,&key,&data,MDB_FIRST);
+    while (rc == MDB_SUCCESS)
     {
-        rc = sqlite3OsFileSize(wal->pWalFd, &nSize);
-        for(iOffset = WAL_HDRSIZE; (iOffset+szFrame)<=nSize; iOffset+=szFrame)
-        {
-            iFrame++;
-            rc = sqlite3OsRead(wal->pWalFd, buf, WAL_FRAME_HDRSIZE+SQLITE_DEFAULT_PAGE_SIZE, iOffset);
-            if( rc!=SQLITE_OK )
-            {
-                printf("Error reading file %d\n",rc);
-                return;
-            }
-            rc = walDecodeFrame(aSalt,SQLITE_BIGENDIAN, &pgno, &nTruncate,filename,&actorIndex, 
-                            &curEvnum,&curTerm,&threadWriteNum,&prevFrameOffset, buf+WAL_FRAME_HDRSIZE, buf);
-            if(!rc)
-            {
-                printf("Error (%d) decoding frame at=%lld\n",rc,iOffset);
-                continue;
-            }
-            if (!pgno)
-            {
-                printf("wal=%lld frame=%d offset=%lld zeroed out\n",wal->walIndex,iFrame,iOffset);
-                continue;
-            }
-            printf("wal=%lld frame=%d offset=%lld name=%s evnum=%llu evterm=%llu dbpgno=%u threadwnum=%u commit=%u actorindex=%u\n",
-                wal->walIndex,iFrame,iOffset,filename,curEvnum,curTerm,pgno,threadWriteNum,nTruncate,actorIndex);
-        }
-        iFrame = 0;
-
-        if (thread->walFile == wal)
-            break;
-        // Move to next wal. Start with first and move back until previous wal is current one.
-        tmpWal = thread->walFile;
-        while (tmpWal->prev != wal)
-            tmpWal = tmpWal->prev;
-        wal = tmpWal;
+        u64 index;
+        memcpy(&index, data.mv_data, sizeof(u64));
+        printf("Actor=%.*s, id=%llu\n",(int)key.mv_size, key.mv_data, index);
+        rc = mdb_cursor_get(cursorActors,&key,&data,MDB_NEXT);
     }
+
+    printf("-----------------------logdb--------------------------\n");
+    rc = mdb_cursor_get(cursorLog,&key,&data,MDB_FIRST);
+    while (rc == MDB_SUCCESS)
+    {
+        u64 index, term, num;
+        memcpy(&index, key.mv_data,                 sizeof(u64));
+        memcpy(&term,  key.mv_data + sizeof(u64),   sizeof(u64));
+        memcpy(&num,   key.mv_data + sizeof(u64)*2, sizeof(u64));
+        printf("Page index for: actor=%llu, term=%llu, evnum=%llu\n",index, term,num);
+
+        op = MDB_FIRST_DUP;
+        while ((rc = mdb_cursor_get(cursorLog,&key,&data, op)) == MDB_SUCCESS)
+        {
+            u32 pgno;
+            memcpy(&pgno,data.mv_data,sizeof(u32));
+            printf("  pgno=%u\n",pgno);
+            op = MDB_NEXT_DUP;
+        }
+        rc = mdb_cursor_get(cursorLog,&key,&data,MDB_NEXT_NODUP);
+    }
+
+    printf("-----------------------pagesdb--------------------------\n");
+    rc = mdb_cursor_get(cursorPages,&key,&data,MDB_FIRST);
+    while (rc == MDB_SUCCESS)
+    {
+        u64 index;
+        u32 pgno;
+        memcpy(&index, key.mv_data, sizeof(u64));
+        memcpy(&pgno, key.mv_data + sizeof(u64), sizeof(u32));
+        printf("Pages for: actor=%llu, pgno=%u\n",index, pgno);
+
+        op = MDB_FIRST_DUP;
+        while ((rc = mdb_cursor_get(cursorPages,&key,&data, op)) == MDB_SUCCESS)
+        {
+            u64 term,num;
+            u8 frag;
+            memcpy(&term, data.mv_data,               sizeof(u64));
+            memcpy(&num,  data.mv_data + sizeof(u64), sizeof(u64));
+            frag = *(u8*)(data.mv_data + sizeof(u64)*2);
+            printf("  evnum=%lld, evterm=%lld, frag=%d\n",term,num,(int)frag);
+            op = MDB_NEXT_DUP;
+        }
+        rc = mdb_cursor_get(cursorPages,&key,&data,MDB_NEXT_NODUP);
+    }
+
+    printf("-----------------------infodb--------------------------\n");
+    rc = mdb_cursor_get(cursorInfo, &key, &data, MDB_FIRST);
+    while (rc == MDB_SUCCESS)
+    {
+        u8 v;
+        u64  index, fTerm, fEvnum, lTerm, lEvnum, iTerm, iEvnum;
+        u32 mxPage;
+
+        memcpy(&index, key.mv_data, sizeof(u64));
+        v = *(u8*)(data.mv_data);
+        memcpy(&fTerm,  data.mv_data+1,               sizeof(u64));
+        memcpy(&fEvnum, data.mv_data+1+sizeof(u64),   sizeof(u64));
+        memcpy(&lTerm,  data.mv_data+1+sizeof(u64)*2, sizeof(u64));
+        memcpy(&lEvnum, data.mv_data+1+sizeof(u64)*3, sizeof(u64));
+        memcpy(&iTerm,  data.mv_data+1+sizeof(u64)*4, sizeof(u64));
+        memcpy(&iEvnum, data.mv_data+1+sizeof(u64)*5, sizeof(u64));
+        memcpy(&mxPage, data.mv_data+1+sizeof(u64)*6, sizeof(u32));
+
+        printf("actor=%llu, firstTerm=%llu, firstEvnum=%llu, lastTerm=%llu, lastEvnum=%llu,"
+        "inprogTerm=%llu, inprogEvnum=%llu, mxPage=%u\n",index,fTerm,fEvnum,lTerm,lEvnum,iTerm,iEvnum,mxPage);
+
+        rc = mdb_cursor_get(cursorInfo, &key, &data, MDB_NEXT);
+    }
+
+    printf("OK\n");
+	return 0;
 }
 
 
 int main(int argc, char* argv[])
 {
-	db_thread thread;
-	db_command clcmd;
+	g_log = stdout;
 
-	memset(&clcmd,0,sizeof(db_command));
-    memset(&thread,0,sizeof(thread));
+	if (argc != 3)
+	{
+		printf("Call: tool print /path/to/lmdb_file\n");
+		return 1;
+	}
+	else if (strcmp(argv[1],"print") != 0)
+	{
+		printf("Invalid command\n");
+		return 1;
+	}
 
-    // g_log = stdout;
-
-    if (argc != 3)
-    {
-        printf("Call: tool print /path/to/wal/folder\n");
-        return 1;
-    }
-    else if (strcmp(argv[1],"print") != 0)
-    {
-        printf("Invalid command\n");
-        return 1;
-    }
-    
-
-	// INIT THREAD
-    reset(&thread, argv[2]);
 	if (strcmp(argv[1],"print") == 0)
-    {
-        do_print(&thread);
-    }
-    
-    close_conns(&thread);
-    free(thread.conns);
-    cleanup(&thread);
+	{
+		do_print(argv[2]);
+	}
 
 	return 1;
 }

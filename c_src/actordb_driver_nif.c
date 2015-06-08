@@ -1081,6 +1081,7 @@ do_iterate(db_command *cmd, db_thread *thread)
 	if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
 	{
 		dorel = 1;
+
 		if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evtermFrom))
 			return enif_make_badarg(cmd->env);
 		if (cmd->arg1 == 0 || !enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evnumFrom))
@@ -1106,6 +1107,7 @@ do_iterate(db_command *cmd, db_thread *thread)
 	{
 		res = cmd->arg;
 	}
+
 	// 4 pages of buffer size
 	// This might contain many more actual db pages because data is compressed
 	enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE*4,&bin);

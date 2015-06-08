@@ -83,7 +83,13 @@ dbcopy() ->
   ?debugFmt("Reading from exported sqlite file: ~p",[os:cmd("sqlite3 sq \"select * from tab\"")]),
   {ok,Select} = actordb_driver:exec_script("select * from tab;",Copy),
   ?debugFmt("Reading from copy!: ~p",[Select]),
-  file:delete("sq").
+  file:delete("sq"),
+
+  {ok,Copy2} = actordb_driver:open("copy2"),
+  {ok,Iter2,Bin2,Evterm2,Evnum2,Done2} = actordb_driver:iterate_db(Db,100,1),
+  actordb_driver:inject_page(Copy2,Evterm2,Evnum2,Done2,Bin2),
+  copy(Db,Iter2,undefined,Copy2),
+  ?debugFmt("Reading from second copy!: ~p",[actordb_driver:exec_script("select * from tab;",Copy2)]).
 
 
 copy(Orig,Iter,F,Copy) ->
