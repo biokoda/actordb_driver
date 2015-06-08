@@ -39,7 +39,8 @@
 */
 int checkpoint(Wal *pWal, u64 evterm, u64 evnum);
 int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done);
-int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum);
+int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum);
+int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize, int *inoutused);
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
@@ -204,12 +205,12 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
 	if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
-		return findframe(pWal, pgno, piRead, pWal->inProgressTerm, pWal->inProgressEvnum);
+		return findframe(pWal, pgno, piRead, pWal->inProgressTerm, pWal->inProgressEvnum, NULL, NULL);
 	else
-		return findframe(pWal, pgno, piRead, pWal->lastCompleteTerm, pWal->lastCompleteEvnum);
+		return findframe(pWal, pgno, piRead, pWal->lastCompleteTerm, pWal->lastCompleteEvnum, NULL, NULL);
 }
 
-int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum)
+int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum)
 {
 	db_thread *thr = pWal->thread;
 	MDB_val key, data;
@@ -251,6 +252,11 @@ int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum)
 						break;
 					}
 				}
+                if (outTerm != NULL)
+				    *outTerm = term;
+                if (outEvnum != NULL)
+				    *outEvnum = evnum;
+
 				// DBG((g_log,"SUCCESS? %d frag=%d\n",pgno1,frag));
 				pWal->nResFrames = frag;
 				pWal->resFrames[frag--] = data;
@@ -345,6 +351,44 @@ int sqlite3WalEndWriteTransaction(Wal *pWal)
 	return SQLITE_OK;
 }
 
+int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize, int *inoutused)
+{
+	int bufused = *inoutused;
+	int frags = pWal->nResFrames;
+	int frsize = 0;
+	const int hsz = (sizeof(i64)*2+1);
+
+	while (frags >= 0)
+	{
+		frsize += pWal->resFrames[frags].mv_size-hsz;
+		frags--;
+	}
+	if (bufsize < bufused+frsize+6)
+	{
+		*inoutused = bufused;
+		return 1;
+	}
+
+	put2byte(buf+bufused, frsize);
+	put4byte(buf+bufused+2, iter->pgnoPos);
+
+	frags = pWal->nResFrames;
+	frsize = 0;
+	bufused += 6;
+	while (frags >= 0)
+	{
+		const int pagesz = pWal->resFrames[frags].mv_size - hsz;
+
+		memcpy(buf+bufused, pWal->resFrames[frags].mv_data + hsz, pagesz);
+		bufused += pagesz;
+		frags--;
+	}
+	*inoutused = bufused;
+	pWal->nResFrames = 0;
+
+	return 0;
+}
+
 // return number of bytes written
 int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 {
@@ -361,11 +405,11 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 			iter->entiredb = 1;
 			iter->mxPage = pWal->mxPage;
 		}
-        else
-        {
-            // set mxPage to highest pgno we find.
-            iter->mxPage = 0;
-        }
+		else
+		{
+			// set mxPage to highest pgno we find.
+			iter->pgnoPos = iter->mxPage = 0;
+		}
 		iter->started = 1;
 	}
 
@@ -376,69 +420,80 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 
 		while (1)
 		{
-			const int hsz = (sizeof(i64)*2+1);
-			findframe(pWal, iter->pgnoPos, &iRead, iter->evterm, iter->evnum);
+			findframe(pWal, iter->pgnoPos, &iRead, iter->evterm, iter->evnum, NULL, NULL);
 
 			if (!iRead)
 			{
 				*done = iter->mxPage;
 				return bufused;
 			}
-
-			int frags = pWal->nResFrames;
-			int frsize = 0;
-			while (frags >= 0)
+			if (fillbuff(pWal, iter, buf, bufsize, &bufused))
 			{
-				frsize += pWal->resFrames[frags].mv_size-hsz;
-				frags--;
-			}
-			if (bufsize < bufused+frsize+6)
 				return bufused;
-
-			put2byte(buf+bufused, frsize);
-			put4byte(buf+bufused+2, iter->pgnoPos);
-
-			frags = pWal->nResFrames;
-			frsize = 0;
-			bufused += 6;
-			while (frags >= 0)
-			{
-				const int pagesz = pWal->resFrames[frags].mv_size - hsz;
-
-				memcpy(buf+bufused, pWal->resFrames[frags].mv_data + hsz, pagesz);
-				bufused += pagesz;
-				frags--;
 			}
 
-			pWal->nResFrames = 0;
 			iter->pgnoPos++;
 		}
 	}
 	else
 	{
-        // MDB_val logKey, logVal;
-    	// MDB_val pgKey, pgVal;
-    	// db_thread *thr = pWal->thread;
-    	// u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-    	// int pgop;
-        
-        // Store highest page in iter->mxPage. Use it for commit result.
-        // ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
-    	// Delete from
-    	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
+		MDB_val logKey, logVal;
+		db_thread *thr = pWal->thread;
+		int logop;
+		u8 logKeyBuf[sizeof(u64)*3];
+		int rc;
 
-		// memcpy(pagesKeyBuf,               &pWal->index,  sizeof(u64));
-		// memcpy(pagesKeyBuf + sizeof(i64), &iter->pgnoPos,sizeof(u32));
-		// pgKey.mv_data = pagesKeyBuf;
-		// pgKey.mv_size = sizeof(pagesKeyBuf);
-		//
-		// if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
-		// {
-		//     return SQLITE_ERROR;
-		// }
-		// pgop = MDB_LAST_DUP;
+		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
+
+		memcpy(logKeyBuf,                 &pWal->index,  sizeof(u64));
+		memcpy(logKeyBuf + sizeof(i64),   &iter->evterm, sizeof(u64));
+		memcpy(logKeyBuf + sizeof(i64)*2, &iter->evnum, sizeof(u64));
+
+		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+		{
+			DBG((g_log,"Key not found in log for undo\n"));
+			return SQLITE_OK;
+		}
+		logop = MDB_FIRST_DUP;
+		while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+		{
+			u64 evnum,evterm;
+			u32 pgno;
+			u32 iRead;
+
+			logop = MDB_NEXT_DUP;
+			memcpy(&pgno,logVal.mv_data,sizeof(u32));
+
+			if (pgno < iter->pgnoPos)
+				continue;
+
+			findframe(pWal, pgno, &iRead, iter->evterm, iter->evnum, &evterm, &evnum);
+
+			if (iRead == 0)
+			{
+				DBG((g_log,"Did not find frame for pgno=%u, evterm=%llu, evnum=%llu",pgno, iter->evterm, iter->evnum));
+				*done = 1;
+				return 0;
+			}
+
+			if (evterm != iter->evterm || evnum != iter->evnum)
+			{
+				DBG((g_log,"Evterm/evnum does not match,looking for: evterm=%llu, evnum=%llu, "
+				"got: evterm=%llu, evnum=%llu", iter->evterm, iter->evnum, evterm, evnum));
+				*done = 1;
+				return 0;
+			}
+
+			if (fillbuff(pWal, iter, buf, bufsize, &bufused))
+			{
+				return bufused;
+			}
+
+			iter->pgnoPos = pgno;
+		}
+		*done = iter->pgnoPos;
+		return bufused;
 	}
-	return SQLITE_OK;
 }
 
 // Delete all pages up to limitEvterm and limitEvnum

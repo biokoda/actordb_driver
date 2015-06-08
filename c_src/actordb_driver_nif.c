@@ -1122,6 +1122,9 @@ do_iterate(db_command *cmd, db_thread *thread)
 	tev = enif_make_uint64(cmd->env,iter->evnum);
 	tt = enif_make_uint64(cmd->env,iter->evterm);
 	tdone = enif_make_uint(cmd->env,done);
+
+	if (nfilled == 0 && done == 1)
+		return atom_false;
 	return enif_make_tuple6(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tt,tev, tdone);
 }
 
