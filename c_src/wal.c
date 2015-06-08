@@ -447,16 +447,16 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 		memcpy(logKeyBuf,                 &pWal->index,  sizeof(u64));
 		memcpy(logKeyBuf + sizeof(i64),   &iter->evterm, sizeof(u64));
 		memcpy(logKeyBuf + sizeof(i64)*2, &iter->evnum, sizeof(u64));
-        logKey.mv_data = logKeyBuf;
-        logKey.mv_size = sizeof(logKeyBuf);
-DBG((g_log,"D %llu %llu\n",iter->evterm,iter->evnum));
+		logKey.mv_data = logKeyBuf;
+		logKey.mv_size = sizeof(logKeyBuf);
+// DBG((g_log,"D %llu %llu\n",iter->evterm,iter->evnum));
 		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
 			DBG((g_log,"Key not found in log\n"));
-            *done = 1;
+			*done = 1;
 			return 0;
 		}
-        DBG((g_log,"SET!\n"));
+
 		logop = MDB_FIRST_DUP;
 		while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
@@ -467,7 +467,7 @@ DBG((g_log,"D %llu %llu\n",iter->evterm,iter->evnum));
 			logop = MDB_NEXT_DUP;
 			memcpy(&pgno,logVal.mv_data,sizeof(u32));
 
-            DBG((g_log,"AT PGNO %u\r\n",pgno));
+			// DBG((g_log,"AT PGNO %u\r\n",pgno));
 
 			if (pgno < iter->pgnoPos)
 				continue;
@@ -489,12 +489,12 @@ DBG((g_log,"D %llu %llu\n",iter->evterm,iter->evnum));
 				return 0;
 			}
 
+			iter->pgnoPos = pgno;
 			if (fillbuff(pWal, iter, buf, bufsize, &bufused))
 			{
 				return bufused;
 			}
 
-			iter->pgnoPos = pgno;
 		}
 		*done = iter->pgnoPos;
 		return bufused;
