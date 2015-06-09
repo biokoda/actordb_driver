@@ -2114,10 +2114,6 @@ static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
 		{
 			aCounter = ((u8*)a->mv_data)[sizeof(i64)*2];
 			bCounter = ((u8*)b->mv_data)[sizeof(i64)*2];
-			// We want counters with higher  numbers to be first ---> actually no
-			// if (aCounter > bCounter)
-			// 	return -1;
-			// return 1;
 			return aCounter - bCounter;
 		}
 		return diff;
