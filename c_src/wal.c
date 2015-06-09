@@ -776,6 +776,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		key.mv_size = sizeof(pagesKeyBuf);
 		key.mv_data = pagesKeyBuf;
 
+        // wal_page_hook(thr,);
+
 		// Check if there are pages with the same or higher evnum/evterm. If there are, delete them.
 		// This can happen if sqlite flushed some page to disk before commiting, because there were
 		// so many pages that they could not be held in memory. Or it could happen if pages need to be
