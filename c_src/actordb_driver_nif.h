@@ -11,7 +11,7 @@
 
 #define MAX_ATOM_LENGTH 255
 #define MAX_PATHNAME 512
-#define PAGE_BUFF_SIZE 4200
+#define PAGE_BUFF_SIZE 4300
 #define MAX_CONNECTIONS 8
 #define PACKET_ITEMS 9
 #define MAX_STATIC_SQLS 11
@@ -128,7 +128,7 @@ struct db_thread
 	// MAX_CONNECTIONS (8) servers to replicate write log to
 	int sockets[MAX_CONNECTIONS];
 	int socket_types[MAX_CONNECTIONS];
-	void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
+	// void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
 
 	#ifndef _TESTAPP_
 	queue *tasks;
@@ -329,11 +329,12 @@ int checkpoint_continue(db_thread *thread);
 // wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs);
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);
 // int read_thread_wal(db_thread*);
-u64 readUInt64(u8* buf);
+// u64 readUInt64(u8* buf);
 int read_thread_wal(db_thread*);
-void writeUInt64(unsigned char* buf, u64 num);
-void write32bit(char *p, int v);
-void write16bit(char *p, int v);
+// void writeUInt64(u8* buf, u64 num);
+// void write32bit(char *p, int v);
+// void write16bit(char *p, int v);
+void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 
 
 queue *queue_create(void);

@@ -91,23 +91,7 @@ make_error_tuple(ErlNifEnv *env, const char *reason)
 // }
 
 void
-write32bit(char *p, int v)
-{
-	p[0] = (char)(v>>24);
-	p[1] = (char)(v>>16);
-	p[2] = (char)(v>>8);
-	p[3] = (char)v;
-}
-void
-write16bit(char *p, int v)
-{
-	p[0] = (char)(v>>8);
-	p[1] = (char)v;
-}
-
-
-void
-wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
+wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 {
 	db_thread *thread = (db_thread *) data;
 	db_connection *conn = thread->curConn;
@@ -118,13 +102,13 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 #else
 	WSABUF iov[PACKET_ITEMS];
 #endif
-	char packetLen[4];
-	char lenPrefix[2];
-	char lenPage[2];
-	char lenVarPrefix[2];
-	char lenHeader = (char)headersize;
-	char buff[PAGE_BUFF_SIZE];
-	int buffUsed;
+	u8 packetLen[4];
+	u8 lenPrefix[2];
+	u8 lenPage[2];
+	u8 lenVarPrefix[2];
+	u8 lenHeader = (char)headersize;
+	// u8 buff[PAGE_BUFF_SIZE];
+	// int buffUsed;
 	int rt;
 	// char confirm[7] = {0,0,0,0,0,0,0};
 
@@ -135,19 +119,20 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 	conn->nSent = conn->failFlags = 0;
 
 
-	if (pagesize > 0 && LZ4_COMPRESSBOUND(pagesize) < PAGE_BUFF_SIZE)
-	{
-		buffUsed = LZ4_compress((char*)page,(char*)(buff),pagesize);
-	}
-	else
-	{
-		buffUsed = 0;
-	}
+	// if (pagesize > 0 && LZ4_COMPRESSBOUND(pagesize) < PAGE_BUFF_SIZE)
+	// {
+	// 	buffUsed = LZ4_compress((char*)page,(char*)(buff),pagesize);
+	// }
+	// else
+	// {
+	// 	buffUsed = 0;
+	// }
+
 	completeSize = buffUsed+2+headersize+1+conn->packetPrefixSize+2+conn->packetVarPrefix.size+2;
-	write16bit(lenPage,buffUsed);
-	write32bit(packetLen,completeSize);
-	write16bit(lenPrefix,conn->packetPrefixSize);
-	write16bit(lenVarPrefix,conn->packetVarPrefix.size);
+	put2byte(lenPage,buffUsed);
+	put4byte(packetLen,completeSize);
+	put2byte(lenPrefix,conn->packetPrefixSize);
+	put2byte(lenVarPrefix,conn->packetVarPrefix.size);
 
 #ifndef _WIN32
 	// Entire size
@@ -257,16 +242,16 @@ do_all_tunnel_call(db_command *cmd,db_thread *thread)
 #else
 	WSABUF iov[PACKET_ITEMS];
 #endif
-	char packetLen[4];
-	char lenBin[2];
+	u8 packetLen[4];
+	u8 lenBin[2];
 	ErlNifBinary bin;
 	int nsent = 0, i = 0, rt = 0;
 	// char confirm[7] = {0,0,0,0,0,0,0};
 
 	enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(bin));
 
-	write32bit(packetLen,bin.size);
-	write16bit(lenBin,bin.size);
+	put4byte(packetLen,bin.size);
+	put2byte(lenBin,bin.size);
 
 #ifndef  _WIN32
 	iov[0].iov_base = packetLen;
@@ -795,7 +780,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 	WSABUF iov[2];
 #endif
 	char portstr[10];
-	char packetLen[4];
+	u8 packetLen[4];
 	int *sockets;
 	char confirm[7] = {0,0,0,0,0,0,0};
 	int flag = 1, rt = 0, error = 0, opts;
@@ -806,7 +791,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 	struct addrinfo *adrp;
 
 
-	write32bit(packetLen,thread->control->prefixes[pos].size);
+	put4byte(packetLen,thread->control->prefixes[pos].size);
 #ifndef _WIN32
 	iov[0].iov_base = packetLen;
 	iov[0].iov_len = 4;
@@ -1070,13 +1055,16 @@ static ERL_NIF_TERM
 do_iterate(db_command *cmd, db_thread *thread)
 {
 	ErlNifBinary bin;
-	ERL_NIF_TERM tBin;
+	ERL_NIF_TERM tBin,tHead, tDone;
 	ERL_NIF_TERM res;
 	u64 evnumFrom, evtermFrom;
 	iterate_resource *iter;
 	int nfilled = 0;
 	char dorel = 0;
 	u32 done = 0;
+	ErlNifBinary header;
+	u8 buf[PAGE_BUFF_SIZE];
+	u8 hdrbuf[sizeof(u64)*2+sizeof(u32)*2+1];
 
 	if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
 	{
@@ -1098,7 +1086,7 @@ do_iterate(db_command *cmd, db_thread *thread)
 		iter->evnum = evnumFrom;
 		iter->evterm = evtermFrom;
 		// Creating a iterator requires checkpoint lock.
-		// On iterator destruct checkpoint will be released.
+		// On iterator destruct lock will be released.
 		cmd->conn->checkpointLock++;
 
 		res = enif_make_resource(cmd->env,iter);
@@ -1110,24 +1098,32 @@ do_iterate(db_command *cmd, db_thread *thread)
 
 	// 4 pages of buffer size
 	// This might contain many more actual db pages because data is compressed
-	enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE*4,&bin);
-	memset(bin.data,0, bin.size);
+	nfilled = iterate(&cmd->conn->wal, iter, buf, PAGE_BUFF_SIZE, hdrbuf, &done);
+	if (nfilled == 0)
+	{
+		return atom_false;
+	}
+	DBG((g_log,"nfilled %d\n",nfilled));
+	enif_alloc_binary(sizeof(u64)*2+sizeof(u32)*2+1, &header);
+	enif_alloc_binary(nfilled, &bin);
+	memcpy(bin.data, buf, nfilled);
+	memcpy(header.data, hdrbuf, sizeof(hdrbuf));
 
-	nfilled = iterate(&cmd->conn->wal, iter, (u8*)bin.data, bin.size, &done);
-
-	ERL_NIF_TERM tev, tt,tdone;
 	if (dorel || done)
 		enif_release_resource(iter);
-	tBin = enif_make_binary(cmd->env,&bin);
-	enif_release_binary(&bin);
 
-	tev = enif_make_uint64(cmd->env,iter->evnum);
-	tt = enif_make_uint64(cmd->env,iter->evterm);
-	tdone = enif_make_uint(cmd->env,done);
+	tBin = enif_make_binary(cmd->env,&bin);
+	tHead = enif_make_binary(cmd->env,&header);
+	enif_release_binary(&bin);
+	enif_release_binary(&header);
+
+	// tev = enif_make_uint64(cmd->env,iter->evnum);
+	// tt = enif_make_uint64(cmd->env,iter->evterm);
+	tDone = enif_make_uint(cmd->env,done);
 
 	if (nfilled == 0 && done == 1)
 		return atom_false;
-	return enif_make_tuple6(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tt,tev, tdone);
+	return enif_make_tuple5(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tHead, tDone);
 }
 
 static ERL_NIF_TERM
@@ -1182,66 +1178,102 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
 // 	return atom_ok;
 // }
 
+
 static ERL_NIF_TERM
 do_inject_page(db_command *cmd, db_thread *thread)
 {
 	ErlNifBinary bin;
-	u64 evnum,evterm;
 	u32 commit;
-	u32 curMxPage = cmd->conn->wal.mxPage;
-	int pos;
+	// u32 curMxPage = cmd->conn->wal.mxPage;
+	// int pos;
 	int rc;
+	u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
+	PgHdr page;
+	int doreplicate = cmd->conn->doReplicate;;
 
+	memset(&page,0,sizeof(page));
 	enif_inspect_binary(cmd->env,cmd->arg,&bin);
-	enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evterm);
-	enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&evnum);
-	enif_get_uint(cmd->env,cmd->arg3,&commit);
+	page.pData = pbuf;
 
-	cmd->conn->wal.inProgressTerm = evterm;
-	cmd->conn->wal.inProgressEvnum = evnum;
-
-	for (pos = 0; pos < bin.size-6;)
+	// Live replication.
+	if (enif_is_binary(cmd->env,cmd->arg1))
 	{
 		u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
 		PgHdr page;
-		u32 size = get2byte(bin.data+pos);
-		u32 iscommit = 0;
+		ErlNifBinary header;
+		enif_inspect_binary(cmd->env,cmd->arg,&header);
 
-		memset(&page,0,sizeof(page));
-		page.pgno = get4byte(bin.data+pos+2);
-		page.pData = pbuf;
+		if (header.size != sizeof(u64)*2+sizeof(u32)*2)
+			return atom_false;
 
-		if (size == 0)
-			break;
+		cmd->conn->wal.inProgressTerm = get8byte(header.data);
+		cmd->conn->wal.inProgressEvnum = get8byte(header.data+sizeof(u64));
+		page.pgno = get4byte(header.data+sizeof(u64)*2);
+		commit = get4byte(header.data+sizeof(u64)*2+sizeof(u32));
 
-		rc = LZ4_decompress_safe((char*)(bin.data+pos+6),(char*)pbuf,size,sizeof(pbuf));
+		rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
 		if (rc != sizeof(pbuf))
 		{
 			DBG((g_log,"Unable to decompress inject page!!\r\n"));
 			return atom_false;
 		}
-
-		pos += size+6;
-
-		// if this is last page and if commmit > 0, use it
-		if (pos < bin.size-6)
-		{
-			size = get2byte(bin.data+pos);
-			if (size == 0 && commit)
-				iscommit = commit > curMxPage ? commit : curMxPage;
-		}
-		else if (commit)
-			iscommit = commit > curMxPage ? commit : curMxPage;
-
-		DBG((g_log,"Inject page=%u, commit=%d\r\n",page.pgno, iscommit));
-		rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, iscommit, iscommit, 0);
+		cmd->conn->doReplicate = 0;
+		rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, commit, commit, 0);
+		cmd->conn->doReplicate = doreplicate;
 		if (rc != SQLITE_OK)
 		{
 			DBG((g_log,"Unable to write inject page\r\n"));
 			return atom_false;
 		}
 		cmd->conn->wal.changed = 1;
+		return atom_ok;
 	}
+
+	// Recovery replication
+	// enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->wal.inProgressTerm));
+	// enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->wal.inProgressEvnum));
+	// enif_get_uint(cmd->env,cmd->arg3,&commit);
+	//
+	//
+	// for (pos = 0; pos < bin.size-6;)
+	// {
+	// 	u32 size = get2byte(bin.data+pos);
+	// 	u32 iscommit = 0;
+	//
+	// 	page.pgno = get4byte(bin.data+pos+2);
+	// 	if (size == 0)
+	// 		break;
+	//
+	// 	rc = LZ4_decompress_safe((char*)(bin.data+pos+6),(char*)pbuf,size,sizeof(pbuf));
+	// 	if (rc != sizeof(pbuf))
+	// 	{
+	// 		DBG((g_log,"Unable to decompress inject page!!\r\n"));
+	// 		return atom_false;
+	// 	}
+	//
+	// 	pos += size+6;
+	//
+	// 	// if this is last page and if commmit > 0, use it
+	// 	if (pos < bin.size-6)
+	// 	{
+	// 		size = get2byte(bin.data+pos);
+	// 		if (size == 0 && commit)
+	// 			iscommit = commit > curMxPage ? commit : curMxPage;
+	// 	}
+	// 	else if (commit)
+	// 		iscommit = commit > curMxPage ? commit : curMxPage;
+	//
+	// 	DBG((g_log,"Inject page=%u, commit=%d\r\n",page.pgno, iscommit));
+	// 	cmd->conn->doReplicate = 0;
+	// 	rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, iscommit, iscommit, 0);
+	// 	cmd->conn->doReplicate = doreplicate;
+	// 	if (rc != SQLITE_OK)
+	// 	{
+	// 		DBG((g_log,"Unable to write inject page\r\n"));
+	// 		return atom_false;
+	// 	}
+	// 	cmd->conn->wal.changed = 1;
+	// }
 
 	return atom_ok;
 }
@@ -1308,6 +1340,13 @@ do_exec_script(db_command *cmd, db_thread *thread)
 		enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->wal.inProgressTerm));
 		enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->wal.inProgressEvnum));
 		enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
+	}
+
+	if (cmd->conn->wal.inProgressTerm > 0 || cmd->conn->wal.inProgressEvnum > 0)
+	{
+		doundo(&cmd->conn->wal, NULL, NULL, 1);
+		// mdb_txn_abort(thread->wtxn);
+		// open_wtxn(thread);
 	}
 
 #ifdef _TESTDBG_
@@ -3025,7 +3064,7 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	DBG((g_log,"inject_page\n"))
 
-	if(argc != 7)
+	if(argc != 5)
 		return enif_make_badarg(env);
 	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
@@ -3036,8 +3075,10 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_pid");
 	if (!enif_is_binary(env,argv[3]))
 		return make_error_tuple(env,"not binary");
-	if (!enif_is_number(env,argv[4]) || !enif_is_number(env,argv[5]) || !enif_is_number(env,argv[6]))
-		return make_error_tuple(env,"NaN");
+	// if (argc == 7 && (!enif_is_number(env,argv[4]) || !enif_is_number(env,argv[5]) || !enif_is_number(env,argv[6])))
+	// 	return make_error_tuple(env,"NaN");
+	else if (!enif_is_binary(env,argv[4]))
+		return make_error_tuple(env,"invalid header");
 
 	item = command_create(res->thread,pd);
 
@@ -3045,9 +3086,7 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
 	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);  // bin
-	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // evterm
-	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[5]); // evnum
-	item->cmd.arg3 = enif_make_copy(item->cmd.env,argv[6]); // commit (0 if not, dbsize if yes)
+	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // header bin
 	item->cmd.connindex = res->connindex;
 
 	enif_consume_timeslice(env,500);
@@ -3357,7 +3396,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		memset(curThread->conns,0,sizeof(db_connection)*1024);
 		curThread->nconns = 1024;
 		curThread->nthreads = priv->nthreads;
-		curThread->wal_page_hook = wal_page_hook;
+		// curThread->wal_page_hook = wal_page_hook;
 		curThread->walSizeLimit = walSizeLimit;
 		curThread->pd = priv;
 		priv->tasks[i] = curThread->tasks;
@@ -3425,7 +3464,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"iterate_db",5,iterate_db},
 	{"iterate_close",1,iterate_close},
 	{"page_size",0,page_size},
-	{"inject_page",7,inject_page},
+	{"inject_page",5,inject_page},
 	// {"wal_rewind",4,drv_wal_rewind},
 	{"delete_actor",1,delete_actor},
 };

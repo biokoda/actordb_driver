@@ -7,7 +7,7 @@
 		 open/1,open/2,open/3,open/4,
 		 exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
 		 store_prepared_table/2,
-		 close/1,inject_page/5,
+		 close/1,inject_page/3,
 		 parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0, %wal_pages/1,
 		 % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
 		 lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
@@ -130,9 +130,9 @@ iterate_db({actordb_driver, _Ref, Connection},Evterm,Evnum) when is_integer(Evnu
 	ok = actordb_driver_nif:iterate_db(Connection, Ref, self(), Evterm,Evnum),
 	receive_answer(Ref).
 
-inject_page({actordb_driver, _Ref, Connection},Evterm,Evnum,Commit,Bin) ->
+inject_page({actordb_driver, _Ref, Connection},Bin,Head) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:inject_page(Connection, Ref, self(),Bin,Evterm,Evnum,Commit),
+	ok = actordb_driver_nif:inject_page(Connection, Ref, self(),Bin,Head),
 	receive_answer(Ref).
 % inject_page({actordb_driver, _Ref, Connection},Bin,Head) ->
 % 	Ref = make_ref(),

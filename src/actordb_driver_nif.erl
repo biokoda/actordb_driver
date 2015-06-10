@@ -27,7 +27,7 @@ iterate_close/1,
 bind_insert/5,
 all_tunnel_call/3,
 checkpoint_lock/4,
-inject_page/7,
+inject_page/5,
 % wal_rewind/4,
 delete_actor/1,
 checkpoint/5
@@ -56,7 +56,7 @@ iterate_close(_) ->
 checkpoint_lock(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
-inject_page(_,_,_,_,_,_,_) ->
+inject_page(_,_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 store_prepared_table(_,_) ->

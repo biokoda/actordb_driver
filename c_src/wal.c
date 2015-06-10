@@ -37,11 +37,12 @@
 ** Endianess: Data is written as is. Practicaly no relevant platforms are in big endian and I can't see
 ** a scenario where a lmdb file would be moved between different endian platforms.
 */
-int checkpoint(Wal *pWal, u64 evterm, u64 evnum);
-int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done);
+static int checkpoint(Wal *pWal, u64 evterm, u64 evnum);
 static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum);
 static int storeinfo(Wal *pWal);
 static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delPages);
+static u64 get8byte(u8* buf);
+static void put8byte(u8* buf, u64 num);
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
@@ -61,12 +62,6 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 	if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return SQLITE_ERROR;
-
-	// if (mdb_dbi_open(txn, "actors", MDB_INTEGERKEY, &actorsdb) != MDB_SUCCESS)
-	//   return SQLITE_ERROR;
-	//
-	// if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY, &infodb) != MDB_SUCCESS)
-	//   return SQLITE_ERROR;
 
 	key.mv_size = strlen(zWalName);
 	key.mv_data = (void*)zWalName;//thr->curConn->dbpath;
@@ -352,9 +347,9 @@ int sqlite3WalEndWriteTransaction(Wal *pWal)
 	return SQLITE_OK;
 }
 
-static int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize, int *inoutused)
+static int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize)
 {
-	int bufused = *inoutused;
+	int bufused = 0;
 	int frags = pWal->nResFrames;
 	int frsize = 0;
 	const int hsz = (sizeof(i64)*2+1);
@@ -364,18 +359,9 @@ static int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize, int
 		frsize += pWal->resFrames[frags].mv_size-hsz;
 		frags--;
 	}
-	if (bufsize < bufused+frsize+6)
-	{
-		*inoutused = bufused;
-		return 1;
-	}
-
-	put2byte(buf+bufused, frsize);
-	put4byte(buf+bufused+2, iter->pgnoPos);
 
 	frags = pWal->nResFrames;
 	frsize = 0;
-	bufused += 6;
 	while (frags >= 0)
 	{
 		const int pagesz = pWal->resFrames[frags].mv_size - hsz;
@@ -384,17 +370,14 @@ static int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize, int
 		bufused += pagesz;
 		frags--;
 	}
-	*inoutused = bufused;
 	pWal->nResFrames = 0;
 
-	return 0;
+	return bufused;
 }
 
 // return number of bytes written
-int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
+static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
-	int bufused = 0;
-
 	if (!iter->started)
 	{
 		if (iter->evnum + iter->evterm == 0)
@@ -418,23 +401,21 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 	if (iter->entiredb)
 	{
 		u32 iRead = 0;
+		findframe(pWal, iter->pgnoPos, &iRead, iter->evterm, iter->evnum, NULL, NULL);
 
-		while (1)
+		if (!iRead)
 		{
-			findframe(pWal, iter->pgnoPos, &iRead, iter->evterm, iter->evnum, NULL, NULL);
-
-			if (!iRead)
-			{
-				*done = iter->mxPage;
-				return bufused;
-			}
-			if (fillbuff(pWal, iter, buf, bufsize, &bufused))
-			{
-				return bufused;
-			}
-
-			iter->pgnoPos++;
+			*done = iter->mxPage;
+			return 0;
 		}
+        if (iter->pgnoPos == iter->mxPage)
+            *done = iter->mxPage;
+		put8byte(hdr,                           iter->evterm);
+		put8byte(hdr+sizeof(u64),               iter->evnum);
+		put4byte(hdr+sizeof(u64)*2,             iter->pgnoPos);
+		put4byte(hdr+sizeof(u64)*2+sizeof(u32), *done);
+		iter->pgnoPos++;
+		return fillbuff(pWal, iter, buf, bufsize);
 	}
 	else
 	{
@@ -491,16 +472,20 @@ int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u32 *done)
 				return 0;
 			}
 
-			iter->pgnoPos = pgno;
-			if (fillbuff(pWal, iter, buf, bufsize, &bufused))
-			{
-				return bufused;
-			}
-
+            iter->pgnoPos = pgno;
+            if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop) == MDB_SUCCESS)
+                *done = 0;
+            else
+                *done = iter->pgnoPos;
+            put8byte(hdr,                           iter->evterm);
+    		put8byte(hdr+sizeof(u64),               iter->evnum);
+    		put4byte(hdr+sizeof(u64)*2,             iter->pgnoPos);
+    		put4byte(hdr+sizeof(u64)*2+sizeof(u32), *done);
+			return fillbuff(pWal, iter, buf, bufsize);
 		}
-		*done = iter->pgnoPos;
-		return bufused;
 	}
+    *done = 1;
+    return 0;
 }
 
 // Delete all pages up to limitEvterm and limitEvnum
@@ -676,6 +661,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 				pgop = MDB_PREV_DUP;
 			}
 			storeinfo(pWal);
+			thr->pagesChanged++;
 		}
 
 		if (xUndo)
@@ -751,7 +737,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 {
 	PgHdr *p;
 	db_thread *thr = pWal->thread;
-	// db_connection *pCon = thr->curConn;
+	db_connection *pCon = thr->curConn;
 	MDB_val key, data;
 	int rc;
 
@@ -776,7 +762,19 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		key.mv_size = sizeof(pagesKeyBuf);
 		key.mv_data = pagesKeyBuf;
 
-        // wal_page_hook(thr,);
+		if (pCon->doReplicate)
+		{
+			u8 hdr[sizeof(u64)*2+sizeof(u32)*2+1];
+			put8byte(hdr,               pWal->inProgressTerm);
+			put8byte(hdr+sizeof(u64),   pWal->inProgressEvnum);
+			put4byte(hdr+sizeof(u64)*2, p->pgno);
+			if (p->pDirty)
+				put4byte(hdr+sizeof(u64)*2+sizeof(u32), 0);
+			else
+				put4byte(hdr+sizeof(u64)*2+sizeof(u32), isCommit);
+			wal_page_hook(thr,pagesBuf+sizeof(i64)*2+1, page_size, hdr, sizeof(hdr));
+		}
+
 
 		// Check if there are pages with the same or higher evnum/evterm. If there are, delete them.
 		// This can happen if sqlite flushed some page to disk before commiting, because there were
@@ -997,4 +995,21 @@ SQLITE_API int sqlite3_wal_data(
 		}
 	}
 	return rt;
+}
+
+static u64 get8byte(u8* buf)
+{
+  return ((u64)buf[0] << 56) + ((u64)buf[1] << 48) + ((u64)buf[2] << 40) + ((u64)buf[3] << 32) +
+	   ((u64)buf[4] << 24) + ((u64)buf[5] << 16)  + ((u64)buf[6] << 8) + buf[7];
+}
+static void put8byte(u8* buf, u64 num)
+{
+  buf[0] = num >> 56;
+  buf[1] = num >> 48;
+  buf[2] = num >> 40;
+  buf[3] = num >> 32;
+  buf[4] = num >> 24;
+  buf[5] = num >> 16;
+  buf[6] = num >> 8;
+  buf[7] = num;
 }

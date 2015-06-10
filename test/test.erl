@@ -43,8 +43,8 @@ dbcopy() ->
 	{ok,Select} = actordb_driver:exec_script("select * from tab;",Db),
 	% ?debugFmt("Select ~p",[Select]),
 	{ok,Copy} = actordb_driver:open("copy"),
-	{ok,Iter,Bin,Evterm,Evnum,Done} =  actordb_driver:iterate_db(Db,0,0),
-	actordb_driver:inject_page(Copy,Evterm,Evnum,Done,Bin),
+	{ok,Iter,Bin,Head,Done} =  actordb_driver:iterate_db(Db,0,0),
+	actordb_driver:inject_page(Copy,Bin,Head),
 	% This will export into an sqlite file named sq.
 	{ok,F} = file:open("sq",[write,binary,raw]),
 	?debugFmt("Exporting actor into an sqlite file ~p",[Done]),
@@ -63,11 +63,11 @@ dbcopy() ->
 	file:delete("sq"),
 
 	{ok,Copy2} = actordb_driver:open("copy2"),
-	{ok,Iter2,Bin2,Evterm2,Evnum2,Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
+	{ok,Iter2,Bin2,Head2,Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
 	% readpages(Bin2,undefined),
-	actordb_driver:inject_page(Copy2,Evterm2,Evnum2,Done2,Bin2),
-	{ok,Iter3,Bin3,Evterm3,Evnum3,Done3} = actordb_driver:iterate_db(Db,1,2), % get pgno2 with first insert
-	actordb_driver:inject_page(Copy2,Evterm3,Evnum3,Done3,Bin3),
+	actordb_driver:inject_page(Copy2,Bin2,Head2),
+	{ok,Iter3,Bin3,Head3,Done3} = actordb_driver:iterate_db(Db,1,2), % get pgno2 with first insert
+	actordb_driver:inject_page(Copy2,Bin3,Head3),
 	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
 	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
 	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]).
@@ -75,9 +75,10 @@ dbcopy() ->
 
 copy(Orig,Iter,F,Copy) ->
 	case actordb_driver:iterate_db(Orig,Iter) of
-		{ok,Iter1,Bin,Evterm,Evnum,Done} ->
+		{ok,Iter1,Bin,Head,Done} ->
+			<<Evterm:64,Evnum:64,_/binary>> = Head,
 			?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum]),
-			actordb_driver:inject_page(Copy,Evterm,Evnum,Done,Bin),
+			actordb_driver:inject_page(Copy,Bin,Head),
 			readpages(Bin,F),
 			case Done > 0 of
 				true ->
