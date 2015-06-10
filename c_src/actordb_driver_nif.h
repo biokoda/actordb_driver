@@ -4,8 +4,8 @@
 #ifdef  _WIN32
 // #include "dirent.h"
 #define snprintf _snprintf
-#else
-#include <dirent.h>
+// #else
+// #include <dirent.h>
 #endif
 #include "lmdb.h"
 
