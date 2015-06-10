@@ -1190,44 +1190,43 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
 	PgHdr page;
 	int doreplicate = cmd->conn->doReplicate;;
+	ErlNifBinary header;
+
+	if (!enif_is_binary(cmd->env,cmd->arg))
+		return atom_false;
+	if (!enif_is_binary(cmd->env,cmd->arg1))
+		return atom_false;
 
 	memset(&page,0,sizeof(page));
 	enif_inspect_binary(cmd->env,cmd->arg,&bin);
 	page.pData = pbuf;
+	enif_inspect_binary(cmd->env,cmd->arg1,&header);
 
-	// Live replication.
-	if (enif_is_binary(cmd->env,cmd->arg1))
+	if (header.size != sizeof(u64)*2+sizeof(u32)*2+1)
+		return atom_false;
+
+	cmd->conn->wal.inProgressTerm = get8byte(header.data);
+	cmd->conn->wal.inProgressEvnum = get8byte(header.data+sizeof(u64));
+	page.pgno = get4byte(header.data+sizeof(u64)*2);
+	commit = get4byte(header.data+sizeof(u64)*2+sizeof(u32));
+
+	rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
+	if (rc != sizeof(pbuf))
 	{
-		u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
-		PgHdr page;
-		ErlNifBinary header;
-		enif_inspect_binary(cmd->env,cmd->arg,&header);
-
-		if (header.size != sizeof(u64)*2+sizeof(u32)*2)
-			return atom_false;
-
-		cmd->conn->wal.inProgressTerm = get8byte(header.data);
-		cmd->conn->wal.inProgressEvnum = get8byte(header.data+sizeof(u64));
-		page.pgno = get4byte(header.data+sizeof(u64)*2);
-		commit = get4byte(header.data+sizeof(u64)*2+sizeof(u32));
-
-		rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
-		if (rc != sizeof(pbuf))
-		{
-			DBG((g_log,"Unable to decompress inject page!!\r\n"));
-			return atom_false;
-		}
-		cmd->conn->doReplicate = 0;
-		rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, commit, commit, 0);
-		cmd->conn->doReplicate = doreplicate;
-		if (rc != SQLITE_OK)
-		{
-			DBG((g_log,"Unable to write inject page\r\n"));
-			return atom_false;
-		}
-		cmd->conn->wal.changed = 1;
-		return atom_ok;
+		DBG((g_log,"Unable to decompress inject page!!\r\n"));
+		return atom_false;
 	}
+	cmd->conn->doReplicate = 0;
+	rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, commit, commit, 0);
+	cmd->conn->doReplicate = doreplicate;
+	if (rc != SQLITE_OK)
+	{
+		DBG((g_log,"Unable to write inject page\r\n"));
+		return atom_false;
+	}
+	cmd->conn->wal.changed = 1;
+	return atom_ok;
+
 
 	// Recovery replication
 	// enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->wal.inProgressTerm));
@@ -1274,8 +1273,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	// 	}
 	// 	cmd->conn->wal.changed = 1;
 	// }
-
-	return atom_ok;
+	// return atom_ok;
 }
 
 static ERL_NIF_TERM

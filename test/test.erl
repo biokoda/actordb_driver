@@ -44,11 +44,12 @@ dbcopy() ->
 	% ?debugFmt("Select ~p",[Select]),
 	{ok,Copy} = actordb_driver:open("copy"),
 	{ok,Iter,Bin,Head,Done} =  actordb_driver:iterate_db(Db,0,0),
-	actordb_driver:inject_page(Copy,Bin,Head),
+	ok = actordb_driver:inject_page(Copy,Bin,Head),
 	% This will export into an sqlite file named sq.
 	{ok,F} = file:open("sq",[write,binary,raw]),
 	?debugFmt("Exporting actor into an sqlite file ~p",[Done]),
-	readpages(Bin,F),
+	% readpages(Head,Bin,F),
+	file:write(F,actordb_driver:lz4_decompress(Bin,4096)),
 	case Done > 0 of
 	  true ->
 		  ok;
@@ -78,8 +79,8 @@ copy(Orig,Iter,F,Copy) ->
 		{ok,Iter1,Bin,Head,Done} ->
 			<<Evterm:64,Evnum:64,_/binary>> = Head,
 			?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum]),
-			actordb_driver:inject_page(Copy,Bin,Head),
-			readpages(Bin,F),
+			ok = actordb_driver:inject_page(Copy,Bin,Head),
+			file:write(F,actordb_driver:lz4_decompress(Bin,4096)),
 			case Done > 0 of
 				true ->
 					ok;
@@ -87,13 +88,6 @@ copy(Orig,Iter,F,Copy) ->
 					copy(Orig,Iter1,F,Copy)
 			end
 	end.
-
-readpages(<<Num:16/big,Pgno:32/unsigned,Bin:Num/binary,Rem/binary>>,F) when Num > 0 ->
-	?debugFmt("Page size=~pB, pgno=~p",[Num,Pgno]),
-	file:write(F,actordb_driver:lz4_decompress(Bin,4096)),
-	readpages(Rem,F);
-readpages(_,_) ->
-	ok.
 
 
 bigtrans() ->
