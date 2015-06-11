@@ -77,8 +77,8 @@ replicate_opts(Con,PacketPrefix) ->
 	replicate_opts(Con,PacketPrefix,1).
 replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix,Type) ->
 	Ref = make_ref(),
-	actordb_driver_nif:replicate_opts(Connection,Ref,self(),PacketPrefix,Type),
-	receive_answer(Ref).
+	ok = actordb_driver_nif:replicate_opts(Connection,Ref,self(),PacketPrefix,Type).
+	% receive_answer(Ref).
 
 % replicate_status({actordb_driver, _Ref, Connection}) ->
 %     actordb_driver_nif:replicate_status(Connection).

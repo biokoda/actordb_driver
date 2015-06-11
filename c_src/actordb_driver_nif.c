@@ -1099,31 +1099,33 @@ do_iterate(db_command *cmd, db_thread *thread)
 	// 4 pages of buffer size
 	// This might contain many more actual db pages because data is compressed
 	nfilled = iterate(&cmd->conn->wal, iter, buf, PAGE_BUFF_SIZE, hdrbuf, &done);
-	if (nfilled == 0)
-	{
-		return atom_false;
-	}
 	DBG((g_log,"nfilled %d\n",nfilled));
-	enif_alloc_binary(sizeof(u64)*2+sizeof(u32)*2+1, &header);
-	enif_alloc_binary(nfilled, &bin);
-	memcpy(bin.data, buf, nfilled);
-	memcpy(header.data, hdrbuf, sizeof(hdrbuf));
+
+	if (nfilled > 0)
+	{
+		enif_alloc_binary(sizeof(u64)*2+sizeof(u32)*2+1, &header);
+		enif_alloc_binary(nfilled, &bin);
+		memcpy(bin.data, buf, nfilled);
+		memcpy(header.data, hdrbuf, sizeof(hdrbuf));
+
+		tBin = enif_make_binary(cmd->env,&bin);
+		tHead = enif_make_binary(cmd->env,&header);
+		enif_release_binary(&bin);
+		enif_release_binary(&header);
+	}
 
 	if (dorel || done)
 		enif_release_resource(iter);
 
-	tBin = enif_make_binary(cmd->env,&bin);
-	tHead = enif_make_binary(cmd->env,&header);
-	enif_release_binary(&bin);
-	enif_release_binary(&header);
-
-	// tev = enif_make_uint64(cmd->env,iter->evnum);
-	// tt = enif_make_uint64(cmd->env,iter->evterm);
-	tDone = enif_make_uint(cmd->env,done);
-
 	if (nfilled == 0 && done == 1)
-		return atom_false;
-	return enif_make_tuple5(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tHead, tDone);
+	{
+		return atom_done;
+	}
+	else
+	{
+		tDone = enif_make_uint(cmd->env,done);
+		return enif_make_tuple5(cmd->env,atom_ok, enif_make_tuple2(cmd->env,atom_iter,res), tBin, tHead, tDone);
+	}
 }
 
 static ERL_NIF_TERM
@@ -1184,8 +1186,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 {
 	ErlNifBinary bin;
 	u32 commit;
-	// u32 curMxPage = cmd->conn->wal.mxPage;
-	// int pos;
+	u64 term,num;
 	int rc;
 	u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
 	PgHdr page;
@@ -1205,10 +1206,18 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	if (header.size != sizeof(u64)*2+sizeof(u32)*2+1)
 		return atom_false;
 
-	cmd->conn->wal.inProgressTerm = get8byte(header.data);
-	cmd->conn->wal.inProgressEvnum = get8byte(header.data+sizeof(u64));
+	evterm = get8byte(header.data);
+	evnum = get8byte(header.data+sizeof(u64));
 	page.pgno = get4byte(header.data+sizeof(u64)*2);
 	commit = get4byte(header.data+sizeof(u64)*2+sizeof(u32));
+
+	// If inprogress > 0 and does not match input evterm/evnum, than we have leftowers
+	// from a failed inject. We must clean up. During a single iteration or write, evnum/evterm does not change.
+	if (cmd->conn->wal.inProgressTerm+cmd->conn->wal.inProgressEvnum > 0 &&
+		(cmd->conn->wal.inProgressTerm != evterm || cmd->conn->wal.inProgressEvnum != evnum))
+	{
+		doundo(&cmd->conn->wal,NULL,NULL,1);
+	}
 
 	rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
 	if (rc != sizeof(pbuf))
