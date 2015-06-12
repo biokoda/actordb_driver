@@ -1186,7 +1186,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 {
 	ErlNifBinary bin;
 	u32 commit;
-	u64 term,num;
+	u64 evterm,evnum;
 	int rc;
 	u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
 	PgHdr page;

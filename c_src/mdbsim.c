@@ -112,8 +112,8 @@ static MDB_txn* open_wtxn(db_thread *data)
         return NULL;
     if (mdb_dbi_open(data->wtxn, "pages", MDB_CREATE | MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
         return NULL;
-    // if (mdb_dbi_open(data->wtxn, "test1", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->testdb) != MDB_SUCCESS)
-    //   return NULL;
+    if (mdb_dbi_open(data->wtxn, "test1", MDB_CREATE | MDB_DUPSORT | MDB_INTEGERKEY, &data->testdb) != MDB_SUCCESS)
+      return NULL;
     if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
         return NULL;
     if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
@@ -124,8 +124,8 @@ static MDB_txn* open_wtxn(db_thread *data)
         return NULL;
     if (mdb_cursor_open(data->wtxn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
         return NULL;
-    // if (mdb_cursor_open(data->wtxn, data->testdb, &data->cursorTest) != MDB_SUCCESS)
-    return NULL;
+    if (mdb_cursor_open(data->wtxn, data->testdb, &data->cursorTest) != MDB_SUCCESS)
+        return NULL;
 
   return data->wtxn;
 }
@@ -200,6 +200,42 @@ int main(int argc, char* argv[])
   //     printf("Next %d %d %d\n",sqlite3Get4byte(data.mv_data),sqlite3Get4byte(data.mv_data+4),mdb_env_get_maxkeysize(thread.env));
   //   }
   //   return 0;
+  // }
+
+  // {
+  //     MDB_val key, data;
+  //     int j = 10;
+  //     u8 buf[10];
+  //
+  //     key.mv_data = &j;
+  //     key.mv_size = sizeof(j);
+  //     data.mv_data = buf;
+  //     data.mv_size = sizeof(j);
+  //     memcpy(buf,&j,sizeof(j));
+  //
+  //     for (i = 0; i < 10; i++)
+  //     {
+  //         rc = mdb_put(thread.wtxn,thread.testdb,&key,&data,0);
+  //         if (rc != MDB_SUCCESS)
+  //         {
+  //             printf("Test put failed\n");
+  //             return 0;
+  //         }
+  //     }
+  //
+  //     mdb_cursor_get(thread.cursorTest,&key,&data,MDB_SET_KEY);
+  //
+  //     mdb_cursor_get(thread.cursorTest,&key,&data,MDB_FIRST_DUP);
+  //     printf("First %d\n",*(int*)data.mv_data);
+  //     for (i = 0; i < 10; i++)
+  //     {
+  //       rc = mdb_cursor_get(thread.cursorTest,&key,&data,MDB_NEXT_DUP);
+  //       if (rc != MDB_SUCCESS)
+  //           break;
+  //       printf("Next %d %d\n",sqlite3Get4byte(data.mv_data),mdb_env_get_maxkeysize(thread.env));
+  //     }
+  //
+  //     return 0;
   // }
 
 
@@ -278,8 +314,8 @@ int main(int argc, char* argv[])
         continue;
       }
 
-      con.writeTermNumber = i / 10;
-      con.writeNumber = i / 10;
+      con.wal.inProgressTerm = i / 10;
+      con.wal.inProgressEvnum = i / 10;
 
       PgHdr pgList;
       memset(&pgList,0,sizeof(PgHdr));
@@ -393,8 +429,8 @@ int main(int argc, char* argv[])
 
     for (i = 0; i < 1000; i++)
     {
-      con.writeNumber = i;
-      con.writeTermNumber = i / 10;
+      con.wal.inProgressEvnum = i;
+      con.wal.inProgressTerm = i / 10;
       sprintf(txt,"insert into tab values (%d,'text for %s');",i,val);
       // printf("calling: %s\n",txt);
       rc = sqlite3_exec(con.db,txt,NULL,NULL,NULL);
