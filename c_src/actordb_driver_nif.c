@@ -1050,6 +1050,22 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 		return atom_false;
 }
 
+static ERL_NIF_TERM
+do_term_store(db_command *cmd, db_thread *thread)
+{
+	ErlNifBinary votedFor;
+	u64 currentTerm;
+
+	if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&currentTerm))
+		return atom_false;
+	enif_inspect_binary(cmd->env,cmd->arg1,&votedFor);
+
+	if (votedFor.size > 255)
+		return atom_false;
+
+	storeinfo(&cmd->conn->wal, currentTerm, (u8)votedFor.size, votedFor.data);
+	return atom_ok;
+}
 
 static ERL_NIF_TERM
 do_iterate(db_command *cmd, db_thread *thread)
@@ -1222,7 +1238,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
 	if (rc != sizeof(pbuf))
 	{
-		DBG((g_log,"Unable to decompress inject page!!\r\n"));
+		DBG((g_log,"Unable to decompress inject page!! %ld\r\n",bin.size));
 		return atom_false;
 	}
 	cmd->conn->doReplicate = 0;
@@ -1987,6 +2003,8 @@ evaluate_command(db_command cmd,db_thread *thread)
 		return do_interrupt(&cmd,thread);
 	case cmd_iterate:
 		return do_iterate(&cmd,thread);
+	case cmd_term_store:
+		return do_term_store(&cmd,thread);
 	case cmd_unknown:
 		return atom_ok;
 	case cmd_tcp_connect:
@@ -3002,6 +3020,32 @@ page_size(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
+term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	conn_resource *res;
+	qitem *item;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	if (argc != 3)
+		return enif_make_badarg(env);
+	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		return enif_make_badarg(env);
+	if (!enif_is_number(env, argv[1]))
+		return enif_make_badarg(env);
+	if (!enif_is_binary(env,argv[2]))
+		return enif_make_badarg(env);
+
+	item = command_create(res->thread,pd);
+	item->cmd.type = cmd_term_store;
+	item->cmd.connindex = res->connindex;
+	item->cmd.arg = enif_make_copy(item->cmd.env,argv[1]); // evterm
+	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[2]); // votedfor
+
+	enif_consume_timeslice(env,500);
+	return push_command(res->thread, pd, item);
+}
+
+static ERL_NIF_TERM
 iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	conn_resource *res;
@@ -3023,7 +3067,6 @@ iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	item = command_create(res->thread,pd);
 
-	/* command */
 	item->cmd.type = cmd_iterate;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
@@ -3474,6 +3517,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"inject_page",5,inject_page},
 	// {"wal_rewind",4,drv_wal_rewind},
 	{"delete_actor",1,delete_actor},
+	{"term_store",3,term_store},
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

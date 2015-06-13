@@ -49,7 +49,6 @@ open(Filename,ThreadNumber,Sql,Mode) ->
 	end.
 
 term_store({actordb_driver, _Ref, Connection}, CurrentTerm, VotedFor) ->
-	Ref = make_ref(),
 	ok = actordb_driver_nif:term_store(Connection,CurrentTerm,VotedFor).
 
 close({actordb_driver, _Ref, _Connection}) ->

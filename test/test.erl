@@ -36,10 +36,11 @@ dbcopy() ->
 	actordb_driver:init({{"."},{},100}),
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
-	N = 100,
-	[ {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (",integer_to_list(N+100),",'aaa',2)"],Db,infinity,1,N,<<>>) || N <- lists:seq(2,N)],
-	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,N+1,<<>>),
-	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,N+2,<<>>),
+	ok = actordb_driver:term_store(Db,10,<<"abcdef">>),
+	EN = 100,
+	[ {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (",integer_to_list(N+100),",'aaa',2)"],Db,infinity,1,N,<<>>) || N <- lists:seq(2,EN)],
+	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,EN+1,<<>>),
+	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,EN+2,<<>>),
 	{ok,Select} = actordb_driver:exec_script("select * from tab;",Db),
 	% ?debugFmt("Select ~p",[Select]),
 	{ok,Copy} = actordb_driver:open("copy"),
@@ -64,10 +65,10 @@ dbcopy() ->
 	file:delete("sq"),
 
 	{ok,Copy2} = actordb_driver:open("copy2"),
-	{ok,Iter2,Bin2,Head2,Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
+	{ok,_Iter2,Bin2,Head2,_Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
 	% readpages(Bin2,undefined),
 	actordb_driver:inject_page(Copy2,Bin2,Head2),
-	{ok,Iter3,Bin3,Head3,Done3} = actordb_driver:iterate_db(Db,1,2), % get pgno2 with first insert
+	{ok,_Iter3,Bin3,Head3,_Done3} = actordb_driver:iterate_db(Db,1,2), % get pgno2 with first insert
 	actordb_driver:inject_page(Copy2,Bin3,Head3),
 	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
 	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
