@@ -72,7 +72,8 @@ dbcopy() ->
 	actordb_driver:inject_page(Copy2,Bin3,Head3),
 	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
 	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
-	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]).
+	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),
+	?debugFmt("Get actor info ~p",[actordb_driver:actor_info("original",0)]).
 
 
 copy(Orig,Iter,F,Copy) ->

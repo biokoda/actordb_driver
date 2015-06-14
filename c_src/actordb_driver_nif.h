@@ -266,7 +266,8 @@ typedef enum
 	cmd_wal_rewind  = 18,
 	cmd_replicate_opts = 19,
 	cmd_checkpoint = 20,
-	cmd_term_store = 21
+	cmd_term_store = 21,
+	cmd_actor_info = 22
 } command_type;
 
 typedef struct

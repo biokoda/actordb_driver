@@ -1195,7 +1195,76 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
 // 	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
 // 	return atom_ok;
 // }
+static ERL_NIF_TERM
+do_actor_info(db_command *cmd, db_thread *thr)
+{
+	MDB_val key, data;
+	ErlNifBinary bin;
+	// MDB_txn *txn;
+	int rc;
 
+	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
+		return make_error_tuple(cmd->env, "not iolist");
+	//
+	// if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+	// 	return SQLITE_ERROR;
+
+	key.mv_size = bin.size;
+	key.mv_data = bin.data;
+	rc = mdb_get(thr->wtxn,thr->actorsdb,&key,&data);
+
+	if (rc == MDB_NOTFOUND)
+		return atom_false;
+	else if (rc == MDB_SUCCESS)
+	{
+		key = data;
+		rc = mdb_get(thr->wtxn,thr->infodb,&key,&data);
+
+		if (rc == MDB_SUCCESS)
+		{
+			ErlNifBinary vfbin;
+			ERL_NIF_TERM vft, fct, fce, lct, lce, ipt, ipe, ct, res;
+			u8 *votedFor;
+			u8 vfSize = 0;
+			u64 firstCompleteTerm,firstCompleteEvnum,lastCompleteTerm;
+			u64 lastCompleteEvnum,inProgressTerm,inProgressEvnum, currentTerm;
+
+			// DBG((g_log,"Size=%zu, should=%lu\n",data.mv_size, sizeof(u64)*7+2+sizeof(u32)));
+			if (data.mv_size < sizeof(u64)*7+2+sizeof(u32))
+				return atom_error;
+
+			memcpy(&firstCompleteTerm,  data.mv_data+1,               sizeof(u64));
+			memcpy(&firstCompleteEvnum, data.mv_data+1+sizeof(u64),   sizeof(u64));
+			memcpy(&lastCompleteTerm,   data.mv_data+1+sizeof(u64)*2, sizeof(u64));
+			memcpy(&lastCompleteEvnum,  data.mv_data+1+sizeof(u64)*3, sizeof(u64));
+			memcpy(&inProgressTerm,     data.mv_data+1+sizeof(u64)*4, sizeof(u64));
+			memcpy(&inProgressEvnum,    data.mv_data+1+sizeof(u64)*5, sizeof(u64));
+			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u64));
+			vfSize = ((u8*)data.mv_data)[1+sizeof(u64)*7+sizeof(u32)];
+			votedFor = (u8*)data.mv_data+2+sizeof(u64)*7+sizeof(u32);
+
+			enif_alloc_binary(vfSize, &vfbin);
+			memcpy(vfbin.data, votedFor, vfSize);
+			vft = enif_make_binary(cmd->env,&vfbin);
+			enif_release_binary(&vfbin);
+
+			fct = enif_make_uint64(cmd->env, firstCompleteTerm);
+			fce = enif_make_uint64(cmd->env, firstCompleteEvnum);
+			lct = enif_make_uint64(cmd->env, lastCompleteTerm);
+			lce = enif_make_uint64(cmd->env, lastCompleteEvnum);
+			ipt = enif_make_uint64(cmd->env, inProgressTerm);
+			ipe = enif_make_uint64(cmd->env, inProgressEvnum);
+			ct  = enif_make_uint64(cmd->env, currentTerm);
+
+			res = enif_make_tuple8(cmd->env,fct,fce,lct,lce,ipt,ipe,ct,vft);
+			return res;
+		}
+		else
+			return atom_false;
+	}
+	else
+		return atom_error;
+}
 
 static ERL_NIF_TERM
 do_inject_page(db_command *cmd, db_thread *thread)
@@ -1997,6 +2066,8 @@ evaluate_command(db_command cmd,db_thread *thread)
 		return do_checkpoint(&cmd,thread);
 	case cmd_inject_page:
 		return do_inject_page(&cmd,thread);
+	case cmd_actor_info:
+		return do_actor_info(&cmd,thread);
 	// case cmd_wal_rewind:
 	// 	return do_wal_rewind(&cmd,thread);
 	case cmd_interrupt:
@@ -2247,6 +2318,7 @@ thread_func(void *arg)
 		pagesChanged = data->pagesChanged;
 
 		// printf("Queue size %d\r\n",queue_size(data->tasks));
+		DBG((g_log,"HUH?\n"));
 
 		DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,item->cmd.type,item->cmd.connindex));
 
@@ -2369,6 +2441,34 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	return atom_ok;
 }
 
+static ERL_NIF_TERM
+get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	qitem *item;
+	ErlNifPid pid;
+	u32 thread;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	if (argc != 4)
+		return enif_make_badarg(env);
+
+	if(!enif_is_ref(env, argv[0]))
+		return make_error_tuple(env, "invalid_ref");
+	if(!enif_get_local_pid(env, argv[1], &pid))
+		return make_error_tuple(env, "invalid_pid");
+	if(!enif_get_uint(env, argv[3], &thread))
+		return make_error_tuple(env, "invalid_pid");
+
+	thread %= pd->nthreads;
+	item = command_create(thread,pd);
+	item->cmd.type = cmd_actor_info;
+	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
+	item->cmd.pid = pid;
+	item->cmd.arg = enif_make_copy(item->cmd.env,argv[2]);
+
+	enif_consume_timeslice(env,500);
+	return push_command(thread, pd, item);
+}
 
 // argv[0] - Ref
 // argv[1] - Pid to respond to
@@ -2380,9 +2480,8 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	ErlNifPid pid;
 	qitem *item;
-	unsigned int thread;
+	u32 thread;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
-	int nthreads = pd->nthreads;
 
 	DBG((g_log,"db_open\n"));
 
@@ -2395,7 +2494,7 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if(!enif_get_uint(env, argv[3], &thread))
 		return make_error_tuple(env, "invalid_pid");
 
-	thread %= nthreads;
+	thread %= pd->nthreads;
 	item = command_create(thread,pd);
 
 	item->cmd.type = cmd_open;
@@ -3517,7 +3616,9 @@ static ErlNifFunc nif_funcs[] = {
 	{"inject_page",5,inject_page},
 	// {"wal_rewind",4,drv_wal_rewind},
 	{"delete_actor",1,delete_actor},
+	{"actor_info",4,get_actor_info},
 	{"term_store",3,term_store},
+
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

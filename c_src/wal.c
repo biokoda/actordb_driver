@@ -55,19 +55,26 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	MDB_val key, data;
 	int rc;
 	db_thread *thr = (db_thread*)walData;
-
 	Wal *pWal = &thr->curConn->wal;
-	pWal->thread = thr;
-	MDB_dbi actorsdb = thr->actorsdb, infodb = thr->infodb;
+	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn;
+	int offset;
+
+	pWal->thread = thr;
+	actorsdb = thr->actorsdb;
+	infodb = thr->infodb;
+
+	if (zWalName[0] == '/')
+		offset = 1;
 
 	DBG((g_log,"Wal name=%s\n",zWalName));
 
 	if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return SQLITE_ERROR;
 
-	key.mv_size = strlen(zWalName);
-	key.mv_data = (void*)zWalName;//thr->curConn->dbpath;
+	// shorten size to ignore "-wal" at the end
+	key.mv_size = strlen(zWalName+offset)-4;
+	key.mv_data = (void*)zWalName+offset;//thr->curConn->dbpath;
 	rc = mdb_get(txn,actorsdb,&key,&data);
 
 	// This is new actor, assign an index
@@ -134,17 +141,11 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 				mdb_txn_abort(txn);
 				return SQLITE_ERROR;
 			}
-			// pWal->firstCompleteTerm = *(v);
 			memcpy(&pWal->firstCompleteTerm, data.mv_data+1, sizeof(u64));
-			// pWal->firstCompleteEvnum = *(v+sizeof(u64));
 			memcpy(&pWal->firstCompleteEvnum, data.mv_data+1+sizeof(u64), sizeof(u64));
-			// pWal->lastCompleteTerm = *(v+sizeof(u64)*2);
 			memcpy(&pWal->lastCompleteTerm, data.mv_data+1+sizeof(u64)*2, sizeof(u64));
-			// pWal->lastCompleteEvnum = *(v+sizeof(u64)*3);
 			memcpy(&pWal->lastCompleteEvnum, data.mv_data+1+sizeof(u64)*3, sizeof(u64));
-			// pWal->inProgressTerm = *(v+sizeof(u64)*4);
 			memcpy(&pWal->inProgressTerm, data.mv_data+1+sizeof(u64)*4, sizeof(u64));
-			// pWal->inProgressEvnum = *(v+sizeof(u64)*5);
 			memcpy(&pWal->inProgressEvnum, data.mv_data+1+sizeof(u64)*5, sizeof(u64));
 			memcpy(&pWal->mxPage, data.mv_data+1+sizeof(u64)*6,sizeof(u32));
 
