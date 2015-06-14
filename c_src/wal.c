@@ -793,7 +793,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			wal_page_hook(thr,pagesBuf+sizeof(u64)*2+1, page_size, hdr, sizeof(hdr));
 		}
 
-        memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
+		memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 		memcpy(pagesKeyBuf + sizeof(u64), &p->pgno,    sizeof(u32));
 		key.mv_size = sizeof(pagesKeyBuf);
 		key.mv_data = pagesKeyBuf;
@@ -812,7 +812,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 				memcpy(&evterm, data.mv_data,               sizeof(u64));
 				memcpy(&evnum,  data.mv_data + sizeof(u64), sizeof(u64));
 
-				while (evterm > pWal->inProgressTerm || evnum >= pWal->inProgressEvnum)
+				while ((evterm > pWal->inProgressTerm || evnum >= pWal->inProgressEvnum) &&
+						(pWal->inProgressTerm + pWal->inProgressEvnum) > 0)
 				{
 					DBG((g_log,"Deleting pages higher or equal to current. "
 					"Evterm=%llu, evnum=%llu, curterm=%llu, curevn=%llu\r\n",
