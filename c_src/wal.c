@@ -217,7 +217,7 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 	int rc;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 
-	DBG((g_log,"FIND FRAME pgno=%u\n",pgno));
+	DBG((g_log,"FIND FRAME pgno=%u, index=%llu\n",pgno,pWal->index));
 
 	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
 	memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
@@ -621,7 +621,8 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 
 	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 	{
-		DBG((g_log,"Key not found in log for undo\n"));
+		DBG((g_log,"Key not found in log for undo, index=%llu, term=%llu, evnum=%llu\n",
+		pWal->index, pWal->inProgressTerm, pWal->inProgressEvnum));
 		return SQLITE_OK;
 	}
 	logop = MDB_FIRST_DUP;
@@ -690,8 +691,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 /* Undo any frames written (but not committed) to the log */
 int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 {
-	// no need to actually delete pages because it will not be comitted anyway.
-	return doundo(pWal,xUndo, pUndoCtx,0);
+	return doundo(pWal,xUndo, pUndoCtx,1);
 }
 
 /* Return an integer that records the current (uncommitted) write
@@ -780,11 +780,6 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
 		pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,isCommit,nTruncate,page_size));
 
-		memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
-		memcpy(pagesKeyBuf + sizeof(u64), &p->pgno,    sizeof(u32));
-		key.mv_size = sizeof(pagesKeyBuf);
-		key.mv_data = pagesKeyBuf;
-
 		if (pCon->doReplicate)
 		{
 			u8 hdr[sizeof(u64)*2+sizeof(u32)*2+1];
@@ -798,6 +793,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			wal_page_hook(thr,pagesBuf+sizeof(u64)*2+1, page_size, hdr, sizeof(hdr));
 		}
 
+        memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
+		memcpy(pagesKeyBuf + sizeof(u64), &p->pgno,    sizeof(u32));
+		key.mv_size = sizeof(pagesKeyBuf);
+		key.mv_data = pagesKeyBuf;
 
 		// Check if there are pages with the same or higher evnum/evterm. If there are, delete them.
 		// This can happen if sqlite flushed some page to disk before commiting, because there were
@@ -831,6 +830,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 					memcpy(&evnum,  data.mv_data + sizeof(u64), sizeof(u64));
 				}
 			}
+			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
+			memcpy(pagesKeyBuf + sizeof(u64), &p->pgno,    sizeof(u32));
+			key.mv_size = sizeof(pagesKeyBuf);
+			key.mv_data = pagesKeyBuf;
 		}
 
 		memcpy(pagesBuf,               &pWal->inProgressTerm,  sizeof(u64));

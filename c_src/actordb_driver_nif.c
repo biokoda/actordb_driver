@@ -1436,6 +1436,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 
 	if (cmd->conn->wal.inProgressTerm > 0 || cmd->conn->wal.inProgressEvnum > 0)
 	{
+		DBG((g_log,"undo before exec, %llu, %llu\n",cmd->conn->wal.inProgressTerm,cmd->conn->wal.inProgressEvnum));
 		doundo(&cmd->conn->wal, NULL, NULL, 1);
 		// mdb_txn_abort(thread->wtxn);
 		// open_wtxn(thread);
@@ -2318,8 +2319,6 @@ thread_func(void *arg)
 		pagesChanged = data->pagesChanged;
 
 		// printf("Queue size %d\r\n",queue_size(data->tasks));
-		DBG((g_log,"HUH?\n"));
-
 		DBG((g_log,"thread=%d command=%d, conn=%d.\n",data->index,item->cmd.type,item->cmd.connindex));
 
 		if (item->cmd.type == cmd_stop)
@@ -2483,7 +2482,7 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	u32 thread;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"db_open\n"));
+	// DBG((g_log,"db_open\n"));
 
 	if(!(argc == 5 || argc == 6))
 		return enif_make_badarg(env);
@@ -2520,7 +2519,7 @@ replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"replicate_opts\n"));
+	// DBG((g_log,"replicate_opts\n"));
 
 	if (!(argc == 5))
 		return enif_make_badarg(env);
@@ -2572,7 +2571,7 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log, "tcp_connect\n"));
+	// DBG((g_log, "tcp_connect\n"));
 
 	if (!(argc == 6 || argc == 7))
 		return enif_make_badarg(env);
@@ -2832,7 +2831,7 @@ lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	int size;
 	ERL_NIF_TERM termbin;
 
-	DBG((g_log, "lz4_compress\n"));
+	// DBG((g_log, "lz4_compress\n"));
 
 	if (argc != 1)
 		return enif_make_badarg(env);
@@ -2859,7 +2858,7 @@ lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	int sizeReadNum;
 	int rt;
 
-	DBG((g_log, "lz4_decompress\n"));
+	// DBG((g_log, "lz4_decompress\n"));
 
 	if (argc != 2 && argc != 3)
 		return enif_make_badarg(env);
@@ -2921,7 +2920,7 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	int nthreads = pd->nthreads;
 
-	DBG((g_log, "all_tunnel_call\n"));
+	// DBG((g_log, "all_tunnel_call\n"));
 
 	if (argc != 3)
 		return enif_make_badarg(env);
@@ -2959,7 +2958,7 @@ store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	int nthreads = pd->nthreads;
 
-	DBG((g_log,"store_prepared_table\n"));
+	// DBG((g_log,"store_prepared_table\n"));
 
 	if (argc != 2)
 		return enif_make_badarg(env);
@@ -2990,7 +2989,7 @@ db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"Checkpoint\r\n"));
+	// DBG((g_log,"Checkpoint\r\n"));
 
 	if (argc != 5)
 		return enif_make_badarg(env);
@@ -3029,7 +3028,7 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"exec_script %d\n",argc));
+	// DBG((g_log,"exec_script %d\n",argc));
 
 	if(argc != 7 && argc != 8)
 		return enif_make_badarg(env);
@@ -3052,7 +3051,6 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	item = command_create(res->thread,pd);
 
-	/* command */
 	item->cmd.type = cmd_exec_script;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
@@ -3077,7 +3075,7 @@ checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	int lock;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"checkpoint_lock\n"));
+	// DBG((g_log,"checkpoint_lock\n"));
 
 	if(argc != 4)
 		return enif_make_badarg(env);
@@ -3152,7 +3150,7 @@ iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"iterate_db\n"));
+	// DBG((g_log,"iterate_db\n"));
 
 	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
@@ -3165,7 +3163,6 @@ iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_pid");
 
 	item = command_create(res->thread,pd);
-
 	item->cmd.type = cmd_iterate;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
@@ -3185,7 +3182,7 @@ iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"iterate_close\n"));
+	// DBG((g_log,"iterate_close\n"));
 
 	if(argc != 1)
 		return enif_make_badarg(env);
@@ -3193,7 +3190,6 @@ iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return enif_make_badarg(env);
 
 	item = command_create(iter->thread,pd);
-
 	iter->closed = 1;
 	item->cmd.type = cmd_checkpoint_lock;
 	item->cmd.arg = enif_make_int(item->cmd.env, 0);
@@ -3211,7 +3207,7 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"inject_page\n"))
+	// DBG((g_log,"inject_page\n"))
 
 	if(argc != 5)
 		return enif_make_badarg(env);
@@ -3230,7 +3226,6 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env,"invalid header");
 
 	item = command_create(res->thread,pd);
-
 	item->cmd.type = cmd_inject_page;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
@@ -3247,7 +3242,7 @@ delete_actor(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	conn_resource *res;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
-	DBG((g_log,"delete_actor\n"));
+	// DBG((g_log,"delete_actor\n"));
 
 	if(argc != 1)
 		return enif_make_badarg(env);
@@ -3303,7 +3298,7 @@ bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"bind_insert\n"));
+	// DBG((g_log,"bind_insert\n"));
 
 	if(argc != 5)
 		return enif_make_badarg(env);
@@ -3321,8 +3316,6 @@ bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env,"invalid bind parameters");
 
 	item = command_create(res->thread,pd);
-
-	/* command */
 	item->cmd.type = cmd_bind_insert;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
@@ -3353,7 +3346,6 @@ noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_pid");
 
 	item = command_create(res->thread,pd);
-
 	item->cmd.type = cmd_unknown;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;

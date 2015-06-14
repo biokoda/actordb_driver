@@ -247,10 +247,10 @@ static int do_print(char *pth)
             memcpy(&term, data.mv_data,               sizeof(u64));
             memcpy(&num,  data.mv_data + sizeof(u64), sizeof(u64));
             frag = *(u8*)(data.mv_data + sizeof(u64)*2);
-            printf("  evnum=%lld, evterm=%lld, frag=%d\n",term,num,(int)frag);
+            printf("  evnum=%lld, evterm=%lld, frag=%d, pgsize=%ld\n",term,num,(int)frag,data.mv_size-sizeof(u64)*2-1);
             op = MDB_NEXT_DUP;
         }
-        rc = mdb_cursor_get(cursorPages,&key,&data,MDB_NEXT_NODUP);
+        rc = mdb_cursor_get(cursorPages,&key,&data,MDB_NEXT);
     }
 
     printf("-----------------------infodb--------------------------\n");
