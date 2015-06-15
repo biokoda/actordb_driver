@@ -1362,6 +1362,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 	char *errat = NULL;
 	char dofinalize = 1;
 	u32 pagesPre = thread->pagesChanged;
+	u64 newTerm,newEvnum;
 
 	const ERL_NIF_TERM *insertRow;
 	int rowLen = 0;
@@ -1380,8 +1381,8 @@ do_exec_script(db_command *cmd, db_thread *thread)
 	{
 		if (cmd->conn->writeNumToIgnore)
 			cmd->conn->writeNumToIgnore = 0;
-		enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->wal.inProgressTerm));
-		enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->wal.inProgressEvnum));
+		enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(newTerm));
+		enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(newEvnum));
 		enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
 	}
 
@@ -1392,6 +1393,13 @@ do_exec_script(db_command *cmd, db_thread *thread)
 		// mdb_txn_abort(thread->wtxn);
 		// open_wtxn(thread);
 	}
+	if (cmd->arg1)
+	{
+		cmd->conn->wal.inProgressTerm = newTerm;
+		cmd->conn->wal.inProgressEvnum = newEvnum;
+	}
+
+
 
 #ifdef _TESTDBG_
 	if (bin.size > 1024*10)
@@ -2168,14 +2176,14 @@ static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
 	return diff;
 }
 
-static int logdb_val_cmp(const MDB_val *a, const MDB_val *b)
-{
-	u32 aPgno;
-	u32 bPgno;
-	memcpy(&aPgno,a->mv_data,sizeof(u32));
-	memcpy(&bPgno,b->mv_data,sizeof(u32));
-	return aPgno - bPgno;
-}
+// static int logdb_val_cmp(const MDB_val *a, const MDB_val *b)
+// {
+// 	u32 aPgno;
+// 	u32 bPgno;
+// 	memcpy(&aPgno,a->mv_data,sizeof(u32));
+// 	memcpy(&bPgno,b->mv_data,sizeof(u32));
+// 	return aPgno - bPgno;
+// }
 
 static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
 {
@@ -2226,8 +2234,8 @@ static MDB_txn* open_wtxn(db_thread *data)
 		return NULL;
 	if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
 		return NULL;
-	if (mdb_set_dupsort(data->wtxn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
-		return NULL;
+	// if (mdb_set_dupsort(data->wtxn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
+	// 	return NULL;
 	if (mdb_cursor_open(data->wtxn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_cursor_open(data->wtxn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)

@@ -16,7 +16,7 @@
 
 ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 **   Also a dupsort. Every key is one sqlite write transaction. Values are a list of pages
-**   that have changed. Pgno is written big endian because memcmp will return correct sort order.
+**   that have changed.
 
 ** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
 									LastCompleteTerm:64,LastCompleteEvnum:64,
