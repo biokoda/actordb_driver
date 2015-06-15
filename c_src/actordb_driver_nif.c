@@ -1320,54 +1320,6 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	}
 	cmd->conn->wal.changed = 1;
 	return atom_ok;
-
-
-	// Recovery replication
-	// enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(cmd->conn->wal.inProgressTerm));
-	// enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(cmd->conn->wal.inProgressEvnum));
-	// enif_get_uint(cmd->env,cmd->arg3,&commit);
-	//
-	//
-	// for (pos = 0; pos < bin.size-6;)
-	// {
-	// 	u32 size = get2byte(bin.data+pos);
-	// 	u32 iscommit = 0;
-	//
-	// 	page.pgno = get4byte(bin.data+pos+2);
-	// 	if (size == 0)
-	// 		break;
-	//
-	// 	rc = LZ4_decompress_safe((char*)(bin.data+pos+6),(char*)pbuf,size,sizeof(pbuf));
-	// 	if (rc != sizeof(pbuf))
-	// 	{
-	// 		DBG((g_log,"Unable to decompress inject page!!\r\n"));
-	// 		return atom_false;
-	// 	}
-	//
-	// 	pos += size+6;
-	//
-	// 	// if this is last page and if commmit > 0, use it
-	// 	if (pos < bin.size-6)
-	// 	{
-	// 		size = get2byte(bin.data+pos);
-	// 		if (size == 0 && commit)
-	// 			iscommit = commit > curMxPage ? commit : curMxPage;
-	// 	}
-	// 	else if (commit)
-	// 		iscommit = commit > curMxPage ? commit : curMxPage;
-	//
-	// 	DBG((g_log,"Inject page=%u, commit=%d\r\n",page.pgno, iscommit));
-	// 	cmd->conn->doReplicate = 0;
-	// 	rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, iscommit, iscommit, 0);
-	// 	cmd->conn->doReplicate = doreplicate;
-	// 	if (rc != SQLITE_OK)
-	// 	{
-	// 		DBG((g_log,"Unable to write inject page\r\n"));
-	// 		return atom_false;
-	// 	}
-	// 	cmd->conn->wal.changed = 1;
-	// }
-	// return atom_ok;
 }
 
 static ERL_NIF_TERM
@@ -1384,7 +1336,6 @@ do_checkpoint(db_command *cmd, db_thread *thread)
 		return atom_ok;
 
 	checkpoint(&con->wal, evterm, evnum);
-
 
 	return atom_ok;
 }
