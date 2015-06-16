@@ -2230,12 +2230,12 @@ static MDB_txn* open_wtxn(db_thread *data)
 		return NULL;
 	if (mdb_set_compare(data->wtxn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;
-	if (mdb_set_dupsort(data->wtxn, data->logdb, logdb_val_cmp) != MDB_SUCCESS)
-		return NULL;
+	// if (mdb_set_dupsort(data->wtxn, data->logdb, logdb_val_cmp) != MDB_SUCCESS)
+	// 	return NULL;
 	if (mdb_set_compare(data->wtxn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
 		return NULL;
-	// if (mdb_set_dupsort(data->wtxn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
-	// 	return NULL;
+	if (mdb_set_dupsort(data->wtxn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
+		return NULL;
 	if (mdb_cursor_open(data->wtxn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_cursor_open(data->wtxn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
