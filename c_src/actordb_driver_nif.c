@@ -1183,18 +1183,23 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
 }
 
 
-// static ERL_NIF_TERM
-// do_wal_rewind(db_command *cmd, db_thread *thread)
-// {
-// 	// int rc;
-// 	// u64 evnum;
-// 	//
-// 	// enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
-// 	// rc = wal_rewind(cmd->conn,evnum);
-//
-// 	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
-// 	return atom_ok;
-// }
+static ERL_NIF_TERM
+do_wal_rewind(db_command *cmd, db_thread *thread)
+{
+	int rc = SQLITE_OK;
+	u64 evnum;
+	MDB_val key, data;
+	db_connection *con = cmd->conn;
+
+	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
+
+	if (evnum =< con->wal.firstCompleteEvnum)
+		return atom_false;
+
+	
+
+	return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
+}
 static ERL_NIF_TERM
 do_actor_info(db_command *cmd, db_thread *thr)
 {
@@ -2028,8 +2033,8 @@ evaluate_command(db_command cmd,db_thread *thread)
 		return do_inject_page(&cmd,thread);
 	case cmd_actor_info:
 		return do_actor_info(&cmd,thread);
-	// case cmd_wal_rewind:
-	// 	return do_wal_rewind(&cmd,thread);
+	case cmd_wal_rewind:
+		return do_wal_rewind(&cmd,thread);
 	case cmd_interrupt:
 		return do_interrupt(&cmd,thread);
 	case cmd_iterate:
@@ -3213,40 +3218,36 @@ delete_actor(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	return atom_ok;
 }
 
-// static ERL_NIF_TERM
-// drv_wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-// {
-// 	conn_resource *res;
-// 	ErlNifPid pid;
-// 	qitem *item;
-// 	priv_data *pd = (priv_data*)enif_priv_data(env);
-//
-// 	DBG((g_log,"WAL REWIND\n"));
-//
-// 	if(argc != 4)
-// 		return enif_make_badarg(env);
-// 	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
-// 		return enif_make_badarg(env);
-//
-// 	if(!enif_is_ref(env, argv[1]))
-// 		return make_error_tuple(env, "invalid_ref");
-// 	if(!enif_get_local_pid(env, argv[2], &pid))
-// 		return make_error_tuple(env, "invalid_pid");
-// 	if (!enif_is_number(env,argv[3]))
-// 		return make_error_tuple(env,"not evnum");
-//
-// 	item = command_create(res->thread,pd);
-//
-// 	/* command */
-// 	item->cmd.type = cmd_wal_rewind;
-// 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-// 	item->cmd.pid = pid;
-// 	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
-// 	item->cmd.connindex = res->connindex;
-//
-// 	enif_consume_timeslice(env,500);
-// 	return push_command(res->thread, pd, item);
-// }
+static ERL_NIF_TERM
+wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	conn_resource *res;
+	ErlNifPid pid;
+	qitem *item;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	if(argc != 4)
+		return enif_make_badarg(env);
+	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		return enif_make_badarg(env);
+
+	if(!enif_is_ref(env, argv[1]))
+		return make_error_tuple(env, "invalid_ref");
+	if(!enif_get_local_pid(env, argv[2], &pid))
+		return make_error_tuple(env, "invalid_pid");
+	if (!enif_is_number(env,argv[3]))
+		return make_error_tuple(env,"not evnum");
+
+	item = command_create(res->thread,pd);
+	item->cmd.type = cmd_wal_rewind;
+	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+	item->cmd.pid = pid;
+	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
+	item->cmd.connindex = res->connindex;
+
+	enif_consume_timeslice(env,500);
+	return push_command(res->thread, pd, item);
+}
 
 
 static ERL_NIF_TERM
@@ -3565,7 +3566,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"iterate_close",1,iterate_close},
 	{"page_size",0,page_size},
 	{"inject_page",5,inject_page},
-	// {"wal_rewind",4,drv_wal_rewind},
+	{"wal_rewind",4,wal_rewind},
 	{"delete_actor",1,delete_actor},
 	{"actor_info",4,get_actor_info},
 	{"term_store",3,term_store},

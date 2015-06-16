@@ -28,7 +28,7 @@ bind_insert/5,
 all_tunnel_call/3,
 checkpoint_lock/4,
 inject_page/5,
-% wal_rewind/4,
+wal_rewind/4,
 delete_actor/1,
 checkpoint/5,
 term_store/3,
@@ -47,8 +47,8 @@ checkpoint(_,_,_,_,_) ->
 delete_actor(_) ->
 	exit(nif_library_not_loaded).
 
-% wal_rewind(_,_,_,_) ->
-% 	exit(nif_library_not_loaded).
+wal_rewind(_,_,_,_) ->
+	exit(nif_library_not_loaded).
 
 page_size() ->
 	exit(nif_library_not_loaded).

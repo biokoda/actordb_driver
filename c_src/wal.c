@@ -26,7 +26,7 @@
 **   FirstComplete(term/evnum) - First entry for actor in Log DB.
 **   LastComplete(term/evnum) - Last entry in log that is commited.
 **   InProgress(term/evnum) - pages from this evnum+evterm combination are not commited. If actor has just opened
-**and it has these values set, it must delete pages to continue.
+**                            and it has these values set, it must delete pages to continue.
 **   CurrentTerm - raft parameter. This stores the highest term actor has seen
 **   VotedFor - which node actor voted for
 
