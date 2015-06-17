@@ -448,7 +448,42 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 // DBG((g_log,"D %llu %llu\n",iter->evterm,iter->evnum));
 		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
+			// Evterm/evnum combination not found. Check if evnum is there.
+			// If so return evterm. It will mean a node is in conflict.
 			DBG((g_log,"Key not found in log\n"));
+			if (pWal->lastCompleteEvnum == iter->evnum)
+			{
+				iter->evterm = pWal->lastCompleteTerm;
+				iter->termMismatch = 1;
+			}
+			else
+			{
+				memcpy(logKeyBuf,                 &pWal->index,  sizeof(u64));
+				memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
+				memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
+				if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+				{
+					DBG((g_log,"Key not found in log for undo\n"));
+					return atom_false;
+				}
+				while (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV) == MDB_SUCCESS)
+				{
+					u64 aindex, term, evnum;
+					memcpy(&aindex, logKey.mv_data,              sizeof(u64));
+					memcpy(&term,   logKey.mv_data+sizeof(u64),  sizeof(u64));
+					memcpy(&evnum,  logKey.mv_data+sizeof(u64)*2,sizeof(u64));
+
+					if (aindex != pWal->index)
+						break;
+					if (iter->evnum == evnum)
+					{
+						iter->evterm = term;
+						iter->termMismatch = 1;
+						break;
+					}
+				}
+			}
+
 			*done = 1;
 			return 0;
 		}

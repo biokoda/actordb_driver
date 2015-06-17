@@ -1135,6 +1135,8 @@ do_iterate(db_command *cmd, db_thread *thread)
 
 	if (nfilled == 0 && done == 1)
 	{
+		if (iter->termMismatch)
+			return enif_make_tuple(cmd->env, atom_ok, enif_make_uint64(cmd->env,iter->evterm));
 		return atom_done;
 	}
 	else

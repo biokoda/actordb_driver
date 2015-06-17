@@ -225,11 +225,12 @@ struct iterate_resource
 	int thread;
 	int connindex;
 
+	u32 mxPage;
+
 	char started;
 	char closed;
 	char entiredb;
-
-	u32 mxPage;
+	char termMismatch;
 };
 
 // /* backup object */
