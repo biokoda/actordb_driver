@@ -1201,7 +1201,8 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	DBG((g_log,"do_wal_rewind\r\n"));
 
-	if (limitEvnum < pWal->firstCompleteEvnum)
+	// if limitEvnum == 0, this means delete all pages for actor.
+	if (limitEvnum < pWal->firstCompleteEvnum || limitEvnum == 0)
 		return atom_false;
 
 	if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
