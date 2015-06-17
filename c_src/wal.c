@@ -194,6 +194,8 @@ int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
 	DBG((g_log,"Begin read trans %d\n",pWal->changed));
 	*pChanged = pWal->changed;
+	if (pWal->changed)
+		pWal->changed = 0;
 	return SQLITE_OK;
 }
 
@@ -217,7 +219,7 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 	int rc;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 
-	DBG((g_log,"FIND FRAME pgno=%u, index=%llu\n",pgno,pWal->index));
+	DBG((g_log,"FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu\n",pgno,pWal->index,limitTerm,limitEvnum));
 
 	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
 	memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
@@ -248,6 +250,7 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 						continue;
 					else
 					{
+						DBG((g_log,"Cant move to prev dup\r\n"));
 						*piRead = 0;
 						break;
 					}
@@ -273,7 +276,10 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 			}
 		}
 		else
+		{
+			DBG((g_log,"Find page no last dup\r\n"));
 			*piRead = 0;
+		}
 	}
 	else if (rc == MDB_NOTFOUND)
 	{
@@ -499,9 +505,8 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 int checkpoint(Wal *pWal, u64 limitEvterm, u64 limitEvnum)
 {
 	MDB_val logKey, logVal;
-	MDB_val pgKey, pgVal;
 	u8 logKeyBuf[sizeof(u64)*3];
-	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+
 	db_thread *thr = pWal->thread;
 	int logop, pgop, mrc;
 	u64 evnum,evterm,aindex;
@@ -509,11 +514,10 @@ int checkpoint(Wal *pWal, u64 limitEvterm, u64 limitEvnum)
 	if (pWal->inProgressTerm == 0)
 		return SQLITE_OK;
 
-	logKey.mv_data = logKeyBuf;
-	logKey.mv_size = sizeof(logKeyBuf);
-
 	DBG((g_log,"checkpoint\r\n"));
 
+	logKey.mv_data = logKeyBuf;
+	logKey.mv_size = sizeof(logKeyBuf);
 	memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
 	memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
 	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
@@ -534,34 +538,50 @@ int checkpoint(Wal *pWal, u64 limitEvterm, u64 limitEvnum)
 		while ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
 			u32 pgno;
-			memcpy(&pgno,logVal.mv_data,sizeof(u32));
+			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+			MDB_val pgKey, pgVal;
+			u8 haveLeftover = 0;
+
+			memcpy(&pgno, logVal.mv_data,sizeof(u32));
+
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
 			pgKey.mv_data = pagesKeyBuf;
 			pgKey.mv_size = sizeof(pagesKeyBuf);
 
-			pgop = MDB_FIRST_DUP;
+			pgop = MDB_LAST_DUP;
 			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 			{
 				continue;
 			}
 			while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 			{
+				u8 frag = *(u8*)(pgVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
 				memcpy(&evnum,  pgVal.mv_data+sizeof(u64),sizeof(u64));
 				// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
 				//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
 				if (evterm < limitEvterm || evnum < limitEvnum)
 				{
-					// DBG((g_log,"DELETING!\n"));
-					mdb_cursor_del(thr->cursorPages,0);
+					// One write may have touched entirely different pages than another.
+					// So there must be a leftover page for us to start deleting.
+					// Only checking limitevterm/evnum is not enough.
+					// We can delete all pages only if DB shrank and pgno > max page.
+					if (haveLeftover || pgno > pWal->mxPage)
+						mdb_cursor_del(thr->cursorPages,0);
+					else
+					{
+						if (frag == 0)
+							haveLeftover = 1;
+					}
 				}
 				else
 				{
-					break;
+					if (frag == 0)
+						haveLeftover = 1;
 				}
 
-				pgop = MDB_NEXT_DUP;
+				pgop = MDB_PREV_DUP;
 			}
 
 			logop = MDB_NEXT_DUP;
@@ -570,7 +590,7 @@ int checkpoint(Wal *pWal, u64 limitEvterm, u64 limitEvnum)
 		{
 			DBG((g_log,"Unable to cleanup key from logdb\n"));
 		}
-		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT) != MDB_SUCCESS)
+		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP) != MDB_SUCCESS)
 		{
 			DBG((g_log,"Unable to move to next log\n"));
 			break;
@@ -921,8 +941,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	{
 		if (isCommit)
 		{
-			pWal->lastCompleteTerm = pWal->inProgressTerm;
-			pWal->lastCompleteEvnum = pWal->inProgressEvnum;
+			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? pWal->inProgressTerm : pWal->lastCompleteTerm;
+			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? pWal->inProgressEvnum : pWal->lastCompleteEvnum;
 			pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 			pWal->mxPage = nTruncate;
 			pWal->changed = 0;

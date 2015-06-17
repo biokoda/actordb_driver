@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1184,21 +1184,121 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
 
 
 static ERL_NIF_TERM
-do_wal_rewind(db_command *cmd, db_thread *thread)
+do_wal_rewind(db_command *cmd, db_thread *thr)
 {
-	int rc = SQLITE_OK;
-	u64 evnum;
-	MDB_val key, data;
-	db_connection *con = cmd->conn;
+	// Rewind discards a certain number of writes. This may happen due to consensus conflicts.
+	// Rewind is very similar to checkpoint. Checkpoint goes from beginning (from firstCompleteEvterm/Evnum),
+	// forward to some limit. Rewind goes from the end (from lastCompleteEvterm/Evnum) backwards to some limit evnum (including the limit).
+	// DB may get shrunk in the process.
 
-	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evnum);
+	MDB_val logKey, logVal;
+	u8 logKeyBuf[sizeof(u64)*3];
+	int logop, pgop, rc;
+	u64 evnum,evterm,aindex,limitEvnum;
+	Wal *pWal = &cmd->conn->wal;
 
-	if (evnum =< con->wal.firstCompleteEvnum)
+	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&limitEvnum);
+
+	DBG((g_log,"do_wal_rewind\r\n"));
+
+	if (limitEvnum < pWal->firstCompleteEvnum)
 		return atom_false;
 
-	
+	if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
+	{
+		DBG((g_log,"undo before rewind, %llu, %llu\n",pWal->inProgressTerm, pWal->inProgressEvnum));
+		doundo(&cmd->conn->wal, NULL, NULL, 1);
+	}
 
-	return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
+	logKey.mv_data = logKeyBuf;
+	logKey.mv_size = sizeof(logKeyBuf);
+
+	memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
+	memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
+	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
+
+	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+	{
+		DBG((g_log,"Key not found in log for undo\n"));
+		return atom_false;
+	}
+
+	while (pWal->lastCompleteEvnum >= limitEvnum)
+	{
+		// For every page here
+		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
+		// Delete from
+		// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
+		logop = MDB_LAST_DUP;
+		while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+		{
+			u32 pgno;
+			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+			MDB_val pgKey, pgVal;
+
+			memcpy(&pgno, logVal.mv_data,sizeof(u32));
+			DBG((g_log,"Moving to pgno=%u, evnum=%llu\r\n",pgno,pWal->lastCompleteEvnum));
+
+			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
+			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
+			pgKey.mv_data = pagesKeyBuf;
+			pgKey.mv_size = sizeof(pagesKeyBuf);
+
+			pgop = MDB_LAST_DUP;
+			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+			{
+				continue;
+			}
+			while ((rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop)) == MDB_SUCCESS)
+			{
+				// memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
+				memcpy(&evnum,  pgVal.mv_data+sizeof(u64),sizeof(u64));
+				DBG((g_log,"Deleting pgno=%u, evnum=%llu\r\n",pgno,evnum));
+				if (evnum >= limitEvnum)
+				{
+					mdb_cursor_del(thr->cursorPages,0);
+				}
+				else
+					break;
+
+				pgop = MDB_PREV_DUP;
+			}
+			DBG((g_log,"Done looping pages %d\n",rc));
+			// if reached notfound, this means we deleted all versions of page.
+			// If this is last page, we have shrunk DB.
+			if (rc == MDB_NOTFOUND && pgno == pWal->mxPage)
+				pWal->mxPage--;
+
+			logop = MDB_PREV_DUP;
+		}
+		if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
+		{
+			DBG((g_log,"Rewind Unable to cleanup key from logdb\n"));
+		}
+		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) != MDB_SUCCESS)
+		{
+			DBG((g_log,"Rewind Unable to move to next log\n"));
+			break;
+		}
+		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
+		memcpy(&evterm, logKey.mv_data + sizeof(u64),   sizeof(u64));
+		memcpy(&evnum,  logKey.mv_data + sizeof(u64)*2, sizeof(u64));
+
+		if (aindex != pWal->index)
+		{
+			DBG((g_log,"Rewind Reached another actor=%llu, me=%llu\n",aindex,pWal->index));
+			break;
+		}
+		pWal->lastCompleteTerm = evterm;
+		pWal->lastCompleteEvnum = evnum;
+	}
+	DBG((g_log,"evterm = %llu, evnum=%llu\r\n",pWal->lastCompleteTerm, pWal->lastCompleteEvnum));
+	// no dirty pages, but will write info
+	sqlite3WalFrames(pWal, SQLITE_DEFAULT_PAGE_SIZE, NULL, pWal->mxPage, 1, 0);
+	pWal->changed = 1;
+
+	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
+	return atom_ok;
 }
 static ERL_NIF_TERM
 do_actor_info(db_command *cmd, db_thread *thr)

@@ -73,7 +73,11 @@ dbcopy() ->
 	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
 	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
 	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),
-	?debugFmt("Get actor info ~p",[actordb_driver:actor_info("original",0)]).
+	?debugFmt("Get actor info ~p",[actordb_driver:actor_info("original",0)]),
+	?debugFmt("Rewind original to last insert!",[]),
+	ok = actordb_driver:wal_rewind(Db,3),
+	FirstInject = actordb_driver:exec_script("select * from tab;",Db),
+	?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
 
 
 copy(Orig,Iter,F,Copy) ->

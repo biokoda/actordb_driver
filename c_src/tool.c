@@ -103,14 +103,14 @@ static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
 	return diff;
 }
 
-static int logdb_val_cmp(const MDB_val *a, const MDB_val *b)
-{
-	u32 aPgno;
-	u32 bPgno;
-	memcpy(&aPgno,a->mv_data,sizeof(u32));
-	memcpy(&bPgno,b->mv_data,sizeof(u32));
-	return aPgno - bPgno;
-}
+// static int logdb_val_cmp(const MDB_val *a, const MDB_val *b)
+// {
+// 	u32 aPgno;
+// 	u32 bPgno;
+// 	memcpy(&aPgno,a->mv_data,sizeof(u32));
+// 	memcpy(&bPgno,b->mv_data,sizeof(u32));
+// 	return aPgno - bPgno;
+// }
 
 static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
 {
@@ -183,8 +183,8 @@ static int do_print(char *pth)
 		return -1;
 	if (mdb_set_compare(txn, logdb, logdb_cmp) != MDB_SUCCESS)
 		return -1;
-	if (mdb_set_dupsort(txn, logdb, logdb_val_cmp) != MDB_SUCCESS)
-		return -1;
+	// if (mdb_set_dupsort(txn, logdb, logdb_val_cmp) != MDB_SUCCESS)
+	// 	return -1;
 	if (mdb_set_compare(txn, pagesdb, pagesdb_cmp) != MDB_SUCCESS)
 		return -1;
 	if (mdb_set_dupsort(txn, pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
@@ -216,7 +216,7 @@ static int do_print(char *pth)
         memcpy(&index, key.mv_data,                 sizeof(u64));
         memcpy(&term,  key.mv_data + sizeof(u64),   sizeof(u64));
         memcpy(&num,   key.mv_data + sizeof(u64)*2, sizeof(u64));
-        printf("Page index for: actor=%llu, term=%llu, evnum=%llu\n",index, term,num);
+        printf("logdb: actor=%llu, term=%llu, evnum=%llu\n",index, term,num);
 
         op = MDB_FIRST_DUP;
         while ((rc = mdb_cursor_get(cursorLog,&key,&data, op)) == MDB_SUCCESS)
@@ -237,7 +237,7 @@ static int do_print(char *pth)
         u32 pgno;
         memcpy(&index, key.mv_data, sizeof(u64));
         memcpy(&pgno, key.mv_data + sizeof(u64), sizeof(u32));
-        printf("Pages for: actor=%llu, pgno=%u\n",index, pgno);
+        printf("pagesdb: actor=%llu, pgno=%u\n",index, pgno);
 
         op = MDB_FIRST_DUP;
         while ((rc = mdb_cursor_get(cursorPages,&key,&data, op)) == MDB_SUCCESS)
@@ -247,7 +247,7 @@ static int do_print(char *pth)
             memcpy(&term, data.mv_data,               sizeof(u64));
             memcpy(&num,  data.mv_data + sizeof(u64), sizeof(u64));
             frag = *(u8*)(data.mv_data + sizeof(u64)*2);
-            printf("  evnum=%lld, evterm=%lld, frag=%d, pgsize=%ld\n",term,num,(int)frag,data.mv_size-sizeof(u64)*2-1);
+            printf("  evterm=%lld, evnum=%lld, frag=%d, pgsize=%ld\n",term,num,(int)frag,data.mv_size-sizeof(u64)*2-1);
             op = MDB_NEXT_DUP;
         }
         rc = mdb_cursor_get(cursorPages,&key,&data,MDB_NEXT);
