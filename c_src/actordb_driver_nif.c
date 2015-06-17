@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1081,6 +1081,8 @@ do_iterate(db_command *cmd, db_thread *thread)
 	ErlNifBinary header;
 	u8 buf[PAGE_BUFF_SIZE];
 	u8 hdrbuf[sizeof(u64)*2+sizeof(u32)*2+1];
+	u64 evterm;
+	char mismatch = 0;
 
 	if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
 	{
@@ -1129,14 +1131,16 @@ do_iterate(db_command *cmd, db_thread *thread)
 		enif_release_binary(&bin);
 		enif_release_binary(&header);
 	}
+	evterm = iter->evterm;
+	mismatch = iter->termMismatch;
 
 	if (dorel || done)
 		enif_release_resource(iter);
 
 	if (nfilled == 0 && done == 1)
 	{
-		if (iter->termMismatch)
-			return enif_make_tuple(cmd->env, atom_ok, enif_make_uint64(cmd->env,iter->evterm));
+		if (mismatch)
+			return enif_make_tuple2(cmd->env, atom_ok, enif_make_uint64(cmd->env,evterm));
 		return atom_done;
 	}
 	else

@@ -75,6 +75,7 @@ dbcopy() ->
 	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),
 	?debugFmt("Get actor info ~p",[actordb_driver:actor_info("original",0)]),
 	?debugFmt("Rewind original to last insert!",[]),
+	{ok,1} = actordb_driver:iterate_db(Db,2,10),
 	ok = actordb_driver:wal_rewind(Db,3),
 	FirstInject = actordb_driver:exec_script("select * from tab;",Db),
 	?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
