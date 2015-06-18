@@ -1064,7 +1064,7 @@ do_iterate(db_command *cmd, db_thread *thread)
 	u32 done = 0;
 	ErlNifBinary header;
 	u8 buf[PAGE_BUFF_SIZE];
-	u8 hdrbuf[sizeof(u64)*2+sizeof(u32)*2+1];
+	u8 hdrbuf[sizeof(u64)*2+sizeof(u32)*2];
 	u64 evterm;
 	char mismatch = 0;
 
@@ -1105,7 +1105,7 @@ do_iterate(db_command *cmd, db_thread *thread)
 
 	if (nfilled > 0)
 	{
-		enif_alloc_binary(sizeof(u64)*2+sizeof(u32)*2+1, &header);
+		enif_alloc_binary(sizeof(u64)*2+sizeof(u32)*2, &header);
 		enif_alloc_binary(nfilled, &bin);
 		memcpy(bin.data, buf, nfilled);
 		memcpy(header.data, hdrbuf, sizeof(hdrbuf));
@@ -1425,7 +1425,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	page.pData = pbuf;
 	enif_inspect_binary(cmd->env,cmd->arg1,&header);
 
-	if (header.size != sizeof(u64)*2+sizeof(u32)*2+1)
+	if (header.size != sizeof(u64)*2+sizeof(u32)*2)
 		return atom_false;
 
 	evterm = get8byte(header.data);

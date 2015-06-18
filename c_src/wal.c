@@ -843,7 +843,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 
 		if (pCon->doReplicate)
 		{
-			u8 hdr[sizeof(u64)*2+sizeof(u32)*2+1];
+			u8 hdr[sizeof(u64)*2+sizeof(u32)*2];
 			put8byte(hdr,               pWal->inProgressTerm);
 			put8byte(hdr+sizeof(u64),   pWal->inProgressEvnum);
 			put4byte(hdr+sizeof(u64)*2, p->pgno);
