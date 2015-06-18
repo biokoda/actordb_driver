@@ -39,6 +39,11 @@
 
 ** Endianess: Data is written as is. Practicaly no relevant platforms are in big endian and I can't see
 ** a scenario where a lmdb file would be moved between different endian platforms.
+
+** Vacuum is not (and should) not be used. A DB that shrinks poses problems for replication.
+** Replication completes with nTruncate set to mx page that we have replicated. This may be
+** actual mxPage but will usually not be. If DB shrank with a write, we don't know if nTruncate is
+** actually new mxPage or not. With regular write nTruncate will always be mxPage.
 */
 static int checkpoint(Wal *pWal, u64 evterm, u64 evnum);
 static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum);
@@ -464,7 +469,8 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 				if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 				{
 					DBG((g_log,"Key not found in log for undo\n"));
-					return atom_false;
+					*done = 1;
+					return 0;
 				}
 				while (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV) == MDB_SUCCESS)
 				{
@@ -507,14 +513,14 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 
 			if (iRead == 0)
 			{
-				DBG((g_log,"Did not find frame for pgno=%u, evterm=%llu, evnum=%llu",pgno, iter->evterm, iter->evnum));
+				DBG((g_log,"iterateerror, Did not find frame for pgno=%u, evterm=%llu, evnum=%llu",pgno, iter->evterm, iter->evnum));
 				*done = 1;
 				return 0;
 			}
 
 			if (evterm != iter->evterm || evnum != iter->evnum)
 			{
-				DBG((g_log,"Evterm/evnum does not match,looking for: evterm=%llu, evnum=%llu, "
+				DBG((g_log,"iterateerror, Evterm/evnum does not match,looking for: evterm=%llu, evnum=%llu, "
 				"got: evterm=%llu, evnum=%llu", iter->evterm, iter->evnum, evterm, evnum));
 				*done = 1;
 				return 0;
@@ -531,9 +537,9 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			put4byte(hdr+sizeof(u64)*2+sizeof(u32), *done);
 			return fillbuff(pWal, iter, buf, bufsize);
 		}
+		*done = 1;
+		return 0;
 	}
-	*done = 1;
-	return 0;
 }
 
 // Delete all pages up to limitEvterm and limitEvnum
@@ -844,7 +850,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			if (p->pDirty)
 				put4byte(hdr+sizeof(u64)*2+sizeof(u32), 0);
 			else
-				put4byte(hdr+sizeof(u64)*2+sizeof(u32), isCommit);
+				put4byte(hdr+sizeof(u64)*2+sizeof(u32), nTruncate);
 			wal_page_hook(thr,pagesBuf+sizeof(u64)*2+1, page_size, hdr, sizeof(hdr));
 		}
 
@@ -979,7 +985,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? pWal->inProgressTerm : pWal->lastCompleteTerm;
 			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? pWal->inProgressEvnum : pWal->lastCompleteEvnum;
 			pWal->inProgressTerm = pWal->inProgressEvnum = 0;
-			pWal->mxPage = nTruncate;
+			pWal->mxPage =  pWal->mxPage > nTruncate ? pWal->mxPage : nTruncate;
 			pWal->changed = 0;
 		}
 		else
@@ -1086,12 +1092,12 @@ static u64 get8byte(u8* buf)
 }
 static void put8byte(u8* buf, u64 num)
 {
-  buf[0] = num >> 56;
-  buf[1] = num >> 48;
-  buf[2] = num >> 40;
-  buf[3] = num >> 32;
-  buf[4] = num >> 24;
-  buf[5] = num >> 16;
-  buf[6] = num >> 8;
-  buf[7] = num;
+	buf[0] = num >> 56;
+	buf[1] = num >> 48;
+	buf[2] = num >> 40;
+	buf[3] = num >> 32;
+	buf[4] = num >> 24;
+	buf[5] = num >> 16;
+	buf[6] = num >> 8;
+	buf[7] = num;
 }

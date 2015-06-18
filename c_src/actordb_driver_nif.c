@@ -1440,6 +1440,11 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	{
 		doundo(&cmd->conn->wal,NULL,NULL,1);
 	}
+	else if (cmd->conn->wal.inProgressTerm+cmd->conn->wal.inProgressEvnum == 0)
+	{
+		cmd->conn->wal.inProgressTerm = evterm;
+		cmd->conn->wal.inProgressEvnum = evnum;
+	}
 
 	rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
 	if (rc != sizeof(pbuf))
