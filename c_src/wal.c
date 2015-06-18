@@ -49,8 +49,7 @@ static void put8byte(u8* buf, u64 num);
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
-int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
-  int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
+int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
 {
 	MDB_val key, data;
 	int rc;
@@ -58,7 +57,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	Wal *pWal = &thr->curConn->wal;
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn;
-	int offset;
+	int offset = 0;
 
 	pWal->thread = thr;
 	actorsdb = thr->actorsdb;
@@ -168,7 +167,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	mdb_txn_abort(txn);
 
 	pWal->changed = 1;
-	(*ppWal) = pWal;
+    if (ppWal != NULL)
+	   (*ppWal) = pWal;
 	return SQLITE_OK;
 }
 

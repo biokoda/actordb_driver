@@ -13,7 +13,7 @@
 		 lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
 		 delete_actor/1,iterate_close/1,
 		 replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
-		 checkpoint/3, term_store/3, actor_info/2, wal_rewind/2,
+		 checkpoint/3, term_store/3,term_store/4, actor_info/2, wal_rewind/2,
 		 tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
 		 tcp_reconnect/0,bind_insert/3]).
 
@@ -53,8 +53,10 @@ actor_info(Name,Thread) ->
 	ok = actordb_driver_nif:actor_info(Ref,self(),Name,Thread),
 	receive_answer(Ref).
 
-term_store({actordb_driver, _Ref, Connection}, CurrentTerm, VotedFor) ->
-	ok = actordb_driver_nif:term_store(Connection,CurrentTerm,VotedFor).
+term_store({actordb_driver, _Ref, Connection},CurrentTerm,VotedFor) ->
+	ok = actordb_driver_nif:term_store(Connection, CurrentTerm, VotedFor).
+term_store(Name, CurrentTerm, VotedFor, Thread) ->
+	ok = actordb_driver_nif:term_store(Name, CurrentTerm, VotedFor, Thread).
 
 close({actordb_driver, _Ref, _Connection}) ->
 	% Noop. Rely on GC. This is to avoid double closing.

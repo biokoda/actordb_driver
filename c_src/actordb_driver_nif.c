@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1050,22 +1050,6 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 		return atom_false;
 }
 
-static ERL_NIF_TERM
-do_term_store(db_command *cmd, db_thread *thread)
-{
-	ErlNifBinary votedFor;
-	u64 currentTerm;
-
-	if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&currentTerm))
-		return atom_false;
-	enif_inspect_binary(cmd->env,cmd->arg1,&votedFor);
-
-	if (votedFor.size > 255)
-		return atom_false;
-
-	storeinfo(&cmd->conn->wal, currentTerm, (u8)votedFor.size, votedFor.data);
-	return atom_ok;
-}
 
 static ERL_NIF_TERM
 do_iterate(db_command *cmd, db_thread *thread)
@@ -1196,7 +1180,6 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 	// Rewind is very similar to checkpoint. Checkpoint goes from beginning (from firstCompleteEvterm/Evnum),
 	// forward to some limit. Rewind goes from the end (from lastCompleteEvterm/Evnum) backwards to some limit evnum (including the limit).
 	// DB may get shrunk in the process.
-
 	MDB_val logKey, logVal;
 	u8 logKeyBuf[sizeof(u64)*3];
 	int logop, pgop, rc;
@@ -1307,6 +1290,48 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
 	return atom_ok;
 }
+
+static ERL_NIF_TERM
+do_term_store(db_command *cmd, db_thread *thread)
+{
+	ErlNifBinary votedFor;
+	u64 currentTerm;
+
+	if (!enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&currentTerm))
+		return atom_false;
+	if (!enif_inspect_binary(cmd->env,cmd->arg2,&votedFor))
+		return atom_false;
+
+	if (votedFor.size > 255)
+		return atom_false;
+
+	if (cmd->conn)
+	{
+		storeinfo(&cmd->conn->wal, currentTerm, (u8)votedFor.size, votedFor.data);
+	}
+	else
+	{
+		ErlNifBinary name;
+		db_connection con;
+		char pth[MAX_PATHNAME];
+
+		if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &name))
+			return atom_false;
+		if (name.size >= MAX_PATHNAME-5)
+			return atom_false;
+
+		memset(&con, 0, sizeof(db_connection));
+		memset(pth, 0, MAX_PATHNAME);
+		memcpy(pth, name.data, name.size);
+		strcat(pth,"-wal");
+		thread->curConn = &con;
+		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL, thread);
+		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
+		thread->curConn = NULL;
+	}
+	return atom_ok;
+}
+
 static ERL_NIF_TERM
 do_actor_info(db_command *cmd, db_thread *thr)
 {
@@ -2512,6 +2537,49 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
+term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	qitem *item;
+	u32 thread;
+	conn_resource *res = NULL;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	if (argc != 3 && argc != 4)
+		return enif_make_badarg(env);
+
+	if (!enif_is_number(env,argv[1]))
+		return enif_make_badarg(env);
+	if (!enif_is_binary(env,argv[2]))
+		return enif_make_badarg(env);
+
+	if (argc == 4)
+	{
+		if (!enif_is_binary(env,argv[0]) && !enif_is_list(env,argv[0]))
+			return enif_make_badarg(env);
+		if (!enif_get_uint(env, argv[3], &thread))
+			return enif_make_badarg(env);
+		thread %= pd->nthreads;
+		item = command_create(thread,pd);
+	}
+	else
+	{
+		if (!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+			return enif_make_badarg(env);
+		thread = res->thread;
+		item = command_create(thread,pd);
+		item->cmd.connindex = res->connindex;
+	}
+	item->cmd.type = cmd_term_store;
+	if (argc == 4)
+		item->cmd.arg = enif_make_copy(item->cmd.env,argv[0]); // actor path
+	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[1]); // evterm
+	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[2]); // votedfor
+
+	enif_consume_timeslice(env,500);
+	return push_command(thread, pd, item);
+}
+
+static ERL_NIF_TERM
 get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	qitem *item;
@@ -3188,32 +3256,6 @@ page_size(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
-term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-	conn_resource *res;
-	qitem *item;
-	priv_data *pd = (priv_data*)enif_priv_data(env);
-
-	if (argc != 3)
-		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
-		return enif_make_badarg(env);
-	if (!enif_is_number(env, argv[1]))
-		return enif_make_badarg(env);
-	if (!enif_is_binary(env,argv[2]))
-		return enif_make_badarg(env);
-
-	item = command_create(res->thread,pd);
-	item->cmd.type = cmd_term_store;
-	item->cmd.connindex = res->connindex;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[1]); // evterm
-	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[2]); // votedfor
-
-	enif_consume_timeslice(env,500);
-	return push_command(res->thread, pd, item);
-}
-
-static ERL_NIF_TERM
 iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	conn_resource *res;
@@ -3677,6 +3719,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"delete_actor",1,delete_actor},
 	{"actor_info",4,get_actor_info},
 	{"term_store",3,term_store},
+	{"term_store",4,term_store},
 
 };
 

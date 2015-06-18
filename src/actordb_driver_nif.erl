@@ -32,6 +32,7 @@ wal_rewind/4,
 delete_actor/1,
 checkpoint/5,
 term_store/3,
+term_store/4,
 actor_info/4
 ]).
 
@@ -39,6 +40,9 @@ actor_info(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 term_store(_,_,_) ->
+	exit(nif_library_not_loaded).
+
+term_store(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 checkpoint(_,_,_,_,_) ->
