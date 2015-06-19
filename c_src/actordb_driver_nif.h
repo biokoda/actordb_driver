@@ -69,6 +69,7 @@ struct Wal {
 	u64 inProgressEvnum;
 	MDB_val resFrames[3];
 	Pgno mxPage;
+	u32 allPages; // mxPage + unused pages
 	u8 nResFrames;
 	u8 changed;
 };

@@ -259,7 +259,7 @@ static int do_print(char *pth)
     {
         u8 v;
         u64  index, fTerm, fEvnum, lTerm, lEvnum, iTerm, iEvnum;
-        u32 mxPage;
+        u32 mxPage,allPages;
 
         memcpy(&index, key.mv_data, sizeof(u64));
         v = *(u8*)(data.mv_data);
@@ -270,9 +270,11 @@ static int do_print(char *pth)
         memcpy(&iTerm,  data.mv_data+1+sizeof(u64)*4, sizeof(u64));
         memcpy(&iEvnum, data.mv_data+1+sizeof(u64)*5, sizeof(u64));
         memcpy(&mxPage, data.mv_data+1+sizeof(u64)*6, sizeof(u32));
+		memcpy(&allPages, data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
 
         printf("actor=%llu, firstTerm=%llu, firstEvnum=%llu, lastTerm=%llu, lastEvnum=%llu,"
-        "inprogTerm=%llu, inprogEvnum=%llu, mxPage=%u\n",index,fTerm,fEvnum,lTerm,lEvnum,iTerm,iEvnum,mxPage);
+        "inprogTerm=%llu, inprogEvnum=%llu, mxPage=%u, allPages=%u\n",
+		index,fTerm,fEvnum,lTerm,lEvnum,iTerm,iEvnum,mxPage,allPages);
 
         rc = mdb_cursor_get(cursorInfo, &key, &data, MDB_NEXT);
     }

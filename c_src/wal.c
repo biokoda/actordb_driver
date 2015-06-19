@@ -146,12 +146,13 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 				return SQLITE_ERROR;
 			}
 			memcpy(&pWal->firstCompleteTerm, data.mv_data+1, sizeof(u64));
-			memcpy(&pWal->firstCompleteEvnum, data.mv_data+1+sizeof(u64), sizeof(u64));
-			memcpy(&pWal->lastCompleteTerm, data.mv_data+1+sizeof(u64)*2, sizeof(u64));
+			memcpy(&pWal->firstCompleteEvnum,data.mv_data+1+sizeof(u64), sizeof(u64));
+			memcpy(&pWal->lastCompleteTerm,  data.mv_data+1+sizeof(u64)*2, sizeof(u64));
 			memcpy(&pWal->lastCompleteEvnum, data.mv_data+1+sizeof(u64)*3, sizeof(u64));
-			memcpy(&pWal->inProgressTerm, data.mv_data+1+sizeof(u64)*4, sizeof(u64));
-			memcpy(&pWal->inProgressEvnum, data.mv_data+1+sizeof(u64)*5, sizeof(u64));
-			memcpy(&pWal->mxPage, data.mv_data+1+sizeof(u64)*6,sizeof(u32));
+			memcpy(&pWal->inProgressTerm,    data.mv_data+1+sizeof(u64)*4, sizeof(u64));
+			memcpy(&pWal->inProgressEvnum,   data.mv_data+1+sizeof(u64)*5, sizeof(u64));
+			memcpy(&pWal->mxPage,   data.mv_data+1+sizeof(u64)*6,            sizeof(u32));
+			memcpy(&pWal->allPages, data.mv_data+1+sizeof(u64)*6+sizeof(u32),sizeof(u32));
 
 			if (pWal->inProgressTerm != 0)
 			{
@@ -609,7 +610,10 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					// Only checking limitevterm/evnum is not enough.
 					// We can delete all pages only if DB shrank and pgno > max page.
 					if (haveLeftover || pgno > pWal->mxPage)
+					{
 						mdb_cursor_del(thr->cursorPages,0);
+						pWal->allPages--;
+					}
 					else
 					{
 						if (frag == 0)
@@ -719,6 +723,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 				if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
 				{
 					mdb_cursor_del(thr->cursorPages,0);
+					pWal->allPages--;
 				}
 				else
 				{
@@ -782,18 +787,18 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 	{
 		rc = mdb_cursor_get(thr->cursorInfo,&key,&data,MDB_SET_KEY);
 
-		if (rc == MDB_SUCCESS && data.mv_size >= (1+sizeof(u64)*6+sizeof(u32)+sizeof(u64)+1))
+		if (rc == MDB_SUCCESS && data.mv_size >= (1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1))
 		{
-			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u64));
-			votedForSize = (u8)((u8*)data.mv_data)[1+sizeof(u64)*6+sizeof(u32)+sizeof(u64)];
-			votedFor = data.mv_data+1+sizeof(u64)*6+sizeof(u32)+sizeof(u64)+1;
+			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2, sizeof(u64));
+			votedForSize = (u8)((u8*)data.mv_data)[1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)];
+			votedFor = data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1;
 			// DBG((g_log,"Voted for %.*s\n",(int)votedForSize,(char*)votedFor));
 		}
 	}
 	key.mv_size = sizeof(u64);
 	key.mv_data = &pWal->index;
 	data.mv_data = NULL;
-	data.mv_size = 1+sizeof(u64)*6+sizeof(u32)+sizeof(u64)+1+votedForSize;
+	data.mv_size = 1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1+votedForSize;
 	rc = mdb_cursor_put(thr->cursorInfo,&key,&data,MDB_RESERVE);
 	if (rc == MDB_SUCCESS)
 	{
@@ -806,10 +811,10 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 		memcpy(infoBuf+1+sizeof(u64)*4, &pWal->inProgressTerm,   sizeof(u64));
 		memcpy(infoBuf+1+sizeof(u64)*5, &pWal->inProgressEvnum,  sizeof(u64));
 		memcpy(infoBuf+1+sizeof(u64)*6, &pWal->mxPage,           sizeof(u32));
-
-		memcpy(infoBuf+1+sizeof(u64)*6+sizeof(u32), &currentTerm, sizeof(u64));
-		infoBuf[1+sizeof(u64)*7+sizeof(u32)] = votedForSize;
-		memcpy(infoBuf+2+sizeof(u64)*7+sizeof(u32), votedFor, votedForSize);
+		memcpy(infoBuf+1+sizeof(u64)*6+sizeof(u32), &pWal->allPages,sizeof(u32));
+		memcpy(infoBuf+1+sizeof(u64)*6+sizeof(u32)*2, &currentTerm, sizeof(u64));
+		infoBuf[1+sizeof(u64)*7+sizeof(u32)*2] = votedForSize;
+		memcpy(infoBuf+2+sizeof(u64)*7+sizeof(u32)*2, votedFor, votedForSize);
 
 		return SQLITE_OK;
 	}
@@ -885,6 +890,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 						DBG((g_log,"Unable to delete invalid pages!\n"));
 						return SQLITE_ERROR;
 					}
+					pWal->allPages--;
 					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
 					if (rc != MDB_SUCCESS)
 						break;
@@ -975,6 +981,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			DBG((g_log,"CURSOR PUT TO LOG FAILED: %d\r\n",rc));
 			return SQLITE_ERROR;
 		}
+
+		pWal->allPages++;
 	}
   /** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
 										LastCompleteTerm:64,LastCompleteEvnum:64,

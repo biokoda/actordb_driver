@@ -1246,6 +1246,7 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 				if (evnum >= limitEvnum)
 				{
 					mdb_cursor_del(thr->cursorPages,0);
+					pWal->allPages--;
 				}
 				else
 					break;
@@ -1360,8 +1361,11 @@ do_actor_info(db_command *cmd, db_thread *thr)
 		{
 			ErlNifBinary vfbin;
 			ERL_NIF_TERM vft, fct, fce, lct, lce, ipt, ipe, ct, res;
+			ERL_NIF_TERM fc, lc, in, mxt, allt;
 			u8 *votedFor;
 			u8 vfSize = 0;
+			u32 mxPage;
+			u32 allPages;
 			u64 firstCompleteTerm,firstCompleteEvnum,lastCompleteTerm;
 			u64 lastCompleteEvnum,inProgressTerm,inProgressEvnum, currentTerm;
 
@@ -1375,9 +1379,11 @@ do_actor_info(db_command *cmd, db_thread *thr)
 			memcpy(&lastCompleteEvnum,  data.mv_data+1+sizeof(u64)*3, sizeof(u64));
 			memcpy(&inProgressTerm,     data.mv_data+1+sizeof(u64)*4, sizeof(u64));
 			memcpy(&inProgressEvnum,    data.mv_data+1+sizeof(u64)*5, sizeof(u64));
-			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u64));
-			vfSize = ((u8*)data.mv_data)[1+sizeof(u64)*7+sizeof(u32)];
-			votedFor = (u8*)data.mv_data+2+sizeof(u64)*7+sizeof(u32);
+			memcpy(&mxPage,             data.mv_data+1+sizeof(u64)*6, sizeof(u32));
+			memcpy(&allPages,           data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
+			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2, sizeof(u64));
+			vfSize = ((u8*)data.mv_data)[1+sizeof(u64)*7+sizeof(u32)*2];
+			votedFor = (u8*)data.mv_data+2+sizeof(u64)*7+sizeof(u32)*2;
 
 			enif_alloc_binary(vfSize, &vfbin);
 			memcpy(vfbin.data, votedFor, vfSize);
@@ -1392,7 +1398,13 @@ do_actor_info(db_command *cmd, db_thread *thr)
 			ipe = enif_make_uint64(cmd->env, inProgressEvnum);
 			ct  = enif_make_uint64(cmd->env, currentTerm);
 
-			res = enif_make_tuple8(cmd->env,fct,fce,lct,lce,ipt,ipe,ct,vft);
+			fc = enif_make_tuple2(cmd->env, fct, fce);
+			lc = enif_make_tuple2(cmd->env, lct, lce);
+			in = enif_make_tuple2(cmd->env, ipt, ipe);
+			allt = enif_make_uint(cmd->env, allPages);
+			mxt = enif_make_uint(cmd->env, mxPage);
+
+			res = enif_make_tuple7(cmd->env,fc,lc,in,mxt,allt,ct,vft);
 			return res;
 		}
 		else
