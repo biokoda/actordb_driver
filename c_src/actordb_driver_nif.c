@@ -1466,17 +1466,15 @@ do_inject_page(db_command *cmd, db_thread *thread)
 static ERL_NIF_TERM
 do_checkpoint(db_command *cmd, db_thread *thread)
 {
-	ErlNifUInt64 evterm;
 	ErlNifUInt64 evnum;
 	db_connection *con = cmd->conn;
 
-	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&(evterm));
-	enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(evnum));
+	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&(evnum));
 
-	if ((con->wal.firstCompleteTerm >= evterm && con->wal.firstCompleteEvnum >= evnum) || con->checkpointLock)
+	if (con->wal.firstCompleteEvnum >= evnum || con->checkpointLock)
 		return atom_ok;
 
-	checkpoint(&con->wal, evterm, evnum);
+	checkpoint(&con->wal, evnum);
 
 	return atom_ok;
 }
@@ -3167,8 +3165,8 @@ db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_ref");
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
-	if (!enif_is_number(env,argv[3]) || !enif_is_number(env,argv[4]))
-		return make_error_tuple(env, "evnum or evterm NaN");
+	if (!enif_is_number(env,argv[3]))
+		return make_error_tuple(env, "evnum NaN");
 
 	item = command_create(res->thread,pd);
 
@@ -3176,8 +3174,7 @@ db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	item->cmd.type = cmd_checkpoint;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // evterm
-	item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]); // evnum
+	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // evnum
 	item->cmd.connindex = res->connindex;
 
 	enif_consume_timeslice(env,500);
@@ -3721,7 +3718,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"open", 5, db_open},
 	{"open", 6, db_open},
 	{"close", 3, db_close},
-	{"checkpoint",5,db_checkpoint},
+	{"checkpoint",4,db_checkpoint},
 	{"replicate_opts",5,replicate_opts},
 	{"exec_script", 7, exec_script},
 	{"exec_script", 8, exec_script},

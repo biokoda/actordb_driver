@@ -30,7 +30,7 @@ checkpoint_lock/4,
 inject_page/5,
 wal_rewind/4,
 delete_actor/1,
-checkpoint/5,
+checkpoint/4,
 term_store/3,
 term_store/4,
 actor_info/4
@@ -45,7 +45,7 @@ term_store(_,_,_) ->
 term_store(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
-checkpoint(_,_,_,_,_) ->
+checkpoint(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 delete_actor(_) ->

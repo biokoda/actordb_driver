@@ -112,7 +112,7 @@ bigtrans() ->
 	actordb_driver:init({{"."},{},100}),
 	application:ensure_all_started(crypto),
 	?debugFmt("Generating large sql",[]),
-	Sql = iolist_to_binary([<<"SAVEPOINT 'adb';",
+	Sql = [<<"SAVEPOINT 'adb';",
 	"CREATE TABLE IF NOT EXISTS __transactions (id INTEGER PRIMARY KEY, tid INTEGER, updater INTEGER, node TEXT,",
 	  "schemavers INTEGER, sql TEXT);",
 	"CREATE TABLE IF NOT EXISTS __adb (id INTEGER PRIMARY KEY, val TEXT);",
@@ -136,11 +136,33 @@ bigtrans() ->
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'0');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'0');",
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (7,'614475188');">>,
 	"INSERT INTO __adb (id,val) VALUES (10,'",base64:encode(crypto:rand_bytes(1024*1024*10)),"');", % worst case scenario, incompressible data
+	"INSERT INTO __adb (id,val) VALUES (?1, ?2);",
+	"INSERT INTO __adb (id,val) VALUES (?1, ?2);",
 	"DELETE from __adb where id=10;",
-	"RELEASE SAVEPOINT 'adb';"]),
+	"RELEASE SAVEPOINT 'adb';"],
 	?debugFmt("Running large sql",[]),
-	{ok,Db,{ok,Res}} = actordb_driver:open("big.db",0,Sql,wal),
-	?debugFmt("Result: ~p, select=~p",[Res,actordb_driver:exec_script("SELECT * FROM __adb;",Db)]).
+	{ok,Db} = actordb_driver:open("big.db"),
+	Param = [[[111,"fromparam1"],[222,"fromparam2"],[333,"fromparam3"]],
+			 [[444,"secondstat"],[555,"secondstatement"]]],
+	Res = [{changes,555,1},{changes,555,1},{changes,555,1},{changes,444,1},{changes,333,1},{changes,222,1},
+	 {changes,111,1},{changes,10,1},{changes,7,1},{changes,9,1},{changes,1,1},{changes,4,1},{changes,3,1},
+	 {changes,9,1},{changes,1,1},{changes,0,1},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},
+	 {changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0}],
+	{ok,Res} = actordb_driver:exec_script(Sql,Param,Db),
+
+	SR = {ok,[[{columns,{<<"id">>,<<"val">>}},{rows,[{555,<<"secondstatement">>},
+	{444,<<"secondstat">>},{333,<<"fromparam3">>},{222,<<"fromparam2">>},{111,<<"fromparam1">>},
+	{9,<<"0">>},{7,<<"614475188">>},{4,<<"task">>},{3,<<"7">>},{1,<<"0">>}]}]]},
+	SR = actordb_driver:exec_script("SELECT * FROM __adb;",Db),
+	?debugFmt("select=~p",[SR]),
+
+	SR2 = [[{columns,{<<"id">>,<<"val">>}},{rows,[{555,<<"secondstatement">>}]}],
+		   [{columns,{<<"id">>,<<"val">>}},{rows,[{444,<<"secondstat">>}]}],
+		   [{columns,{<<"id">>,<<"val">>}},{rows,[{9,<<"0">>}]}],
+		   [{columns,{<<"id">>,<<"val">>}},{rows,[{3,<<"7">>}]}]],
+	{ok,SR2} = actordb_driver:exec_script(["SELECT * FROM __adb where id=?1;",
+	"SELECT * FROM __adb where id=?1;"],[[[3],[9]],[[444],[555]]],Db),
+	?debugFmt("Double param select=~p",[SR2]).
 
 bigtrans_check() ->
 	?debugFmt("Reload and checking if all still there!",[]),

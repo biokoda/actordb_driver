@@ -45,7 +45,7 @@
 ** actual mxPage but will usually not be. If DB shrank with a write, we don't know if nTruncate is
 ** actually new mxPage or not. With regular write nTruncate will always be mxPage.
 */
-static int checkpoint(Wal *pWal, u64 evterm, u64 evnum);
+static int checkpoint(Wal *pWal, u64 evnum);
 static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum);
 static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor);
 static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delPages);
@@ -543,7 +543,7 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 }
 
 // Delete all pages up to limitEvterm and limitEvnum
-int checkpoint(Wal *pWal, u64 limitEvterm, u64 limitEvnum)
+static int checkpoint(Wal *pWal, u64 limitEvnum)
 {
 	MDB_val logKey, logVal;
 	u8 logKeyBuf[sizeof(u64)*3];
@@ -569,7 +569,7 @@ int checkpoint(Wal *pWal, u64 limitEvterm, u64 limitEvnum)
 		return SQLITE_OK;
 	}
 
-	while (pWal->firstCompleteTerm < limitEvterm || pWal->firstCompleteEvnum < limitEvnum)
+	while (pWal->firstCompleteEvnum < limitEvnum)
 	{
 		// For every page here
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
@@ -602,7 +602,7 @@ int checkpoint(Wal *pWal, u64 limitEvterm, u64 limitEvnum)
 				memcpy(&evnum,  pgVal.mv_data+sizeof(u64),sizeof(u64));
 				// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
 				//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
-				if (evterm < limitEvterm || evnum < limitEvnum)
+				if (evnum < limitEvnum)
 				{
 					// One write may have touched entirely different pages than another.
 					// So there must be a leftover page for us to start deleting.
