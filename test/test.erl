@@ -3,28 +3,14 @@
 
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
-	[file:delete(Fn) || Fn <- filelib:wildcard("*.db")],
+	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
 	[fun lz4/0,
 	 fun modes/0,
+	 fun dbcopy/0,
 	 fun bigtrans/0,
-	 fun repl/0,
-	 fun check/0].
+	 fun bigtrans_check/0
+		 ].
 
-check() ->
-	?debugFmt("Reload and checking result of repl",[]),
-	file:copy("drv_nonode.txt","prev_drv_nonode.txt"),
-	garbage_collect(),
-	code:delete(actordb_driver_nif),
-	code:purge(actordb_driver_nif),
-	false = code:is_loaded(actordb_driver_nif),
-	actordb_driver:init({{"."},{},100}),
-	Sql = "select name, sql from sqlite_master where type='table';",
-	{ok,_Db,{ok,[[{columns,_},{rows,[]}]]}} = actordb_driver:open("t1.db",1,Sql),
-	{ok,Db2} = actordb_driver:open("t2.db"),
-	{ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
-	{ok,Db3} = actordb_driver:open("t3.db"),
-	{ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
-	ok.
 
 lz4() ->
 	actordb_driver:init({{"."},{},100}),
@@ -44,19 +30,89 @@ modes() ->
 		"$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
 		"$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
-	{ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db),
+	{ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db).
 
-	{ok,Db1} = actordb_driver:open("deletemode.db",1,delete),
-	{ok,_} = actordb_driver:exec_script(<<"$CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT);",
-		"$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
-		"$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db1),
-	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db1),
-	{ok,[_]} = RR = actordb_driver:exec_script("SELECT * from tab;",Db1),
-	?debugFmt("~p",[RR]).
+dbcopy() ->
+	actordb_driver:init({{"."},{},100}),
+	{ok,Db} = actordb_driver:open("original"),
+	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
+	ok = actordb_driver:term_store(Db,10,<<"abcdef">>),
+	{0,0,1,1,0,0,10,<<"abcdef">>} = actordb_driver:actor_info("original",0),
+	ok = actordb_driver:term_store("original",10,<<"abcdef1">>,0),
+	EN = 100,
+	[ {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (",integer_to_list(N+100),",'aaa',2)"],Db,infinity,1,N,<<>>) || N <- lists:seq(2,EN)],
+	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,EN+1,<<>>),
+	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,EN+2,<<>>),
+	{ok,Select} = actordb_driver:exec_script("select * from tab;",Db),
+	% ?debugFmt("Select ~p",[Select]),
+	{ok,Copy} = actordb_driver:open("copy"),
+	{ok,Iter,Bin,Head,Done} =  actordb_driver:iterate_db(Db,0,0),
+	ok = actordb_driver:inject_page(Copy,Bin,Head),
+	% This will export into an sqlite file named sq.
+	{ok,F} = file:open("sq",[write,binary,raw]),
+	?debugFmt("Exporting actor into an sqlite file ~p",[Done]),
+	% readpages(Head,Bin,F),
+	file:write(F,actordb_driver:lz4_decompress(Bin,4096)),
+	case Done > 0 of
+	  true ->
+		  ok;
+	  _ ->
+		  copy(Db,Iter,F,Copy)
+	end,
+	% ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum1]),
+	file:close(F),
+	?debugFmt("Reading from exported sqlite file: ~p",[os:cmd("sqlite3 sq \"select * from tab\"")]),
+	{ok,Select} = actordb_driver:exec_script("select * from tab;",Copy),
+	?debugFmt("Reading from copy!: ~p",[Select]),
+	file:delete("sq"),
+
+	{ok,Copy2} = actordb_driver:open("copy2"),
+	{ok,_Iter2,Bin2,Head2,Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
+	<<A:64,B:64,PGNO:32,Commit:32>> = Head2,
+	?debugFmt("Second inject ~p ~p ~p ~p",[A,B,PGNO,Commit]),
+	% readpages(Bin2,undefined),
+	ok = actordb_driver:inject_page(Copy2,Bin2,Head2),
+	case Done2 > 0 of
+		true ->
+			ok;
+		_ ->
+			copy(Db,_Iter2,undefined,Copy2)
+	end,
+	{ok,_Iter3,Bin3,Head3,_Done3} = actordb_driver:iterate_db(Db,1,2), % get pgno2 with first insert
+	ok = actordb_driver:inject_page(Copy2,Bin3,Head3),
+	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
+	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
+	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),
+	{0,0,1,102,0,0,10,<<"abcdef1">>} = Info = actordb_driver:actor_info("original",0),
+	?debugFmt("Get actor info ~p",[Info]),
+	?debugFmt("Rewind original to last insert!",[]),
+	{ok,1} = actordb_driver:iterate_db(Db,2,10),
+	ok = actordb_driver:wal_rewind(Db,3),
+	FirstInject = actordb_driver:exec_script("select * from tab;",Db),
+	?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
+
+
+copy(Orig,Iter,F,Copy) ->
+	case actordb_driver:iterate_db(Orig,Iter) of
+		{ok,Iter1,Bin,Head,Done} ->
+			<<Evterm:64,Evnum:64,_/binary>> = Head,
+			?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum]),
+			ok = actordb_driver:inject_page(Copy,Bin,Head),
+			file:write(F,actordb_driver:lz4_decompress(Bin,4096)),
+			case Done > 0 of
+				true ->
+					ok;
+				_ ->
+					copy(Orig,Iter1,F,Copy)
+			end
+	end.
+
 
 bigtrans() ->
-  actordb_driver:init({{"."},{},100}),
-  Sql = [<<"SAVEPOINT 'adb';",
+	actordb_driver:init({{"."},{},100}),
+	application:ensure_all_started(crypto),
+	?debugFmt("Generating large sql",[]),
+	Sql = iolist_to_binary([<<"SAVEPOINT 'adb';",
 	"CREATE TABLE IF NOT EXISTS __transactions (id INTEGER PRIMARY KEY, tid INTEGER, updater INTEGER, node TEXT,",
 	  "schemavers INTEGER, sql TEXT);",
 	"CREATE TABLE IF NOT EXISTS __adb (id INTEGER PRIMARY KEY, val TEXT);",
@@ -79,101 +135,24 @@ bigtrans() ->
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (3,'7');INSERT OR REPLACE INTO __adb (id,val) VALUES (4,'task');",
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'0');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'0');",
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (7,'614475188');">>,
-	"INSERT INTO __adb (id,val) VALUES (10,'",binary:copy(<<"a">>,1024*1024*10),"');",
-	"INSERT INTO __adb (id,val) VALUES (?1, ?2);",
-	"INSERT INTO __adb (id,val) VALUES (?1, ?2);",
+	"INSERT INTO __adb (id,val) VALUES (10,'",base64:encode(crypto:rand_bytes(1024*1024*10)),"');", % worst case scenario, incompressible data
 	"DELETE from __adb where id=10;",
-	"RELEASE SAVEPOINT 'adb';"],
-	{ok,Db} = actordb_driver:open("big.db"),
-	R = [{changes,555,1},{changes,555,1},{changes,555,1},{changes,444,1},{changes,333,1},{changes,222,1},
-	 {changes,111,1},{changes,10,1},{changes,7,1},{changes,9,1},{changes,1,1},{changes,4,1},{changes,3,1},
-	 {changes,9,1},{changes,1,1},{changes,0,1},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},
-	 {changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0}],
-	{ok,R} = actordb_driver:exec_script(Sql,[[[111,"fromparam1"],[222,"fromparam2"],[333,"fromparam3"]],
-											 [[444,"secondstat"],[555,"secondstatement"]]],Db),
+	"RELEASE SAVEPOINT 'adb';"]),
+	?debugFmt("Running large sql",[]),
+	{ok,Db,{ok,Res}} = actordb_driver:open("big.db",0,Sql,wal),
+	?debugFmt("Result: ~p, select=~p",[Res,actordb_driver:exec_script("SELECT * FROM __adb;",Db)]).
 
-	?debugFmt("Insert/create result=~p",[R]),
-
-	SR = {ok,[[{columns,{<<"id">>,<<"val">>}},{rows,[{555,<<"secondstatement">>},
-	{444,<<"secondstat">>},{333,<<"fromparam3">>},{222,<<"fromparam2">>},{111,<<"fromparam1">>},
-	{9,<<"0">>},{7,<<"614475188">>},{4,<<"task">>},{3,<<"7">>},{1,<<"0">>}]}]]},
-	SR = actordb_driver:exec_script("SELECT * FROM __adb;",Db),
-	?debugFmt("select=~p",[SR]),
-
-	SR2 = [[{columns,{<<"id">>,<<"val">>}},{rows,[{555,<<"secondstatement">>}]}],
-		   [{columns,{<<"id">>,<<"val">>}},{rows,[{444,<<"secondstat">>}]}],
-		   [{columns,{<<"id">>,<<"val">>}},{rows,[{9,<<"0">>}]}],
-		   [{columns,{<<"id">>,<<"val">>}},{rows,[{3,<<"7">>}]}]],
-	{ok,SR2} = actordb_driver:exec_script(["SELECT * FROM __adb where id=?1;",
-	"SELECT * FROM __adb where id=?1;"],[[[3],[9]],[[444],[555]]],Db),
-	?debugFmt("Double param select=~p",[SR2]).
-
-
-
-repl() ->
-	?debugFmt("repl",[]),
-	{ok,Db} = actordb_driver:open("t1.db"),
-	% exec_script(Sql,  {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
-	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",Db,10000,1,1,<<>>),
-	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad');",Db,10000,1,2,<<>>),
-	{ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (2, '",binary:copy(<<"a">>,1024*6),"');"],Db,10000,1,3,<<>>),
-	{ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
-	ok = actordb_driver:checkpoint_lock(Db,1),
-	ok = actordb_driver:checkpoint_lock(Db,1),
-	ok = actordb_driver:checkpoint_lock(Db,0),
-
-	% Create copy of base db file, read wal pages, inject wal pages for second db file and read data
-	L = get_pages(Db),
-	file:copy("t1.db","t2.db"),
-	Sql = <<"select name, sql from sqlite_master where type='table';",
-					"$PRAGMA cache_size=10;">>,
-	{ok,Db2,_} = actordb_driver:open("t2.db",0,Sql,wal),
-	[ok = actordb_driver:inject_page(Db2,Bin) || Bin <- L],
-	{ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
-
-	% Now insert into second db, copy new pages back into first db
-	L1 = get_pages(Db2),
-	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3, 'thirdthird');",Db2,10000,1,4,<<>>),
-	L2 = get_pages(Db2),
-	[ok = actordb_driver:inject_page(Db,Bin) || Bin <- L2 -- L1],
-
-	% Check both
-	{ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
-	{ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
-
-	% make last write go away on first db
-	actordb_driver:wal_rewind(Db,4),
-	{ok,[[{columns,{_,_}},{rows,[{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db),
-	{ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db2),
-
-	file:copy("t2.db","t3.db"),
-	% 0 means return all pages in wal for connection
-	Pages2 = get_pages(Db2,0),
-	{ok,Db3,_} = actordb_driver:open("t3.db",0,Sql,wal),
-	[ok = actordb_driver:inject_page(Db3,Bin) || Bin <- Pages2],
-	{ok,[[{columns,{_,_}},{rows,[{3,<<"thirdthird">>},{2,_},{1,<<"asdadad">>}]}]]} = actordb_driver:exec_script("SELECT * from tab;",Db3),
-	delete(Db).
-	% repl1(Db);
-% repl1(Db) ->
-
-delete(undefined) ->
+bigtrans_check() ->
+	?debugFmt("Reload and checking if all still there!",[]),
+	file:copy("drv_nonode.txt","prev_drv_nonode.txt"),
 	garbage_collect(),
-	timer:sleep(100),
-	?assertMatch({error,enoent},file:read_file_info("t1.db"));
-	% {ok,Db} = actordb_driver:open("t1.db"),
-delete(Db) ->
-	actordb_driver:delete_actor(Db),
-	delete(undefined).
+	code:delete(actordb_driver_nif),
+	code:purge(actordb_driver_nif),
+	false = code:is_loaded(actordb_driver_nif),
+	actordb_driver:init({{"."},{},100}),
 
-
-get_pages(Db) ->
-	get_pages(Db,1).
-get_pages(Db,Iter) ->
-	case actordb_driver:iterate_wal(Db,Iter) of
-		{ok,Iter2,Bin,1} ->
-			% <<_:36/binary,Name:20/binary,_/binary>> = Bin,
-			% ?debugFmt("Inject page ~s",[Name]),
-			[Bin|get_pages(Db,Iter2)];
-		done ->
-			[]
-	end.
+	Sql = "select * from __adb;",
+	{ok,Db2} = actordb_driver:open("big.db"),
+	R = actordb_driver:exec_script(Sql,Db2),
+	?debugFmt("~p",[R]),
+	ok.
