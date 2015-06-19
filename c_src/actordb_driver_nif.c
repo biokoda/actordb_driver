@@ -225,11 +225,11 @@ wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 
 void fail_send(int i,priv_data *priv)
 {
-	db_command *ncmd = NULL;
 	// tell control thread to create new connections for position i
+	DBG((g_log,"FAIL SEND!\n"));
 	qitem *item = command_create(-1,priv);
 	item->cmd.type = cmd_tcp_connect;
-	item->cmd.arg3 = enif_make_int(ncmd->env,i);
+	item->cmd.arg3 = enif_make_int(item->cmd.env,i);
 	push_command(-1, priv, item);
 }
 
@@ -279,7 +279,6 @@ do_all_tunnel_call(db_command *cmd,db_thread *thread)
 			{
 				close(thread->sockets[i]);
 				thread->sockets[i] = 0;
-
 				fail_send(i,thread->pd);
 			}
 			// rt = recv(thread->sockets[i],confirm,6,0);
@@ -1118,7 +1117,7 @@ do_iterate(db_command *cmd, db_thread *thread)
 	evterm = iter->evterm;
 	mismatch = iter->termMismatch;
 
-	if (dorel || done)
+	if (dorel)
 		enif_release_resource(iter);
 
 	if (nfilled == 0 && done == 1)
@@ -3079,8 +3078,6 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	for (i = 0; i < nthreads; i++)
 	{
 		item = command_create(i,pd);
-
-		/* command */
 		item->cmd.type = cmd_alltunnel_call;
 		item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
 		item->cmd.pid = pid;
@@ -3300,7 +3297,7 @@ iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	// DBG((g_log,"iterate_close\n"));
+	DBG((g_log,"iterate_close %d\n",argc));
 
 	if(argc != 1)
 		return enif_make_badarg(env);
@@ -3639,7 +3636,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			return -1;
 		if (mdb_env_set_mapsize(menv,4096*1024*128*10) != MDB_SUCCESS)
 			return -1;
-		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOSYNC, 0664) != MDB_SUCCESS) //MDB_NOSYNC
 			return -1;
 
 		curThread->env = menv;

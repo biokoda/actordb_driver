@@ -67,11 +67,19 @@ dbcopy() ->
 	file:delete("sq"),
 
 	{ok,Copy2} = actordb_driver:open("copy2"),
-	{ok,_Iter2,Bin2,Head2,_Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
+	{ok,_Iter2,Bin2,Head2,Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
+	<<A:64,B:64,PGNO:32,Commit:32>> = Head2,
+	?debugFmt("Second inject ~p ~p ~p ~p",[A,B,PGNO,Commit]),
 	% readpages(Bin2,undefined),
-	actordb_driver:inject_page(Copy2,Bin2,Head2),
+	ok = actordb_driver:inject_page(Copy2,Bin2,Head2),
+	case Done2 > 0 of
+		true ->
+			ok;
+		_ ->
+			copy(Db,_Iter2,undefined,Copy2)
+	end,
 	{ok,_Iter3,Bin3,Head3,_Done3} = actordb_driver:iterate_db(Db,1,2), % get pgno2 with first insert
-	actordb_driver:inject_page(Copy2,Bin3,Head3),
+	ok = actordb_driver:inject_page(Copy2,Bin3,Head3),
 	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
 	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
 	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),

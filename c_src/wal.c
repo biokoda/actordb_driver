@@ -504,9 +504,9 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			logop = MDB_NEXT_DUP;
 			memcpy(&pgno,logVal.mv_data,sizeof(u32));
 
-			// DBG((g_log,"AT PGNO %u\r\n",pgno));
+			DBG((g_log,"iterate at pgno=%u\r\n",pgno));
 
-			if (pgno < iter->pgnoPos)
+			if (pgno <= iter->pgnoPos)
 				continue;
 
 			findframe(pWal, pgno, &iRead, iter->evterm, iter->evnum, &evterm, &evnum);
