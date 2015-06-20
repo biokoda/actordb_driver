@@ -3546,7 +3546,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	char nodename[128];
 	ERL_NIF_TERM head, tail;
 	priv_data *priv;
-	u32 walSizeLimit = 1024*3;
+	int sync = 1;
 	db_thread *controlThread = NULL;
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
@@ -3596,14 +3596,16 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 	if (i == 3)
 	{
-		if (!enif_get_uint(env,param[2],&walSizeLimit))
+		if (!enif_get_int(env,param[2],&sync))
 			return -1;
 	}
+	if (sync)
+		sync = 0;
+	else
+		sync = MDB_NOSYNC;
 
 	if (!enif_get_tuple(env,param[0],&priv->nthreads,&param1))
 		return -1;
-
-	// g_nthreads = priv->nthreads;
 
 	if (!enif_get_tuple(env,param[1],&i,&param))
 		return -1;
@@ -3671,7 +3673,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			return -1;
 		if (mdb_env_set_mapsize(menv,4096*1024*128*10) != MDB_SUCCESS)
 			return -1;
-		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOSYNC, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|sync, 0664) != MDB_SUCCESS)
 			return -1;
 
 		curThread->env = menv;
@@ -3683,8 +3685,6 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		memset(curThread->conns,0,sizeof(db_connection)*1024);
 		curThread->nconns = 1024;
 		curThread->nthreads = priv->nthreads;
-		// curThread->wal_page_hook = wal_page_hook;
-		curThread->walSizeLimit = walSizeLimit;
 		curThread->pd = priv;
 		priv->tasks[i] = curThread->tasks;
 

@@ -144,7 +144,6 @@ struct db_thread
 	// when they should be rollbacked (if they do not end with db size number).
 	// Unlike regular sqlite wal files, in actordb wal files can be intertwined.
 	u32 threadNum;
-	u32 walSizeLimit; // in pages. So wal file in bytes is walSizeLimit*pagesize
 	u32 pagesChanged;
 	u8 forceCommit;
 	int index;        // Index in table of threads.
