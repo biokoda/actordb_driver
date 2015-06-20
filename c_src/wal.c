@@ -553,10 +553,10 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	int logop, pgop, mrc;
 	u64 evnum,evterm,aindex;
 
-	if (pWal->inProgressTerm == 0)
-		return SQLITE_OK;
+	// if (pWal->inProgressTerm == 0)
+	// 	return SQLITE_OK;
 
-	DBG((g_log,"checkpoint\r\n"));
+	DBG((g_log,"checkpoint %llu, %llu\r\n",pWal->firstCompleteTerm,pWal->firstCompleteEvnum));
 
 	logKey.mv_data = logKeyBuf;
 	logKey.mv_size = sizeof(logKeyBuf);
@@ -566,7 +566,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 
 	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 	{
-		DBG((g_log,"Key not found in log for undo\n"));
+		DBG((g_log,"Key not found in log for checkpoint\n"));
 		return SQLITE_OK;
 	}
 
@@ -992,6 +992,11 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		{
 			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? pWal->inProgressTerm : pWal->lastCompleteTerm;
 			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? pWal->inProgressEvnum : pWal->lastCompleteEvnum;
+			if (pWal->firstCompleteTerm == 0)
+			{
+				pWal->firstCompleteTerm = pWal->inProgressTerm;
+				pWal->firstCompleteEvnum = pWal->inProgressEvnum;
+			}
 			pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 			pWal->mxPage =  pWal->mxPage > nTruncate ? pWal->mxPage : nTruncate;
 			pWal->changed = 0;

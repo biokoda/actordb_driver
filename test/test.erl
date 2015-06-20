@@ -7,8 +7,9 @@ run_test_() ->
 	[fun lz4/0,
 	 fun modes/0,
 	 fun dbcopy/0,
-	 fun bigtrans/0,
-	 fun bigtrans_check/0
+	 fun checkpoint/0
+	%  fun bigtrans/0,
+	%  fun bigtrans_check/0
 		 ].
 
 
@@ -37,7 +38,7 @@ dbcopy() ->
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
 	ok = actordb_driver:term_store(Db,10,<<"abcdef">>),
-	{{0,0},{1,1},{0,0},2,2,10,<<"abcdef">>} = actordb_driver:actor_info("original",0),
+	{{1,1},{1,1},{0,0},2,2,10,<<"abcdef">>} = actordb_driver:actor_info("original",0),
 	ok = actordb_driver:term_store("original",10,<<"abcdef1">>,0),
 	EN = 100,
 	[ {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (",integer_to_list(N+100),",'aaa',2)"],Db,infinity,1,N,<<>>) || N <- lists:seq(2,EN)],
@@ -83,14 +84,27 @@ dbcopy() ->
 	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
 	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
 	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),
-	{{0,0},{1,102},{0,0},2,103,10,<<"abcdef1">>} = Info = actordb_driver:actor_info("original",0),
+	{{1,1},{1,102},{0,0},2,103,10,<<"abcdef1">>} = Info = actordb_driver:actor_info("original",0),
 	?debugFmt("Get actor info ~p",[Info]),
 	?debugFmt("Rewind original to last insert!",[]),
 	{ok,1} = actordb_driver:iterate_db(Db,2,10),
-	ok = actordb_driver:wal_rewind(Db,3),
-	FirstInject = actordb_driver:exec_script("select * from tab;",Db),
+	% ok = actordb_driver:checkpoint(Db,60).
+	ok = actordb_driver:wal_rewind(Db,100),
+	{ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
+      {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_] = Rows}]]} = actordb_driver:exec_script("select * from tab;",Db),
+	[{102,<<"aaa">>,2}|_] = lists:reverse(Rows),
 	?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
 
+checkpoint() ->
+	garbage_collect(),
+	{ok,Db} = actordb_driver:open("original"),
+	{ok,S} = actordb_driver:exec_script("select * from tab;",Db),
+	ok = actordb_driver:checkpoint(Db,60),
+	{ok,S} = actordb_driver:exec_script("select * from tab;",Db),
+	[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
+      {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_]}]] = S,
+	% ?debugFmt("AfterCheckpoint ~p",[S]),
+	ok.
 
 copy(Orig,Iter,F,Copy) ->
 	case actordb_driver:iterate_db(Orig,Iter) of

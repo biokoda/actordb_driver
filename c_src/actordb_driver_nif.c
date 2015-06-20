@@ -3168,7 +3168,7 @@ db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	// DBG((g_log,"Checkpoint\r\n"));
 
-	if (argc != 5)
+	if (argc != 4)
 		return enif_make_badarg(env);
 
 	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
@@ -3182,7 +3182,6 @@ db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	item = command_create(res->thread,pd);
 
-	/* command */
 	item->cmd.type = cmd_checkpoint;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;

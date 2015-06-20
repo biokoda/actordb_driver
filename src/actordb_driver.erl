@@ -67,7 +67,8 @@ store_prepared_table(Indexes,Sqls) when is_tuple(Indexes), is_tuple(Sqls), tuple
 
 checkpoint({actordb_driver, _Ref, Connection}, Evnum) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:checkpoint(Connection,Ref,self(),Evnum).
+	ok = actordb_driver_nif:checkpoint(Connection,Ref,self(),Evnum),
+	receive_answer(Ref).
 
 % make_wal_header(PageSize) ->
 %     actordb_driver_nif:wal_header(PageSize).
