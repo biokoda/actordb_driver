@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1458,10 +1458,17 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	}
 
 	rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
-	if (rc != sizeof(pbuf))
+	if (rc != sizeof(pbuf) && bin.size != sizeof(pbuf))
 	{
-		DBG((g_log,"Unable to decompress inject page!! %ld\r\n",bin.size));
-		return atom_false;
+		if (bin.size == sizeof(pbuf))
+		{
+			memcpy(pbuf,bin.data,sizeof(pbuf));
+		}
+		else
+		{
+			DBG((g_log,"Unable to decompress inject page!! %ld\r\n",bin.size));
+			return atom_false;
+		}
 	}
 	cmd->conn->doReplicate = 0;
 	rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, commit, commit, 0);
