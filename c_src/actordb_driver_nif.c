@@ -1458,7 +1458,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	}
 
 	rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
-	if (rc != sizeof(pbuf) && bin.size != sizeof(pbuf))
+	if (rc != sizeof(pbuf))
 	{
 		if (bin.size == sizeof(pbuf))
 		{
