@@ -1886,10 +1886,9 @@ do_exec_script(db_command *cmd, db_thread *thread)
 		sqlite3_step(statement);
 		sqlite3_finalize(statement);
 
-		// Abort transaction to get rid of all writes.
-		mdb_txn_abort(thread->wtxn);
-		open_wtxn(thread);
-		thread->pagesChanged = pagesPre;
+		// mdb_txn_abort(thread->wtxn);
+		// open_wtxn(thread);
+		// thread->pagesChanged = pagesPre;
 	}
 
 	// enif_release_resource(cmd->conn);
@@ -2486,7 +2485,8 @@ thread_func(void *arg)
 
 		DBG((g_log,"thread=%d command done 1. pagesChanged=%d\n",data->index,data->pagesChanged));
 
-		if (data->pagesChanged != pagesChanged)
+		// if (data->pagesChanged != pagesChanged)
+		if (data->forceCommit)
 		{
 			data->forceCommit = 0;
 			mdb_txn_commit(data->wtxn);

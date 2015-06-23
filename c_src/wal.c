@@ -126,8 +126,6 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 			return SQLITE_ERROR;
 		}
 		thr->pagesChanged++;
-
-		thr->forceCommit = 1;
 	}
 	// Actor exists, read evnum/evterm info
 	else if (rc == MDB_SUCCESS)
@@ -1000,16 +998,17 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 			pWal->mxPage =  pWal->mxPage > nTruncate ? pWal->mxPage : nTruncate;
 			pWal->changed = 0;
+			thr->forceCommit = 1;
 		}
 		else
 		{
 			pWal->changed = 1;
 		}
+		thr->pagesChanged++;
 
 		rc = storeinfo(pWal,0,0,NULL);
 		if (rc != SQLITE_OK)
 			return rc;
-		thr->pagesChanged++;
 	}
 
 	return SQLITE_OK;
