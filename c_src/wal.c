@@ -125,6 +125,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 			mdb_txn_abort(txn);
 			return SQLITE_ERROR;
 		}
+		thr->forceCommit = 1;
 		thr->pagesChanged++;
 	}
 	// Actor exists, read evnum/evterm info
@@ -578,6 +579,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		while ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
 			u32 pgno;
+			size_t ndupl;
 			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 			MDB_val pgKey, pgVal;
 			u8 haveLeftover = 0;
@@ -594,6 +596,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			{
 				continue;
 			}
+			mdb_cursor_count(thr->cursorPages,&ndupl);
 			while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 			{
 				u8 frag = *(u8*)(pgVal.mv_data+sizeof(u64)*2);
@@ -611,6 +614,9 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					{
 						mdb_cursor_del(thr->cursorPages,0);
 						pWal->allPages--;
+						ndupl--;
+						if (!ndupl)
+							break;
 					}
 					else
 					{
@@ -699,6 +705,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 
 		if (delPages)
 		{
+			size_t ndupl;
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
 			pgKey.mv_data = pagesKeyBuf;
@@ -712,6 +719,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 				// DBG((g_log,"Key not found in log for undo\n"));
 				continue;
 			}
+			mdb_cursor_count(thr->cursorPages,&ndupl);
 			while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 			{
 				memcpy(&term, pgVal.mv_data,            sizeof(u64));
@@ -722,6 +730,9 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 				{
 					mdb_cursor_del(thr->cursorPages,0);
 					pWal->allPages--;
+					ndupl--;
+					if (!ndupl)
+						break;
 				}
 				else
 				{
@@ -879,16 +890,21 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 				while ((evterm > pWal->inProgressTerm || evnum >= pWal->inProgressEvnum) &&
 						(pWal->inProgressTerm + pWal->inProgressEvnum) > 0)
 				{
+					size_t ndupl;
+					mdb_cursor_count(thr->cursorPages,&ndupl);
 					DBG((g_log,"Deleting pages higher or equal to current. "
-					"Evterm=%llu, evnum=%llu, curterm=%llu, curevn=%llu\r\n",
-					evterm,evnum,pWal->inProgressTerm,pWal->inProgressEvnum));
+					"Evterm=%llu, evnum=%llu, curterm=%llu, curevn=%llu, dupl=%ld\r\n",
+					evterm,evnum,pWal->inProgressTerm,pWal->inProgressEvnum,ndupl));
 
 					if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
 					{
-						DBG((g_log,"Unable to delete invalid pages!\n"));
-						return SQLITE_ERROR;
+						DBG((g_log,"Cant delete!\n"));
+						break;
 					}
 					pWal->allPages--;
+					ndupl--;
+					if (!ndupl)
+						break;
 					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
 					if (rc != MDB_SUCCESS)
 						break;
