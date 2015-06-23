@@ -7,9 +7,9 @@ run_test_() ->
 	[fun lz4/0,
 	 fun modes/0,
 	 fun dbcopy/0,
-	 fun checkpoint/0
-	%  fun bigtrans/0,
-	%  fun bigtrans_check/0
+	 fun checkpoint/0,
+	 fun bigtrans/0,
+	 fun bigtrans_check/0
 		 ].
 
 
@@ -104,6 +104,8 @@ checkpoint() ->
 	[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
       {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_]}]] = S,
 	% ?debugFmt("AfterCheckpoint ~p",[S]),
+	ok = actordb_driver:wal_rewind(Db,0),
+	?debugFmt("After rewind to 0=~p",[actordb_driver:actor_info("original",0)]),
 	ok.
 
 copy(Orig,Iter,F,Copy) ->

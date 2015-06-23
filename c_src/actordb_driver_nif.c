@@ -1190,7 +1190,7 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 	DBG((g_log,"do_wal_rewind\r\n"));
 
 	// if limitEvnum == 0, this means delete all pages for actor.
-	if (limitEvnum < pWal->firstCompleteEvnum || limitEvnum == 0)
+	if (limitEvnum < pWal->firstCompleteEvnum && limitEvnum > 0)
 		return atom_false;
 
 	if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
@@ -1208,12 +1208,15 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 	{
-		DBG((g_log,"Key not found in log for undo\n"));
+		DBG((g_log,"Key not found in log for undo %llu %llu\n",pWal->lastCompleteTerm,pWal->lastCompleteEvnum));
 		return atom_false;
 	}
 
 	while (pWal->lastCompleteEvnum >= limitEvnum)
 	{
+		size_t ndupl;
+
+		mdb_cursor_count(thr->cursorLog,&ndupl);
 		// For every page here
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 		// Delete from
@@ -1226,7 +1229,7 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 			MDB_val pgKey, pgVal;
 
 			memcpy(&pgno, logVal.mv_data,sizeof(u32));
-			DBG((g_log,"Moving to pgno=%u, evnum=%llu\r\n",pgno,pWal->lastCompleteEvnum));
+			DBG((g_log,"Moving to pgno=%u, evnum=%llu, ndupl=%lu\r\n",pgno,pWal->lastCompleteEvnum,ndupl));
 
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
@@ -1234,6 +1237,7 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 			pgKey.mv_size = sizeof(pagesKeyBuf);
 
 			pgop = MDB_LAST_DUP;
+			logop = MDB_PREV_DUP;
 			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 			{
 				continue;
@@ -1258,8 +1262,6 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 			// If this is last page, we have shrunk DB.
 			if (rc == MDB_NOTFOUND && pgno == pWal->mxPage)
 				pWal->mxPage--;
-
-			logop = MDB_PREV_DUP;
 		}
 		if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
 		{
@@ -1281,6 +1283,29 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 		}
 		pWal->lastCompleteTerm = evterm;
 		pWal->lastCompleteEvnum = evnum;
+	}
+	if (limitEvnum == 0)
+	{
+		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+		MDB_val pgKey, pgVal;
+		u32 pgno = 1;
+		int pgop = MDB_SET;
+
+		memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
+		memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
+		pgKey.mv_data = pagesKeyBuf;
+		pgKey.mv_size = sizeof(pagesKeyBuf);
+		while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
+		{
+			u64 aindex;
+			memcpy(&aindex,pgKey.mv_data,sizeof(u64));
+			if (aindex != pWal->index)
+				break;
+			mdb_cursor_del(thr->cursorPages, MDB_NODUPDATA);
+			pgop = MDB_NEXT_NODUP;
+		}
+		pWal->mxPage = 0;
+		pWal->allPages = 0;
 	}
 	DBG((g_log,"evterm = %llu, evnum=%llu\r\n",pWal->lastCompleteTerm, pWal->lastCompleteEvnum));
 	// no dirty pages, but will write info
