@@ -494,6 +494,24 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			return 0;
 		}
 
+		// We start iterate from next evnum not current. Input evterm/evnum is match_index and match_term.
+		// It needs next.
+		if ((rc = mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_NEXT_NODUP)) != MDB_SUCCESS)
+		{
+			*done = 1;
+			return 0;
+		}
+		else
+		{
+			u64 aindex;
+			memcpy(&aindex, logKey.mv_data,              sizeof(u64));
+			if (aindex != pWal->index)
+			{
+				*done = 1;
+				return 0;
+			}
+		}
+
 		logop = MDB_FIRST_DUP;
 		while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
