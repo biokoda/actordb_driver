@@ -2074,7 +2074,7 @@ do_close(db_command *cmd,db_thread *thread)
 
 		close_prepared(conn);
 	}
-	else if (!conn->wal.thread)
+	if (!conn->wal.thread)
 	{
 		conn->needRestart = 0;
 		rc = sqlite3_close(conn->db);
@@ -2088,10 +2088,10 @@ do_close(db_command *cmd,db_thread *thread)
 		}
 		free(conn->dbpath);
 		memset(conn,0,sizeof(db_connection));
+		return ret;
 	}
-	// if it no longer has any frames in wal, it can actually be closed
-	// else if ((conn->wal->prev == NULL && conn->wal->hdr.mxFrame == 0) || !thread->isopen)
 
+	if (conn->nErlOpen <= 0)
 	{
 		DBG((g_log,"Closing %s\n",conn->dbpath));
 		pActorPos = sqlite3HashFind(&thread->walHash,conn->dbpath);
@@ -2114,10 +2114,6 @@ do_close(db_command *cmd,db_thread *thread)
 		free(conn->dbpath);
 		memset(conn,0,sizeof(db_connection));
 	}
-	// else
-	// {
-	//     DBG((g_log,"Not closing yet, mx=%u, nopen=%d, needrestart=%d\n",conn->wal->hdr.mxFrame,conn->nErlOpen,conn->needRestart));
-	// }
 
 	return ret;
 }
