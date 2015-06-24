@@ -67,23 +67,23 @@ dbcopy() ->
 	?debugFmt("Reading from copy!: ~p",[Select]),
 	file:delete("sq"),
 
-	{ok,Copy2} = actordb_driver:open("copy2"),
-	{ok,_Iter2,Bin2,Head2,Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
-	<<A:64,B:64,PGNO:32,Commit:32>> = Head2,
-	?debugFmt("Second inject ~p ~p ~p ~p",[A,B,PGNO,Commit]),
+	% {ok,Copy2} = actordb_driver:open("copy2"),
+	% {ok,_Iter2,Bin2,Head2,Done2} = actordb_driver:iterate_db(Db,1,1), % get pgno1 and pgno2 (create table)
+	% <<A:64,B:64,PGNO:32,Commit:32>> = Head2,
+	% ?debugFmt("Second inject ~p ~p ~p ~p",[A,B,PGNO,Commit]),
 	% readpages(Bin2,undefined),
-	ok = actordb_driver:inject_page(Copy2,Bin2,Head2),
-	case Done2 > 0 of
-		true ->
-			ok;
-		_ ->
-			copy(Db,_Iter2,undefined,Copy2)
-	end,
-	{ok,_Iter3,Bin3,Head3,_Done3} = actordb_driver:iterate_db(Db,1,2), % get pgno2 with first insert
-	ok = actordb_driver:inject_page(Copy2,Bin3,Head3),
-	FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
-	FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
-	?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),
+	% Inject pgno1
+	% case Done2 > 0 of
+	% 	true ->
+	% 		ok;
+	% 	_ ->
+	% 		copy(Db,_Iter2,undefined,Copy2)
+	% end,
+	% {ok,_Iter3,Bin3,Head3,_Done3} = actordb_driver:iterate_db(Db,1,1), % get pgno2 with first insert
+	% ok = actordb_driver:inject_page(Copy2,Bin3,Head3),
+	% FirstInject = {ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},{rows,[{102,<<"aaa">>,2}]}]]},
+	% FirstInject = actordb_driver:exec_script("select * from tab;",Copy2),
+	% ?debugFmt("Reading from second copy success! - only first insert:~n ~p",[FirstInject]),
 	{{1,1},{1,102},{0,0},2,103,10,<<"abcdef1">>} = Info = actordb_driver:actor_info("original",0),
 	?debugFmt("Get actor info ~p",[Info]),
 	?debugFmt("Rewind original to last insert!",[]),
@@ -92,8 +92,8 @@ dbcopy() ->
 	ok = actordb_driver:wal_rewind(Db,100),
 	{ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
       {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_] = Rows}]]} = actordb_driver:exec_script("select * from tab;",Db),
-	[{102,<<"aaa">>,2}|_] = lists:reverse(Rows),
-	?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
+	[{102,<<"aaa">>,2}|_] = lists:reverse(Rows).
+	% ?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
 
 checkpoint() ->
 	garbage_collect(),
