@@ -1022,6 +1022,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	{
 		if (isCommit)
 		{
+			DBG((g_log,"Commit fct=%llu, fcev=%llu, lct=%llu, lcev=%llu, int=%llu, inev=%llu\n",
+			pWal->firstCompleteTerm, pWal->firstCompleteEvnum, pWal->lastCompleteTerm,
+			pWal->lastCompleteEvnum, pWal->inProgressTerm,pWal->inProgressEvnum));
+
 			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? pWal->inProgressTerm : pWal->lastCompleteTerm;
 			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? pWal->inProgressEvnum : pWal->lastCompleteEvnum;
 			if (pWal->firstCompleteTerm == 0)

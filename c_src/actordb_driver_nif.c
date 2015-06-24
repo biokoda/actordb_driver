@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -818,7 +818,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to set nonblock");
+			result = make_error_tuple(cmd->env,"noblock");
 			break;
 		}
 
@@ -832,7 +832,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (getaddrinfo(thread->control->addresses[pos], portstr, NULL, &addrlist) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to getaddrinfo");
+			result = make_error_tuple(cmd->env,"getaddrinfo");
 			break;
 		}
 		for(adrp = addrlist; adrp != NULL; adrp = adrp->ai_next)
@@ -844,7 +844,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 			}
 		}
 		if (adrp == NULL)
-			result = make_error_tuple(cmd->env,"unable find addrinfo");
+			result = make_error_tuple(cmd->env,"findaddrinfo");
 
 		freeaddrinfo(addrlist);
 #ifndef _WIN32
@@ -854,7 +854,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to connect");
+			result = make_error_tuple(cmd->env,"connect");
 			break;
 		}
 
@@ -873,7 +873,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (rt != 1 || error != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to connect");
+			result = make_error_tuple(cmd->env,"connect");
 			break;
 		}
 
@@ -886,33 +886,33 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to set blocking mode");
+			result = make_error_tuple(cmd->env,"blocking");
 			break;
 		}
 
 		if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int)) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to set keepalive");
+			result = make_error_tuple(cmd->env,"keepalive");
 			break;
 		}
 		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int)) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to set reuseaddr");
+			result = make_error_tuple(cmd->env,"reuseaddr");
 			break;
 		}
 		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int)) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to set nodelay");
+			result = make_error_tuple(cmd->env,"nodelay");
 			break;
 		}
 #ifdef SO_NOSIGPIPE
 		if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&flag, sizeof(int)) != 0)
 		{
 		  close(fd);
-		  result = make_error_tuple(cmd->env,"unable to set nosigpipe");
+		  result = make_error_tuple(cmd->env,"nosigpipe");
 		  break;
 		}
 #endif
@@ -932,7 +932,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (thread->control->prefixes[pos].size+4 != rt)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to initialize");
+			result = make_error_tuple(cmd->env,"initialize");
 			break;
 		}
 
@@ -940,7 +940,7 @@ do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"unable to initialize");
+			result = make_error_tuple(cmd->env,"initialize");
 			break;
 		}
 
@@ -1007,7 +1007,7 @@ do_bind_insert(db_command *cmd, db_thread *thread)
 	list = cmd->arg1;
 
 	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
-		return make_error_tuple(cmd->env, "not iolist");
+		return make_error_tuple(cmd->env, "not_iolist");
 
 	rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(bin.data), bin.size, &(statement), NULL);
 	if(rc != SQLITE_OK)
@@ -1141,7 +1141,7 @@ do_replicate_opts(db_command *cmd, db_thread *thread)
 	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
 	{
 		if (!enif_inspect_binary(cmd->env,cmd->arg,&bin))
-			return make_error_tuple(cmd->env, "unrecognized iolist");
+			return make_error_tuple(cmd->env, "not_iolist");
 	}
 
 	DBG((g_log,"do_replicate_opts %d %zu\n",cmd->conn->connindex, bin.size));
@@ -1206,17 +1206,17 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 	memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
 	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
 
-	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+	if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS && limitEvnum > 0)
 	{
-		DBG((g_log,"Key not found in log for undo %llu %llu\n",pWal->lastCompleteTerm,pWal->lastCompleteEvnum));
+		DBG((g_log,"Key not found in log for rewind %llu %llu\n",pWal->lastCompleteTerm,pWal->lastCompleteEvnum));
 		return atom_false;
 	}
 
-	while (pWal->lastCompleteEvnum >= limitEvnum)
+	while (rc == MDB_SUCCESS && pWal->lastCompleteEvnum >= limitEvnum)
 	{
-		size_t ndupl;
+		// size_t ndupl;
 
-		mdb_cursor_count(thr->cursorLog,&ndupl);
+		// mdb_cursor_count(thr->cursorLog,&ndupl);
 		// For every page here
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 		// Delete from
@@ -1229,7 +1229,7 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 			MDB_val pgKey, pgVal;
 
 			memcpy(&pgno, logVal.mv_data,sizeof(u32));
-			DBG((g_log,"Moving to pgno=%u, evnum=%llu, ndupl=%lu\r\n",pgno,pWal->lastCompleteEvnum,ndupl));
+			DBG((g_log,"Moving to pgno=%u, evnum=%llu\r\n",pgno,pWal->lastCompleteEvnum));
 
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
@@ -1283,6 +1283,7 @@ do_wal_rewind(db_command *cmd, db_thread *thr)
 		}
 		pWal->lastCompleteTerm = evterm;
 		pWal->lastCompleteEvnum = evnum;
+		rc = MDB_SUCCESS;
 	}
 	if (limitEvnum == 0)
 	{
@@ -1366,7 +1367,7 @@ do_actor_info(db_command *cmd, db_thread *thr)
 	int rc;
 
 	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
-		return make_error_tuple(cmd->env, "not iolist");
+		return make_error_tuple(cmd->env, "not_iolist");
 	//
 	// if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 	// 	return SQLITE_ERROR;
@@ -1452,9 +1453,10 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	ErlNifBinary header;
 
 	if (!enif_is_binary(cmd->env,cmd->arg))
-		return atom_false;
+		return make_error_tuple(cmd->env,"not_bin");
+
 	if (!enif_is_binary(cmd->env,cmd->arg1))
-		return atom_false;
+		return make_error_tuple(cmd->env,"hdr_not_bin");
 
 	memset(&page,0,sizeof(page));
 	enif_inspect_binary(cmd->env,cmd->arg,&bin);
@@ -1462,7 +1464,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	enif_inspect_binary(cmd->env,cmd->arg1,&header);
 
 	if (header.size != sizeof(u64)*2+sizeof(u32)*2)
-		return atom_false;
+		return make_error_tuple(cmd->env,"bad_hdr_size");
 
 	evterm = get8byte(header.data);
 	evnum = get8byte(header.data+sizeof(u64));
@@ -1492,7 +1494,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 		else
 		{
 			DBG((g_log,"Unable to decompress inject page!! %ld\r\n",bin.size));
-			return atom_false;
+			return make_error_tuple(cmd->env,"cant_decompress");
 		}
 	}
 	cmd->conn->doReplicate = 0;
@@ -1501,7 +1503,7 @@ do_inject_page(db_command *cmd, db_thread *thread)
 	if (rc != SQLITE_OK)
 	{
 		DBG((g_log,"Unable to write inject page\r\n"));
-		return atom_false;
+		return make_error_tuple(cmd->env,"cant_inject");
 	}
 	cmd->conn->wal.changed = 1;
 	return atom_ok;
@@ -1558,7 +1560,7 @@ do_exec_script(db_command *cmd, db_thread *thread)
 		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
 	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
-		return make_error_tuple(cmd->env, "not iolist");
+		return make_error_tuple(cmd->env, "not_iolist");
 
 	if (cmd->arg1)
 	{
@@ -2193,7 +2195,7 @@ evaluate_command(db_command cmd,db_thread *thread)
 		if (!cmd.conn->db)
 		{
 			DBG((g_log,"Received command on closed connection\n"));
-			return atom_false;
+			make_error_tuple(cmd.env,"command_on_closed");
 		}
 	}
 
@@ -3249,13 +3251,13 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
 	if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
-		return make_error_tuple(env,"invalid sql");
+		return make_error_tuple(env,"sql");
 	if (!enif_is_number(env,argv[4]))
-		return make_error_tuple(env, "term not number");
+		return make_error_tuple(env, "term");
 	if (!enif_is_number(env,argv[5]))
-		return make_error_tuple(env, "index not number");
+		return make_error_tuple(env, "index");
 	if (!enif_is_binary(env,argv[6]))
-		return make_error_tuple(env, "appendparam not binary");
+		return make_error_tuple(env, "appendparam");
 
 
 	item = command_create(res->thread,pd);
@@ -3296,7 +3298,7 @@ checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
 	if (!enif_is_number(env,argv[3]))
-		return make_error_tuple(env, "term not number");
+		return make_error_tuple(env, "term");
 
 	item = command_create(res->thread,pd);
 
@@ -3402,11 +3404,11 @@ inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
 	if (!enif_is_binary(env,argv[3]))
-		return make_error_tuple(env,"not binary");
+		return make_error_tuple(env,"page");
 	// if (argc == 7 && (!enif_is_number(env,argv[4]) || !enif_is_number(env,argv[5]) || !enif_is_number(env,argv[6])))
 	// 	return make_error_tuple(env,"NaN");
 	else if (!enif_is_binary(env,argv[4]))
-		return make_error_tuple(env,"invalid header");
+		return make_error_tuple(env,"header");
 
 	item = command_create(res->thread,pd);
 	item->cmd.type = cmd_inject_page;
@@ -3455,7 +3457,7 @@ wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
 	if (!enif_is_number(env,argv[3]))
-		return make_error_tuple(env,"not evnum");
+		return make_error_tuple(env,"evnum");
 
 	item = command_create(res->thread,pd);
 	item->cmd.type = cmd_wal_rewind;
@@ -3490,9 +3492,9 @@ bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
 	if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
-		return make_error_tuple(env,"invalid sql");
+		return make_error_tuple(env, "sql");
 	if (!(enif_is_list(env,argv[4])))
-		return make_error_tuple(env,"invalid bind parameters");
+		return make_error_tuple(env,"params");
 
 	item = command_create(res->thread,pd);
 	item->cmd.type = cmd_bind_insert;
