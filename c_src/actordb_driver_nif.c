@@ -2975,7 +2975,11 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	sqlite3_initialize();
 	sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
 	sqlite3_vfs_register(sqlite3_nullvfs(), 1);
-	sqlite3_enable_shared_cache(1);
+	// This must not be enabled. It might cause Wal structure to be shared
+	// on two connections without them knowing. If first gets deleted (which will happen)
+	// second will crash the server because it will try to access a Wal structure that is dealocated.
+	// There is no reason to have more than 1 connection per actor.
+	// sqlite3_enable_shared_cache(1);
 
 	atom_false = enif_make_atom(env,"false");
 	atom_ok = enif_make_atom(env,"ok");
