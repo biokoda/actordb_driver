@@ -97,6 +97,7 @@ dbcopy() ->
 
 checkpoint() ->
 	garbage_collect(),
+	?debugFmt("Checkpoint!",[]),
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,S} = actordb_driver:exec_script("select * from tab;",Db),
 	ok = actordb_driver:checkpoint(Db,60),

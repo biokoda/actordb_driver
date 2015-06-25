@@ -11,11 +11,11 @@
 		 parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0, %wal_pages/1,
 		 % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
 		 lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
-		 delete_actor/1,iterate_close/1,
+		 iterate_close/1,
 		 replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
 		 checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,
 		 tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
-		 tcp_reconnect/0,bind_insert/3]).
+		 tcp_reconnect/0]).
 
 % {{Path1,Path2,...},{StaticSql1,StaticSql2,...}}
 init(Threads) ->
@@ -81,15 +81,10 @@ parse_helper(Bin) ->
 parse_helper(Bin,Offset) ->
 	actordb_driver_nif:parse_helper(Bin,Offset).
 
-delete_actor({actordb_driver, _Ref, Connection}) ->
-	actordb_driver_nif:delete_actor(Connection).
-
 replicate_opts(Con,PacketPrefix) ->
 	replicate_opts(Con,PacketPrefix,1).
 replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix,Type) ->
-	Ref = make_ref(),
-	ok = actordb_driver_nif:replicate_opts(Connection,Ref,self(),PacketPrefix,Type).
-	% receive_answer(Ref).
+	ok = actordb_driver_nif:replicate_opts(Connection,PacketPrefix,Type).
 
 % replicate_status({actordb_driver, _Ref, Connection}) ->
 %     actordb_driver_nif:replicate_status(Connection).
@@ -156,11 +151,6 @@ page_size() ->
 noop({actordb_driver, _Ref, Connection}) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:noop(Connection, Ref, self()),
-	receive_answer(Ref).
-
-bind_insert(Sql, [[_|_]|_] = Params, {actordb_driver, _Ref, Connection}) ->
-	Ref = make_ref(),
-	ok = actordb_driver_nif:bind_insert(Connection,Ref,self(),Sql,Params),
 	receive_answer(Ref).
 
 exec_script(Sql, Db) ->

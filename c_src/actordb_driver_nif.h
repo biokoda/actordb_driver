@@ -116,14 +116,11 @@ struct db_thread
 	MDB_cursor *cursorPages;
 	MDB_cursor *cursorInfo;
 	// MDB_cursor *cursorTest;
-	// sqlite3_vfs *vfs;
 	// so currently executing connection data is accessible from wal callback
 	db_connection *curConn;
-	db_connection* conns;
-	int nconns;
+	// db_connection* conns;
+	// int nconns;
 	int maxvalsize;
-
-	// wal_file *walFile;
 
 	// Raft page replication
 	// MAX_CONNECTIONS (8) servers to replicate write log to
@@ -139,18 +136,14 @@ struct db_thread
 	unsigned int dbcount;
 	unsigned int inactivity;
 	int isopen;
-	// initialized to random, increased for every call.
-	// it is used to distinguish writes to same actor from each other and detect
-	// when they should be rollbacked (if they do not end with db size number).
-	// Unlike regular sqlite wal files, in actordb wal files can be intertwined.
-	u32 threadNum;
 	u32 pagesChanged;
 	u8 forceCommit;
 	int index;        // Index in table of threads.
 	int nthreads;
 
 	// Maps DBPath (relative path to db) to connections index.
-	Hash walHash;
+	// Hash walHash;
+
 	// All DB paths are relative to this thread path.
 	// This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
 	char path[MAX_PATHNAME];
@@ -169,18 +162,11 @@ struct db_thread
 struct db_connection
 {
 	struct Wal wal;
-	// u64 writeNumber;
-	// u64 writeTermNumber;
 	sqlite3 *db;
-	char *dbpath;
 	sqlite3_stmt **staticPrepared;
 	sqlite3_stmt **prepared;
 	int *prepVersions;
-	// When actor is requesting pages from wal for replication use this iterator.
-	// WalIterator *walIter;
-	// // Pointer to wal structure that iterator belongs to.
-	// // Iterators move from oldest wal to youngest
-	// Wal* iterWal;
+
 	#ifndef _TESTAPP_
 	// Fixed part of packet prefix
 	char* packetPrefix;
@@ -188,16 +174,12 @@ struct db_connection
 	// Variable part of packet prefix
 	ErlNifBinary packetVarPrefix;
 	#endif
-	u32 lastWriteThreadNum;
-	u32 writeNumToIgnore;
 	// index in thread table of actors (thread->conns)
-	int connindex;
+	// int connindex;
 	// 0   - do not replicate
 	// > 0 - replicate to socket types that match number
 	int doReplicate;
 	int thread;
-	// Is db open from erlang. It may just be open in driver.
-	char nErlOpen;
 	char checkpointLock;
 	char wal_configured;
 	// For every write:
@@ -205,15 +187,6 @@ struct db_connection
 	char nSent;
 	// Set bit for every failed attempt to write to socket of connection
 	char failFlags;
-	char needRestart;
-};
-
-struct conn_resource
-{
-	int thread;
-	int connindex;
-	char checkpointLock;
-	char dodelete;
 };
 
 struct iterate_resource
@@ -223,14 +196,14 @@ struct iterate_resource
 	u32 pgnoPos;
 
 	int thread;
-	int connindex;
+	db_connection *conn;
 
 	u32 mxPage;
 
 	char started;
-	char closed;
 	char entiredb;
 	char termMismatch;
+	char closed;
 };
 
 // /* backup object */
@@ -285,7 +258,7 @@ typedef struct
 	ERL_NIF_TERM arg3;
 	ERL_NIF_TERM arg4;
 #endif
-	int connindex;
+	// int connindex;
 	command_type type;
 } db_command;
 

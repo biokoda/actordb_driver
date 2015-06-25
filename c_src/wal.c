@@ -71,7 +71,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	if (zWalName[0] == '/')
 		offset = 1;
 
-	DBG((g_log,"Wal name=%s\n",zWalName));
+	DBG((g_log,"Wal name=%s, at=%lld\n",zWalName,(i64)pWal));
 
 	if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return SQLITE_ERROR;
@@ -293,7 +293,7 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 	}
 	else
 	{
-		DBG((g_log,"Error?! %d\r\n",rc));
+		DBG((g_log,"ERROR findframe: %d\r\n",rc));
 		*piRead = 0;
 	}
 	return SQLITE_OK;
@@ -405,6 +405,12 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			iter->pgnoPos = 1;
 			iter->entiredb = 1;
 			iter->mxPage = pWal->mxPage;
+			if (pWal->mxPage == 0)
+			{
+				DBG((g_log,"ERROR: Iterate on empty DB %llu\n",pWal->lastCompleteEvnum));
+				*done = 1;
+				return 0;
+			}
 		}
 		else
 		{
@@ -426,6 +432,7 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			*done = iter->mxPage;
 			return 0;
 		}
+		DBG((g_log,"Iter pos=%u, mx=%u, mxdb=%u\n",iter->pgnoPos, iter->mxPage, pWal->mxPage));
 		if (iter->pgnoPos == iter->mxPage)
 			*done = iter->mxPage;
 		put8byte(hdr,                           iter->evterm);
@@ -531,14 +538,14 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 
 			if (iRead == 0)
 			{
-				DBG((g_log,"iterateerror, Did not find frame for pgno=%u, evterm=%llu, evnum=%llu",pgno, iter->evterm, iter->evnum));
+				DBG((g_log,"ERROR: Did not find frame for pgno=%u, evterm=%llu, evnum=%llu",pgno, iter->evterm, iter->evnum));
 				*done = 1;
 				return 0;
 			}
 
 			if (evterm != iter->evterm || evnum != iter->evnum)
 			{
-				DBG((g_log,"iterateerror, Evterm/evnum does not match,looking for: evterm=%llu, evnum=%llu, "
+				DBG((g_log,"ERROR: Evterm/evnum does not match,looking for: evterm=%llu, evnum=%llu, "
 				"got: evterm=%llu, evnum=%llu", iter->evterm, iter->evnum, evterm, evnum));
 				*done = 1;
 				return 0;
@@ -580,15 +587,16 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
 	memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
 	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
-
 	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 	{
 		DBG((g_log,"Key not found in log for checkpoint\n"));
 		return SQLITE_OK;
 	}
+	DBG((g_log,"1"));
 
 	while (pWal->firstCompleteEvnum < limitEvnum)
 	{
+		DBG((g_log,"2"));
 		// For every page here
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 		// Delete from
@@ -674,6 +682,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		pWal->firstCompleteTerm = evterm;
 		pWal->firstCompleteEvnum = evnum;
 	}
+	DBG((g_log,"3"));
 
 	// no dirty pages, but will write info
 	sqlite3WalFrames(pWal, SQLITE_DEFAULT_PAGE_SIZE, NULL, pWal->mxPage, 1, 0);
@@ -870,8 +879,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		char fragment_index = 0;
 		int skipped = 0;
 
-		DBG((g_log,"Insert frame actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
-		pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,isCommit,nTruncate,page_size));
+		DBG((g_log,"Insert frame wal=%lld, actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
+		(i64)pWal,pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,isCommit,nTruncate,page_size));
 
 		if (pCon->doReplicate)
 		{
@@ -962,7 +971,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 		{
 			// printf("Cursor put failed to pages %d\n",rc);
-			DBG((g_log,"CURSOR PUT FAILED: %d, datasize=%d\r\n",rc,full_size));
+			DBG((g_log,"ERROR: cursor put failed=%d, datasize=%d\r\n",rc,full_size));
 			return SQLITE_ERROR;
 		}
 
@@ -982,7 +991,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 
 			if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 			{
-				DBG((g_log,"CURSOR secondary PUT FAILED: err=%d, datasize=%d, skipped=%d, frag=%d\r\n",
+				DBG((g_log,"ERROR: cursor secondary put failed: err=%d, datasize=%d, skipped=%d, frag=%d\r\n",
 				rc,full_size, skipped, (int)fragment_index));
 				return SQLITE_ERROR;
 			}
@@ -1010,7 +1019,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
 		{
 			// printf("Cursor put failed to log\n");
-			DBG((g_log,"CURSOR PUT TO LOG FAILED: %d\r\n",rc));
+			DBG((g_log,"ERROR: cursor put to log failed: %d\r\n",rc));
 			return SQLITE_ERROR;
 		}
 
@@ -1037,6 +1046,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			pWal->mxPage =  pWal->mxPage > nTruncate ? pWal->mxPage : nTruncate;
 			pWal->changed = 0;
 			thr->forceCommit = 1;
+			DBG((g_log,"cur mxpage=%u\n",pWal->mxPage));
 		}
 		else
 		{
@@ -1080,7 +1090,6 @@ int sqlite3WalCheckpoint(
 */
 int sqlite3WalCallback(Wal *pWal)
 {
-	DBG((g_log,"Callback\n"));
 	return SQLITE_OK;
 }
 

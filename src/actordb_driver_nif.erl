@@ -19,17 +19,15 @@ lz4_decompress/3,
 tcp_connect/6,
 tcp_connect/7,
 tcp_reconnect/0,
-replicate_opts/5,
+replicate_opts/3,
 page_size/0,
 iterate_db/4,
 iterate_db/5,
 iterate_close/1,
-bind_insert/5,
 all_tunnel_call/3,
 checkpoint_lock/4,
 inject_page/5,
 wal_rewind/4,
-delete_actor/1,
 checkpoint/4,
 term_store/3,
 term_store/4,
@@ -46,9 +44,6 @@ term_store(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 checkpoint(_,_,_,_) ->
-	exit(nif_library_not_loaded).
-
-delete_actor(_) ->
 	exit(nif_library_not_loaded).
 
 wal_rewind(_,_,_,_) ->
@@ -77,22 +72,10 @@ store_prepared_table(_,_) ->
 all_tunnel_call(_,_,_) ->
 	exit(nif_library_not_loaded).
 
-bind_insert(_,_,_,_,_) ->
-	exit(nif_library_not_loaded).
-
-% wal_checksum(_,_,_,_) ->
-%     exit(nif_library_not_loaded).
-
-% replicate_status(_) ->
-%     exit(nif_library_not_loaded).
-
-% wal_header(_) ->
-%     exit(nif_library_not_loaded).
-
 noop(_,_,_) ->
 	exit(nif_library_not_loaded).
 
-replicate_opts(_,_,_,_,_) ->
+replicate_opts(_,_,_) ->
 	exit(nif_library_not_loaded).
 
 tcp_connect(_,_,_,_,_,_) ->
