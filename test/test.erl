@@ -1,6 +1,8 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
-
+-define(SYNC,0).
+-define(DBSIZE,4096*1024*128).
+-define(INIT,actordb_driver:init({{"."},{},?SYNC,?DBSIZE})).
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
@@ -14,8 +16,8 @@ run_test_() ->
 
 
 lz4() ->
-	actordb_driver:init({{"."},{},100}),
 	?debugFmt("lz4",[]),
+	?INIT,
 	Bin1 = binary:copy(<<"SELECT * FROM WTF;">>,2),
 	{Compressed1,CompressedSize1} = actordb_driver:lz4_compress(Bin1),
 	% ?debugFmt("Compressed ~p size ~p ",[byte_size(Compressed),CompressedSize]),
@@ -24,6 +26,7 @@ lz4() ->
 
 modes() ->
 	?debugFmt("modes",[]),
+	?INIT,
 	Sql = <<"select name, sql from sqlite_master where type='table';",
 					"$PRAGMA cache_size=10;">>,
 	{ok,Db,_} = actordb_driver:open(":memory:",1,Sql),
@@ -34,7 +37,7 @@ modes() ->
 	{ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db).
 
 dbcopy() ->
-	actordb_driver:init({{"."},{},100}),
+	?INIT,
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
 	ok = actordb_driver:term_store(Db,10,<<"abcdef">>),
@@ -126,7 +129,7 @@ copy(Orig,Iter,F,Copy) ->
 
 
 bigtrans() ->
-	actordb_driver:init({{"."},{},100}),
+	?INIT,
 	application:ensure_all_started(crypto),
 	?debugFmt("Generating large sql",[]),
 	Sql = [<<"SAVEPOINT 'adb';",
@@ -188,7 +191,7 @@ bigtrans_check() ->
 	code:delete(actordb_driver_nif),
 	code:purge(actordb_driver_nif),
 	false = code:is_loaded(actordb_driver_nif),
-	actordb_driver:init({{"."},{},100}),
+	?INIT,
 
 	Sql = "select * from __adb;",
 	{ok,Db2} = actordb_driver:open("big.db"),

@@ -592,11 +592,9 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		DBG((g_log,"Key not found in log for checkpoint\n"));
 		return SQLITE_OK;
 	}
-	DBG((g_log,"1"));
 
 	while (pWal->firstCompleteEvnum < limitEvnum)
 	{
-		DBG((g_log,"2"));
 		// For every page here
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 		// Delete from
@@ -682,7 +680,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		pWal->firstCompleteTerm = evterm;
 		pWal->firstCompleteEvnum = evnum;
 	}
-	DBG((g_log,"3"));
 
 	// no dirty pages, but will write info
 	sqlite3WalFrames(pWal, SQLITE_DEFAULT_PAGE_SIZE, NULL, pWal->mxPage, 1, 0);
@@ -800,14 +797,12 @@ int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 ** position in the WAL */
 void sqlite3WalSavepoint(Wal *pWal, u32 *aWalData)
 {
-	DBG((g_log,"SAVEPOINT\n"));
 }
 
 /* Move the write position of the WAL back to iFrame.  Called in
 ** response to a ROLLBACK TO command. */
 int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 {
-	DBG((g_log,"SAVEPOINT UNDO\n"));
 	return SQLITE_OK;
 }
 

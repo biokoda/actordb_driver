@@ -2955,6 +2955,15 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	db_thread *controlThread = NULL;
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
+// Apple/Win get smaller max dbsize
+// Havent really tested win32 yet, but apple mmap is fucked. Can't create mmap larger than RAM.
+#if defined(__APPLE__) || defined(_WIN32)
+	u64 dbsize = 4096*1024*1024LL;
+#else
+	// 1TB def size on linux
+	u64 dbsize = 4096*1024*1024*128*2LL;
+#endif
+
 #ifdef _WIN32
 	WSADATA wsd;
 	if (WSAStartup(MAKEWORD(1, 1), &wsd) != 0)
@@ -3000,14 +3009,20 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		return -1;
 	}
 
-	if (i != 3 && i != 2)
+	if (i != 3 && i != 2 && i != 4)
 		return -1;
 
-	if (i == 3)
+	if (i > 2)
 	{
 		if (!enif_get_int(env,param[2],&sync))
 			return -1;
 	}
+	if (i > 3)
+	{
+		if (!enif_get_uint64(env,param[3],(ErlNifUInt64*)&dbsize))
+			return -1;
+	}
+
 	if (sync)
 		sync = 0;
 	else
@@ -3060,11 +3075,12 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		return -1;
 	}
 
-	DBG((g_log,"Driver starting %d threads.\n",priv->nthreads));
+	DBG((g_log,"Driver starting %d threads. Dbsize %llu\n",priv->nthreads,dbsize));
 
 	for (i = 0; i < priv->nthreads; i++)
 	{
 		MDB_env *menv;
+		int rc;
 		db_thread *curThread = malloc(sizeof(db_thread));
 		memset(curThread,0,sizeof(db_thread));
 		char lmpath[MAX_PATHNAME];
@@ -3080,7 +3096,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			return -1;
 		if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
 			return -1;
-		if (mdb_env_set_mapsize(menv,4096*1024*128*10) != MDB_SUCCESS)
+		if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
 			return -1;
 		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|sync, 0664) != MDB_SUCCESS)
 			return -1;

@@ -17,7 +17,7 @@
 		 tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
 		 tcp_reconnect/0]).
 
-% {{Path1,Path2,...},{StaticSql1,StaticSql2,...}}
+% {{Path1,Path2,...},{StaticSql1,StaticSql2,...},SyncFlag,MaxDbSize}
 init(Threads) ->
 	actordb_driver_nif:init(Threads).
 
