@@ -880,7 +880,6 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		char fragment_index = 0;
 		int skipped = 0;
 
-		DBG((g_log,"Pgsz=%d\n",szPage));
 		DBG((g_log,"Insert frame wal=%lld, actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
 		(i64)pWal,pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,isCommit,nTruncate,page_size));
 
