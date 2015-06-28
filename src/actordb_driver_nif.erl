@@ -31,16 +31,24 @@ wal_rewind/4,
 checkpoint/4,
 term_store/3,
 term_store/4,
-actor_info/4
+actor_info/4,
+sync_num/1,
+sync/3
 ]).
 
 actor_info(_,_,_,_) ->
+	exit(nif_library_not_loaded).
+
+sync(_,_,_) ->
 	exit(nif_library_not_loaded).
 
 term_store(_,_,_) ->
 	exit(nif_library_not_loaded).
 
 term_store(_,_,_,_) ->
+	exit(nif_library_not_loaded).
+
+sync_num(_) ->
 	exit(nif_library_not_loaded).
 
 checkpoint(_,_,_,_) ->

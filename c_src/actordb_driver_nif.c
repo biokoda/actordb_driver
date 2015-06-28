@@ -8,7 +8,6 @@
 #include <dlfcn.h>
 #endif
 
-#include <erl_nif.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -1244,6 +1243,22 @@ do_actor_info(db_command *cmd, db_thread *thr)
 }
 
 static ERL_NIF_TERM
+do_sync(db_command *cmd, db_thread *thread)
+{
+	priv_data *pd = thread->pd;
+
+	enif_mutex_lock(pd->thrMutexes[thread->index]);
+	if (cmd->conn->syncNum <= pd->syncNumbers[thread->index])
+	{
+		cmd->conn->syncNum = ++pd->syncNumbers[thread->index];
+		mdb_env_sync(thread->env,1);
+	}
+	enif_mutex_unlock(pd->thrMutexes[thread->index]);
+
+	return atom_ok;
+}
+
+static ERL_NIF_TERM
 do_inject_page(db_command *cmd, db_thread *thread)
 {
 	ErlNifBinary bin;
@@ -1724,6 +1739,11 @@ do_exec_script(db_command *cmd, db_thread *thread)
 	}
 	else
 	{
+		if (pagesPre != thread->pagesChanged)
+		{
+			priv_data *pd = thread->pd;
+			cmd->conn->syncNum = pd->syncNumbers[thread->index];
+		}
 		return make_ok_tuple(cmd->env,results);
 	}
 }
@@ -1881,6 +1901,8 @@ evaluate_command(db_command *cmd,db_thread *thread)
 	// 	return do_replicate_opts(&cmd,thread);
 	case cmd_checkpoint:
 		return do_checkpoint(cmd,thread);
+	case cmd_sync:
+		return do_sync(cmd,thread);
 	case cmd_inject_page:
 		return do_inject_page(cmd,thread);
 	case cmd_actor_info:
@@ -2365,6 +2387,22 @@ db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
+sync_num(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_connection *res;
+
+	DBG((g_log,"sync_num\n"));
+
+	if (argc != 1)
+		return enif_make_badarg(env);
+	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		return make_error_tuple(env, "invalid_connection");
+
+	return enif_make_uint64(env,res->syncNum);
+}
+
+static ERL_NIF_TERM
 replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	db_connection *res;
@@ -2732,6 +2770,53 @@ exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
+db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	db_connection *res;
+	ErlNifPid pid;
+	qitem *item;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+	u8 doit = 1;
+
+	DBG((g_log,"db_sync\n"));
+
+	if(argc != 3)
+		return enif_make_badarg(env);
+	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		return enif_make_badarg(env);
+	if(!enif_is_ref(env, argv[1]))
+		return make_error_tuple(env, "invalid_ref");
+	if(!enif_get_local_pid(env, argv[2], &pid))
+		return make_error_tuple(env, "invalid_pid");
+
+	enif_mutex_lock(pd->thrMutexes[res->thread]);
+	if (res->syncNum < pd->syncNumbers[res->thread])
+	{
+		doit = 0;
+	}
+	enif_mutex_unlock(pd->thrMutexes[res->thread]);
+
+	if (doit)
+	{
+		item = command_create(res->thread,pd);
+		item->cmd.type = cmd_sync;
+		item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+		item->cmd.pid = pid;
+		item->cmd.conn = res;
+		enif_keep_resource(res);
+
+		enif_consume_timeslice(env,500);
+		return push_command(res->thread, pd, item);
+	}
+	else
+	{
+		ERL_NIF_TERM answer = enif_make_tuple2(env, argv[1], atom_ok);
+		enif_send(NULL, &pid, env, answer);
+		return atom_ok;
+	}
+}
+
+static ERL_NIF_TERM
 checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	db_connection *res;
@@ -3068,6 +3153,9 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	controlThread->nthreads = priv->nthreads;
 	controlThread->pd = priv;
 	priv->tasks[priv->nthreads] = controlThread->tasks;
+	priv->syncNumbers = malloc(sizeof(u64)*priv->nthreads);
+	priv->thrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nthreads);
+	memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nthreads));
 
 	if(enif_thread_create("db_connection", &(priv->tids[priv->nthreads]), thread_func, controlThread, NULL) != 0)
 	{
@@ -3080,7 +3168,6 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	for (i = 0; i < priv->nthreads; i++)
 	{
 		MDB_env *menv;
-		int rc;
 		db_thread *curThread = malloc(sizeof(db_thread));
 		memset(curThread,0,sizeof(db_thread));
 		char lmpath[MAX_PATHNAME];
@@ -3098,9 +3185,11 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			return -1;
 		if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
 			return -1;
-		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|sync, 0664) != MDB_SUCCESS)
+		// Do not actually use sync. Syncs are manual.
+		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR, 0664) != MDB_SUCCESS)
 			return -1;
 
+		priv->thrMutexes[i] = enif_mutex_create("thrmutex");
 		curThread->env = menv;
 		curThread->pathlen = strlen(curThread->path);
 		curThread->index = i;
@@ -3138,12 +3227,17 @@ on_unload(ErlNifEnv* env, void* pd)
 		push_command(i, priv, item);
 
 		if (i >= 0)
+		{
+			enif_mutex_destroy(priv->thrMutexes[i]);
 			enif_thread_join((ErlNifTid)priv->tids[i],NULL);
+		}
 		else
 			enif_thread_join((ErlNifTid)priv->tids[nthreads],NULL);
 	}
 	free(priv->tasks);
 	free(priv->tids);
+	free(priv->thrMutexes);
+	free(priv->syncNumbers);
 	free(pd);
 }
 
@@ -3176,6 +3270,8 @@ static ErlNifFunc nif_funcs[] = {
 	{"actor_info",4,get_actor_info},
 	{"term_store",3,term_store},
 	{"term_store",4,term_store},
+	{"sync_num",1,sync_num},
+	{"sync",3,db_sync},
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

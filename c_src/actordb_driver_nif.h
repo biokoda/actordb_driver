@@ -8,6 +8,7 @@
 // #include <dirent.h>
 #endif
 #include "lmdb.h"
+#include "erl_nif.h"
 
 #define MAX_ATOM_LENGTH 255
 #define MAX_PATHNAME 512
@@ -49,6 +50,9 @@ struct priv_data
 {
 	queue **tasks;      // array of queues for every thread + control thread
 	int nthreads;       // number of work threads
+
+	u64 *syncNumbers;
+	ErlNifMutex **thrMutexes;
 
 	#ifndef _TESTAPP_
 	ErlNifTid *tids;    // tids for every thread
@@ -118,15 +122,12 @@ struct db_thread
 	// MDB_cursor *cursorTest;
 	// so currently executing connection data is accessible from wal callback
 	db_connection *curConn;
-	// db_connection* conns;
-	// int nconns;
 	int maxvalsize;
 
 	// Raft page replication
 	// MAX_CONNECTIONS (8) servers to replicate write log to
 	int sockets[MAX_CONNECTIONS];
 	int socket_types[MAX_CONNECTIONS];
-	// void (*wal_page_hook)(void *data,void *page,int pagesize,void* header, int headersize);
 
 	#ifndef _TESTAPP_
 	queue *tasks;
@@ -140,9 +141,6 @@ struct db_thread
 	u8 forceCommit;
 	int index;        // Index in table of threads.
 	int nthreads;
-
-	// Maps DBPath (relative path to db) to connections index.
-	// Hash walHash;
 
 	// All DB paths are relative to this thread path.
 	// This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
@@ -166,6 +164,7 @@ struct db_connection
 	sqlite3_stmt **staticPrepared;
 	sqlite3_stmt **prepared;
 	int *prepVersions;
+	u64 syncNum;
 
 	#ifndef _TESTAPP_
 	// Fixed part of packet prefix
@@ -241,7 +240,8 @@ typedef enum
 	cmd_replicate_opts = 19,
 	cmd_checkpoint = 20,
 	cmd_term_store = 21,
-	cmd_actor_info = 22
+	cmd_actor_info = 22,
+	cmd_sync
 } command_type;
 
 typedef struct
