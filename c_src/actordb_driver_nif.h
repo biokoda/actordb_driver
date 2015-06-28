@@ -8,8 +8,9 @@
 // #include <dirent.h>
 #endif
 #include "lmdb.h"
+#ifndef _TESTAPP_
 #include "erl_nif.h"
-
+#endif
 #define MAX_ATOM_LENGTH 255
 #define MAX_PATHNAME 512
 #define PAGE_BUFF_SIZE 4300
@@ -52,9 +53,9 @@ struct priv_data
 	int nthreads;       // number of work threads
 
 	u64 *syncNumbers;
-	ErlNifMutex **thrMutexes;
 
 	#ifndef _TESTAPP_
+	ErlNifMutex **thrMutexes;
 	ErlNifTid *tids;    // tids for every thread
 	ErlNifResourceType *db_connection_type;
 	ErlNifResourceType *db_backup_type;
@@ -71,10 +72,8 @@ struct Wal {
 	u64 lastCompleteEvnum;
 	u64 inProgressTerm;
 	u64 inProgressEvnum;
-	MDB_val resFrames[3];
 	Pgno mxPage;
 	u32 allPages; // mxPage + unused pages
-	u8 nResFrames;
 	u8 changed;
 };
 
@@ -108,6 +107,7 @@ struct control_data
 
 struct db_thread
 {
+	MDB_val *resFrames;
 	MDB_dbi infodb;
 	MDB_dbi logdb;
 	MDB_dbi pagesdb;
@@ -141,6 +141,7 @@ struct db_thread
 	u8 forceCommit;
 	int index;        // Index in table of threads.
 	int nthreads;
+	int nResFrames;
 
 	// All DB paths are relative to this thread path.
 	// This path is absolute and stems from app.config (main_db_folder, extra_db_folders).

@@ -2136,6 +2136,7 @@ thread_func(void *arg)
 	if (data->env)
 	{
 		data->maxvalsize = mdb_env_get_maxkeysize(data->env);
+		data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
 
 		if (open_wtxn(data) == NULL)
 			return NULL;
@@ -3108,9 +3109,9 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			return -1;
 	}
 
-	if (sync)
-		sync = 0;
-	else
+	// if (sync)
+	// 	sync = 0;
+	// else
 		sync = MDB_NOSYNC;
 
 	if (!enif_get_tuple(env,param[0],&priv->nthreads,&param1))
@@ -3186,7 +3187,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
 			return -1;
 		// Do not actually use sync. Syncs are manual.
-		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR, 0664) != MDB_SUCCESS)
+		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|sync, 0664) != MDB_SUCCESS)
 			return -1;
 
 		priv->thrMutexes[i] = enif_mutex_create("thrmutex");

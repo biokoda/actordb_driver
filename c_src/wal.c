@@ -266,15 +266,15 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 					*outEvnum = evnum;
 
 				DBG((g_log,"Found page size=%ld, frags=%d\n",data.mv_size,(int)frag));
-				pWal->nResFrames = frag;
-				pWal->resFrames[frag--] = data;
+				thr->nResFrames = frag;
+				thr->resFrames[frag--] = data;
 
 				while (frag >= 0)
 				{
 					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
 					frag = *(u8*)(data.mv_data+sizeof(u64)*2);
 					// DBG((g_log,"SUCCESS? %d frag=%d, size=%ld\n",pgno,frag,data.mv_size));
-					pWal->resFrames[frag--] = data;
+					thr->resFrames[frag--] = data;
 				}
 				*piRead = 1;
 				break;
@@ -301,19 +301,20 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 
 int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
+	db_thread *thr = pWal->thread;
 	DBG((g_log,"Read frame\n"));
 	// i64 term, evnum;
-	if (pWal->nResFrames == 0)
+	if (thr->nResFrames == 0)
 	{
-		if (LZ4_decompress_safe((char*)(pWal->resFrames[0].mv_data+sizeof(u64)*2+1),(char*)pOut,
-							  pWal->resFrames[0].mv_size-(sizeof(u64)*2+1),nOut) > 0)
+		if (LZ4_decompress_safe((char*)(thr->resFrames[0].mv_data+sizeof(u64)*2+1),(char*)pOut,
+							  thr->resFrames[0].mv_size-(sizeof(u64)*2+1),nOut) > 0)
 		{
 	#ifdef _TESTDBG_
 			{
 				i64 term, evnum;
-				memcpy(&term,  pWal->resFrames[0].mv_data,             sizeof(u64));
-				memcpy(&evnum, pWal->resFrames[0].mv_data+sizeof(u64), sizeof(u64));
-				DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",term,evnum,(int)pWal->resFrames[0].mv_size));
+				memcpy(&term,  thr->resFrames[0].mv_data,             sizeof(u64));
+				memcpy(&evnum, thr->resFrames[0].mv_data+sizeof(u64), sizeof(u64));
+				DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",term,evnum,(int)thr->resFrames[0].mv_size));
 			}
 	#endif
 			return SQLITE_OK;
@@ -322,20 +323,24 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 	else
 	{
 		u8 pagesBuf[PAGE_BUFF_SIZE];
-		int frags = pWal->nResFrames;
+		int frags = thr->nResFrames;
 		int pos = 0;
 
 		while (frags >= 0)
 		{
 			// DBG((g_log,"Read frame %d\n",pos));
-			memcpy(pagesBuf + pos, pWal->resFrames[frags].mv_data+sizeof(u64)*2+1, pWal->resFrames[frags].mv_size-(sizeof(u64)*2+1));
-			pos += pWal->resFrames[frags].mv_size-(sizeof(u64)*2+1);
+			memcpy(pagesBuf + pos, thr->resFrames[frags].mv_data+sizeof(u64)*2+1, thr->resFrames[frags].mv_size-(sizeof(u64)*2+1));
+			pos += thr->resFrames[frags].mv_size-(sizeof(u64)*2+1);
 			frags--;
 		}
-		pWal->nResFrames = 0;
+		thr->nResFrames = 0;
 
 		if (LZ4_decompress_safe((char*)pagesBuf,(char*)pOut,pos,nOut) > 0)
+		{
+			DBG((g_log,"DECOMPRESSED!\n"));
 			return SQLITE_OK;
+		}
+
 	}
 	return SQLITE_ERROR;
 }
@@ -364,30 +369,31 @@ int sqlite3WalEndWriteTransaction(Wal *pWal)
 
 static int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize)
 {
+	db_thread *thr = pWal->thread;
 	int bufused = 0;
-	int frags = pWal->nResFrames;
+	int frags = thr->nResFrames;
 	int frsize = 0;
 	const int hsz = (sizeof(u64)*2+1);
 
 	while (frags >= 0)
 	{
-		frsize += pWal->resFrames[frags].mv_size-hsz;
+		frsize += thr->resFrames[frags].mv_size-hsz;
 		frags--;
 	}
 
-	frags = pWal->nResFrames;
+	frags = thr->nResFrames;
 	frsize = 0;
 	while (frags >= 0)
 	{
-		const int pagesz = pWal->resFrames[frags].mv_size - hsz;
+		const int pagesz = thr->resFrames[frags].mv_size - hsz;
 
-		memcpy(buf+bufused, pWal->resFrames[frags].mv_data + hsz, pagesz);
+		memcpy(buf+bufused, thr->resFrames[frags].mv_data + hsz, pagesz);
 		bufused += pagesz;
 		frags--;
 
 		DBG((g_log,"bufused=%d, pagesz=%d\n",bufused,pagesz));
 	}
-	pWal->nResFrames = 0;
+	thr->nResFrames = 0;
 
 	return bufused;
 }
@@ -874,6 +880,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		char fragment_index = 0;
 		int skipped = 0;
 
+		DBG((g_log,"Pgsz=%d\n",szPage));
 		DBG((g_log,"Insert frame wal=%lld, actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
 		(i64)pWal,pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,isCommit,nTruncate,page_size));
 
