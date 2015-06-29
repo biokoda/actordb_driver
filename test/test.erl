@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -define(SYNC,0).
 -define(DBSIZE,4096*1024*128).
--define(INIT,actordb_driver:init({{"."},{},?SYNC,?DBSIZE})).
+-define(INIT,actordb_driver:init({{"."},{},?DBSIZE})).
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
@@ -45,6 +45,9 @@ dbcopy() ->
 	ok = actordb_driver:term_store("original",10,<<"abcdef1">>,0),
 	EN = 100,
 	[ {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (",integer_to_list(N+100),",'aaa',2)"],Db,infinity,1,N,<<>>) || N <- lists:seq(2,EN)],
+	0 = actordb_driver:fsync_num(Db),
+	ok = actordb_driver:fsync(Db),
+	0 = actordb_driver:fsync_num(Db),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,EN+1,<<>>),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,EN+2,<<>>),
 	{ok,Select} = actordb_driver:exec_script("select * from tab;",Db),

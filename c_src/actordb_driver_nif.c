@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -106,26 +106,13 @@ wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 	u8 lenPage[2];
 	u8 lenVarPrefix[2];
 	u8 lenHeader = (char)headersize;
-	// u8 buff[PAGE_BUFF_SIZE];
-	// int buffUsed;
 	int rt;
-	// char confirm[7] = {0,0,0,0,0,0,0};
 
 	if (!conn->doReplicate)
 	{
 		return;
 	}
 	conn->nSent = conn->failFlags = 0;
-
-
-	// if (pagesize > 0 && LZ4_COMPRESSBOUND(pagesize) < PAGE_BUFF_SIZE)
-	// {
-	// 	buffUsed = LZ4_compress((char*)page,(char*)(buff),pagesize);
-	// }
-	// else
-	// {
-	// 	buffUsed = 0;
-	// }
 
 	completeSize = buffUsed+2+headersize+1+conn->packetPrefixSize+2+conn->packetVarPrefix.size+2;
 	put2byte(lenPage,buffUsed);
@@ -1248,9 +1235,13 @@ do_sync(db_command *cmd, db_thread *thread)
 	priv_data *pd = thread->pd;
 
 	enif_mutex_lock(pd->thrMutexes[thread->index]);
-	if (cmd->conn->syncNum <= pd->syncNumbers[thread->index])
+	if (cmd->conn && cmd->conn->syncNum >= pd->syncNumbers[thread->index])
 	{
-		cmd->conn->syncNum = ++pd->syncNumbers[thread->index];
+		pd->syncNumbers[thread->index]++;
+		mdb_env_sync(thread->env,1);
+	}
+	else if (!cmd->conn)
+	{
 		mdb_env_sync(thread->env,1);
 	}
 	enif_mutex_unlock(pd->thrMutexes[thread->index]);
@@ -2781,38 +2772,54 @@ db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	DBG((g_log,"db_sync\n"));
 
-	if(argc != 3)
+	if(argc != 3 && argc != 0)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
-		return enif_make_badarg(env);
-	if(!enif_is_ref(env, argv[1]))
-		return make_error_tuple(env, "invalid_ref");
-	if(!enif_get_local_pid(env, argv[2], &pid))
-		return make_error_tuple(env, "invalid_pid");
 
-	enif_mutex_lock(pd->thrMutexes[res->thread]);
-	if (res->syncNum < pd->syncNumbers[res->thread])
+	if (argc == 3)
 	{
-		doit = 0;
-	}
-	enif_mutex_unlock(pd->thrMutexes[res->thread]);
+		if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+			return enif_make_badarg(env);
+		if(!enif_is_ref(env, argv[1]))
+			return make_error_tuple(env, "invalid_ref");
+		if(!enif_get_local_pid(env, argv[2], &pid))
+			return make_error_tuple(env, "invalid_pid");
 
-	if (doit)
-	{
-		item = command_create(res->thread,pd);
-		item->cmd.type = cmd_sync;
-		item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-		item->cmd.pid = pid;
-		item->cmd.conn = res;
-		enif_keep_resource(res);
+		enif_mutex_lock(pd->thrMutexes[res->thread]);
+		if (res->syncNum < pd->syncNumbers[res->thread])
+		{
+			doit = 0;
+		}
+		enif_mutex_unlock(pd->thrMutexes[res->thread]);
 
-		enif_consume_timeslice(env,500);
-		return push_command(res->thread, pd, item);
+		if (doit)
+		{
+			item = command_create(res->thread,pd);
+			item->cmd.type = cmd_sync;
+			item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+			item->cmd.pid = pid;
+			item->cmd.conn = res;
+			enif_keep_resource(res);
+
+			enif_consume_timeslice(env,500);
+			return push_command(res->thread, pd, item);
+		}
+		else
+		{
+			ERL_NIF_TERM answer = enif_make_tuple2(env, argv[1], atom_ok);
+			enif_send(NULL, &pid, env, answer);
+			return atom_ok;
+		}
 	}
 	else
 	{
-		ERL_NIF_TERM answer = enif_make_tuple2(env, argv[1], atom_ok);
-		enif_send(NULL, &pid, env, answer);
+		int i;
+		for (i = 0; i < pd->nthreads; i++)
+		{
+			item = command_create(i,pd);
+			item->cmd.type = cmd_sync;
+			push_command(i, pd, item);
+		}
+
 		return atom_ok;
 	}
 }
@@ -3037,7 +3044,6 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	char nodename[128];
 	ERL_NIF_TERM head, tail;
 	priv_data *priv;
-	int sync = 1;
 	db_thread *controlThread = NULL;
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
@@ -3095,24 +3101,23 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		return -1;
 	}
 
-	if (i != 3 && i != 2 && i != 4)
+	if (i != 3 && i != 2)
 		return -1;
 
+	// if (i > 2)
+	// {
+	// 	if (!enif_get_int(env,param[2],&sync))
+	// 		return -1;
+	// }
 	if (i > 2)
 	{
-		if (!enif_get_int(env,param[2],&sync))
+		if (!enif_get_uint64(env,param[2],(ErlNifUInt64*)&dbsize))
 			return -1;
 	}
-	if (i > 3)
-	{
-		if (!enif_get_uint64(env,param[3],(ErlNifUInt64*)&dbsize))
-			return -1;
-	}
-
 	// if (sync)
 	// 	sync = 0;
 	// else
-		sync = MDB_NOSYNC;
+	// sync = MDB_NOSYNC;
 
 	if (!enif_get_tuple(env,param[0],&priv->nthreads,&param1))
 		return -1;
@@ -3186,8 +3191,8 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			return -1;
 		if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
 			return -1;
-		// Do not actually use sync. Syncs are manual.
-		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|sync, 0664) != MDB_SUCCESS)
+		// Syncs are handled from erlang.
+		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOSYNC, 0664) != MDB_SUCCESS)
 			return -1;
 
 		priv->thrMutexes[i] = enif_mutex_create("thrmutex");
@@ -3271,8 +3276,9 @@ static ErlNifFunc nif_funcs[] = {
 	{"actor_info",4,get_actor_info},
 	{"term_store",3,term_store},
 	{"term_store",4,term_store},
-	{"sync_num",1,sync_num},
-	{"sync",3,db_sync},
+	{"fsync_num",1,sync_num},
+	{"fsync",3,db_sync},
+	{"fsync",0,db_sync},
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

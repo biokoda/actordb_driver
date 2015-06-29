@@ -1,11 +1,7 @@
 #ifndef ACTORDB_DRIVER_NIF_H
 
-
 #ifdef  _WIN32
-// #include "dirent.h"
 #define snprintf _snprintf
-// #else
-// #include <dirent.h>
 #endif
 #include "lmdb.h"
 #ifndef _TESTAPP_
@@ -89,21 +85,6 @@ struct control_data
 	char isopen[MAX_CONNECTIONS];
 	#endif
 };
-
-// struct wal_file
-// {
-//   wal_file *prev;
-//   sqlite3_file *pWalFd;
-//   u64 walIndex;
-// 	u32 mxFrame;
-// 	int szPage;
-// 	u32 aSalt[2];
-//   u32 lastCommit;    // frame number of last commit. Used in sqlite3WalUndo
-//   u32 checkpointPos; // checkpoints are done one actor at a time from start to end of conns table.
-//                      // once we reach the end of actor table, we are done.
-//   u8 bigEndCksum;
-//   char filename[MAX_PATHNAME];
-// };
 
 struct db_thread
 {
@@ -205,17 +186,6 @@ struct iterate_resource
 	char termMismatch;
 	char closed;
 };
-
-// /* backup object */
-// struct db_backup
-// {
-// 	sqlite3_backup *b;
-// 	sqlite3 *dst;
-// 	sqlite3 *src;
-// 	int pages_for_step;
-// 	int thread;
-// };
-
 
 typedef enum
 {

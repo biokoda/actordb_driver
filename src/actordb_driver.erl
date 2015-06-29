@@ -11,13 +11,14 @@
 		 parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0, %wal_pages/1,
 		 % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
 		 lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
-		 iterate_close/1, sync_num/1,sync/1,
+		 iterate_close/1, fsync_num/1,fsync/1,fsync/0,
 		 replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
 		 checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,
 		 tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
 		 tcp_reconnect/0]).
 
-% {{Path1,Path2,...},{StaticSql1,StaticSql2,...},SyncFlag,MaxDbSize}
+% Every path is a write thread.
+% {{Path1,Path2,...},{StaticSql1,StaticSql2,...},MaxDbSize}
 init(Threads) ->
 	actordb_driver_nif:init(Threads).
 
@@ -124,12 +125,13 @@ wal_rewind({actordb_driver, _Ref, Connection},Evnum) ->
 	ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),Evnum),
 	receive_answer(Ref).
 
-sync_num({actordb_driver, _Ref, Connection}) ->
-	actordb_driver_nif:sync_num(Connection).
-
-sync({actordb_driver, _Ref, Connection}) ->
+fsync_num({actordb_driver, _Ref, Connection}) ->
+	actordb_driver_nif:fsync_num(Connection).
+fsync() ->
+	ok = actordb_driver_nif:fsync().
+fsync({actordb_driver, _Ref, Connection}) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:sync(Connection, Ref, self()),
+	ok = actordb_driver_nif:fsync(Connection, Ref, self()),
 	receive_answer(Ref).
 
 iterate_close({iter,Iter}) ->
