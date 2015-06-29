@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -415,9 +415,9 @@ command_create(int threadnum,priv_data *p)
 	qitem *item;
 	ErlNifEnv *env;
 	if (threadnum == -1)
-		thrCmds = p->tasks[p->nthreads];
+		thrCmds = p->wtasks[p->nthreads];
 	else
-		thrCmds = p->tasks[threadnum];
+		thrCmds = p->wtasks[threadnum];
 
 	item = queue_get_item(thrCmds);
 	if (item->cmd.env == NULL)
@@ -1886,10 +1886,6 @@ evaluate_command(db_command *cmd,db_thread *thread)
 		return do_exec_script(cmd,thread);
 	case cmd_store_prepared:
 		return do_store_prepared_table(cmd,thread);
-	// case cmd_close:
-	// 	return do_close(&cmd,thread);
-	// case cmd_replicate_opts:
-	// 	return do_replicate_opts(&cmd,thread);
 	case cmd_checkpoint:
 		return do_checkpoint(cmd,thread);
 	case cmd_sync:
@@ -1964,15 +1960,14 @@ evaluate_command(db_command *cmd,db_thread *thread)
 	}
 }
 
-// db_connection *conn
 static ERL_NIF_TERM
 push_command(int threadnum, priv_data *pd, qitem *item)
 {
 	queue *thrCmds = NULL;
 	if (threadnum == -1)
-		thrCmds = pd->tasks[pd->nthreads];
+		thrCmds = pd->wtasks[pd->nthreads];
 	else
-		thrCmds = pd->tasks[threadnum];
+		thrCmds = pd->wtasks[threadnum];
 
 	if(!queue_push(thrCmds, item))
 	{
@@ -2113,8 +2108,13 @@ static MDB_txn* open_wtxn(db_thread *data)
 
   return data->wtxn;
 }
-static void *
-thread_func(void *arg)
+
+static void *read_thread_func(void *arg)
+{
+	return NULL;
+}
+
+static void *thread_func(void *arg)
 {
 	int i,j,chkCounter = 0;
 	db_thread* data = (db_thread*)arg;
@@ -3035,10 +3035,9 @@ void errLogCallback(void *pArg, int iErrCode, const char *zMsg)
 }
 
 
-static int
-on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
+static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 {
-	int i = 0, j = 0;
+	int i = 0;
 	const ERL_NIF_TERM *param;
 	const ERL_NIF_TERM *param1;
 	char nodename[128];
@@ -3064,6 +3063,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv = malloc(sizeof(priv_data));
 	memset(priv,0,sizeof(priv_data));
 	*priv_out = priv;
+	priv->nReadThreads = 1;
 	memset(nodename,0,128);
 	enif_get_list_cell(env,info,&head,&info);
 	enif_get_list_cell(env,info,&info,&tail);
@@ -3101,7 +3101,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		return -1;
 	}
 
-	if (i != 3 && i != 2)
+	if (i != 2 && i != 3 && i != 4)
 		return -1;
 
 	// if (i > 2)
@@ -3114,6 +3114,15 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		if (!enif_get_uint64(env,param[2],(ErlNifUInt64*)&dbsize))
 			return -1;
 	}
+	if (i > 3)
+	{
+		if (!enif_get_int(env,param[3],&priv->nReadThreads))
+			return -1;
+	}
+	if (priv->nReadThreads > 255)
+		return -1;
+	if (priv->nthreads+1 > 255)
+		return -1;
 	// if (sync)
 	// 	sync = 0;
 	// else
@@ -3137,20 +3146,15 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	if(!priv->db_connection_type)
 		return -1;
 
-	// rt =  enif_open_resource_type(env, "actordb_driver_nif", "db_backup_type",
-	//                destruct_backup, ERL_NIF_RT_CREATE, NULL);
-	// if(!rt)
-	//     return -1;
-	// db_backup_type = rt;
-
-
 	priv->iterate_type =  enif_open_resource_type(env, "actordb_driver_nif", "iterate_type",
 				   destruct_iterate, ERL_NIF_RT_CREATE, NULL);
 	if(!priv->iterate_type)
 		return -1;
 
-	priv->tasks = malloc(sizeof(queue*)*(priv->nthreads+1));
+	priv->wtasks = malloc(sizeof(queue*)*(priv->nthreads+1));
+	priv->rtasks = malloc(sizeof(queue*)*(priv->nthreads*priv->nReadThreads));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nthreads+1));
+	priv->rtids = malloc(sizeof(ErlNifTid)*(priv->nthreads*priv->nReadThreads));
 
 	controlThread = malloc(sizeof(db_thread));
 	memset(controlThread,0,sizeof(db_thread));
@@ -3158,7 +3162,7 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	controlThread->tasks = queue_create();
 	controlThread->nthreads = priv->nthreads;
 	controlThread->pd = priv;
-	priv->tasks[priv->nthreads] = controlThread->tasks;
+	priv->wtasks[priv->nthreads] = controlThread->tasks;
 	priv->syncNumbers = malloc(sizeof(u64)*priv->nthreads);
 	priv->thrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nthreads);
 	memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nthreads));
@@ -3169,79 +3173,120 @@ on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		return -1;
 	}
 
-	DBG((g_log,"Driver starting %d threads. Dbsize %llu\n",priv->nthreads,dbsize));
+	DBG((g_log,"Driver starting w=%d, r=%d threads. Dbsize %llu\n",priv->nthreads,priv->nReadThreads,dbsize));
 
 	for (i = 0; i < priv->nthreads; i++)
 	{
-		MDB_env *menv;
-		db_thread *curThread = malloc(sizeof(db_thread));
-		memset(curThread,0,sizeof(db_thread));
-		char lmpath[MAX_PATHNAME];
-
-		if (!(enif_get_string(env,param1[i],curThread->path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
-			return -1;
-
-		// strcat(curThread->path,"/lmdb");
-		sprintf(lmpath,"%s/lmdb",curThread->path);
-
-		// MDB INIT
-		if (mdb_env_create(&menv) != MDB_SUCCESS)
-			return -1;
-		if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
-			return -1;
-		if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
-			return -1;
-		// Syncs are handled from erlang.
-		if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOSYNC, 0664) != MDB_SUCCESS)
-			return -1;
-
-		priv->thrMutexes[i] = enif_mutex_create("thrmutex");
-		curThread->env = menv;
-		curThread->pathlen = strlen(curThread->path);
-		curThread->index = i;
-		curThread->tasks = queue_create();
-		curThread->nthreads = priv->nthreads;
-		curThread->pd = priv;
-		priv->tasks[i] = curThread->tasks;
-
-		curThread->nstaticSqls = nstaticSqls;
-		for (j = 0; j < nstaticSqls; j++)
-		  memcpy(curThread->staticSqls[j], staticSqls[j], 256);
-
-		DBG((g_log,"CREATING worker\n"));
-		if(enif_thread_create("db_connection", &(priv->tids[i]), thread_func, curThread, NULL) != 0)
+		int j,k;
+		// start with -1 for write thread
+		for (k = -1; k < priv->nReadThreads; k++)
 		{
-			printf("Unable to create esqlite3 thread\r\n");
-			return -1;
+			MDB_env *menv;
+			char lmpath[MAX_PATHNAME];
+			db_thread *curThread = malloc(sizeof(db_thread));
+			int rwflag = 0;
+
+			if (k >= 0)
+				rwflag = MDB_RDONLY;
+
+			memset(curThread,0,sizeof(db_thread));
+
+			if (!(enif_get_string(env,param1[i],curThread->path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
+				return -1;
+
+			// strcat(curThread->path,"/lmdb");
+			sprintf(lmpath,"%s/lmdb",curThread->path);
+
+			// MDB INIT
+			if (mdb_env_create(&menv) != MDB_SUCCESS)
+				return -1;
+			if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
+				return -1;
+			if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
+				return -1;
+			// Syncs are handled from erlang.
+			if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOSYNC|rwflag, 0664) != MDB_SUCCESS)
+				return -1;
+
+			if (k == -1)
+				priv->thrMutexes[i] = enif_mutex_create("thrmutex");
+			curThread->env = menv;
+			curThread->pathlen = strlen(curThread->path);
+			curThread->index = i;
+			curThread->tasks = queue_create();
+			curThread->nthreads = priv->nthreads;
+			curThread->pd = priv;
+			if (k == -1)
+				priv->wtasks[i] = curThread->tasks;
+			else
+				priv->rtasks[i*priv->nReadThreads+k] = curThread->tasks;
+
+			curThread->nstaticSqls = nstaticSqls;
+			for (j = 0; j < nstaticSqls; j++)
+				memcpy(curThread->staticSqls[j], staticSqls[j], 256);
+
+			if (k == -1)
+			{
+				if(enif_thread_create("db_connection", &(priv->tids[i]), thread_func, curThread, NULL) != 0)
+				{
+					printf("Unable to create esqlite3 thread\r\n");
+					return -1;
+				}
+			}
+			else
+			{
+				if(enif_thread_create("db_connection", &(priv->rtids[i*priv->nReadThreads+k]), read_thread_func, curThread, NULL) != 0)
+				{
+					printf("Unable to create esqlite3 thread\r\n");
+					return -1;
+				}
+			}
 		}
 	}
 
 	return 0;
 }
 
-static void
-on_unload(ErlNifEnv* env, void* pd)
+static void on_unload(ErlNifEnv* env, void* pd)
 {
-	int i;
+	int i,k;
 	priv_data *priv = (priv_data*)pd;
 	int nthreads = priv->nthreads;
 
 	for (i = -1; i < nthreads; i++)
 	{
-		qitem *item = command_create(i,priv);
-		item->cmd.type = cmd_stop;
-		push_command(i, priv, item);
-
-		if (i >= 0)
+		for (k = -1; k < priv->nReadThreads; k++)
 		{
-			enif_mutex_destroy(priv->thrMutexes[i]);
-			enif_thread_join((ErlNifTid)priv->tids[i],NULL);
+			if (i >= 0 && k == -1)
+			{
+				qitem *item = command_create(i,priv);
+				item->cmd.type = cmd_stop;
+				push_command(i, priv, item);
+				// write thread
+				enif_mutex_destroy(priv->thrMutexes[i]);
+				enif_thread_join((ErlNifTid)priv->tids[i],NULL);
+			}
+			else if (i >= 0)
+			{
+				DBG((g_log,"stop read\n"));
+				// read thread
+				// enif_thread_join((ErlNifTid)priv->rtids[i*priv->nReadThreads+k],NULL);
+			}
+			else
+			{
+				qitem *item = command_create(i,priv);
+				item->cmd.type = cmd_stop;
+				push_command(i, priv, item);
+				// control thread
+				enif_thread_join((ErlNifTid)priv->tids[nthreads],NULL);
+				break;
+			}
 		}
-		else
-			enif_thread_join((ErlNifTid)priv->tids[nthreads],NULL);
 	}
-	free(priv->tasks);
+	free(priv->wtasks);
+	free(priv->rtasks);
 	free(priv->tids);
+	free(priv->rtids);
 	free(priv->thrMutexes);
 	free(priv->syncNumbers);
 	free(pd);

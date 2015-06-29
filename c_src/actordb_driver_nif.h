@@ -45,14 +45,17 @@ typedef u16 ht_slot;
 
 struct priv_data
 {
-	queue **tasks;      // array of queues for every thread + control thread
+	queue **wtasks;      // array of queues for every thread + control thread
+	queue **rtasks;     // every write thread, has nReadThreads
 	int nthreads;       // number of work threads
+	int nReadThreads;
 
 	u64 *syncNumbers;
 
 	#ifndef _TESTAPP_
 	ErlNifMutex **thrMutexes;
-	ErlNifTid *tids;    // tids for every thread
+	ErlNifTid *tids;    // tids for every write thread
+	ErlNifTid *rtids;    // tids for every read thread
 	ErlNifResourceType *db_connection_type;
 	ErlNifResourceType *db_backup_type;
 	ErlNifResourceType *iterate_type;
@@ -160,14 +163,17 @@ struct db_connection
 	// 0   - do not replicate
 	// > 0 - replicate to socket types that match number
 	int doReplicate;
-	int thread;
 	char checkpointLock;
 	char wal_configured;
 	// For every write:
 	// over how many connections data has been sent
-	char nSent;
+	u8 nSent;
 	// Set bit for every failed attempt to write to socket of connection
-	char failFlags;
+	u8 failFlags;
+	// Write thread index
+	u8 thread;
+	// Read thread index
+	u8 rthread;
 };
 
 struct iterate_resource
@@ -192,11 +198,7 @@ typedef enum
 	cmd_unknown = 0,
 	cmd_open  = 1,
 	cmd_exec_script  = 2,
-	cmd_close  = 3,
 	cmd_stop  = 4,
-	cmd_backup_init  = 5,
-	cmd_backup_step  = 6,
-	cmd_backup_finish  = 7,
 	cmd_interrupt  = 8,
 	cmd_tcp_connect  = 9,
 	cmd_set_socket  = 10,
@@ -208,7 +210,6 @@ typedef enum
 	cmd_iterate  = 16,
 	cmd_inject_page  = 17,
 	cmd_wal_rewind  = 18,
-	cmd_replicate_opts = 19,
 	cmd_checkpoint = 20,
 	cmd_term_store = 21,
 	cmd_actor_info = 22,

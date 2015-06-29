@@ -18,7 +18,7 @@
 		 tcp_reconnect/0]).
 
 % Every path is a write thread.
-% {{Path1,Path2,...},{StaticSql1,StaticSql2,...},MaxDbSize}
+% {{Path1,Path2,...},{StaticSql1,StaticSql2,...},MaxDbSize, ReadThreadsPerWriteThread}
 init(Threads) ->
 	actordb_driver_nif:init(Threads).
 

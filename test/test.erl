@@ -1,8 +1,8 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
--define(SYNC,0).
+-define(READTHREADS,1).
 -define(DBSIZE,4096*1024*128).
--define(INIT,actordb_driver:init({{"."},{},?DBSIZE})).
+-define(INIT,actordb_driver:init({{"."},{},?DBSIZE,?READTHREADS})).
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
