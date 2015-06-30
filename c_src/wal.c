@@ -837,7 +837,9 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 		{
 			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2, sizeof(u64));
 			votedForSize = (u8)((u8*)data.mv_data)[1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)];
-			votedFor = data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1;
+			//votedFor = data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1;
+			votedFor = alloca(votedForSize);
+			memcpy(votedFor,data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1, votedForSize);
 			// DBG((g_log,"Voted for %.*s\n",(int)votedForSize,(char*)votedFor));
 		}
 	}

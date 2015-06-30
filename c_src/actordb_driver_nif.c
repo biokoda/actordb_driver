@@ -1105,7 +1105,7 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread)
 	if (!enif_inspect_binary(cmd->env,cmd->arg2,&votedFor))
 		return atom_false;
 
-	if (votedFor.size > 255)
+	if (votedFor.size > 128)
 		return atom_false;
 
 	if (cmd->conn)
