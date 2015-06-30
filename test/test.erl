@@ -3,7 +3,7 @@
 -define(READTHREADS,1).
 -define(DBSIZE,4096*1024*128).
 -define(INIT,actordb_driver:init({{"."},{},?DBSIZE,?READTHREADS})).
--define(READ,actordb_driver:exec_script).
+-define(READ,actordb_driver:exec_read).
 
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
@@ -186,8 +186,7 @@ bigtrans() ->
 		   [{columns,{<<"id">>,<<"val">>}},{rows,[{444,<<"secondstat">>}]}],
 		   [{columns,{<<"id">>,<<"val">>}},{rows,[{9,<<"0">>}]}],
 		   [{columns,{<<"id">>,<<"val">>}},{rows,[{3,<<"7">>}]}]],
-	{ok,SR2} = ?READ(["SELECT * FROM __adb where id=?1;",
-	"SELECT * FROM __adb where id=?1;"],[[[3],[9]],[[444],[555]]],Db),
+	{ok,SR2} = ?READ(["SELECT * FROM __adb where id=?1;","SELECT * FROM __adb where id=?1;"],[[[3],[9]],[[444],[555]]],Db),
 	?debugFmt("Double param select=~p",[SR2]).
 
 bigtrans_check() ->

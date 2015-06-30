@@ -2221,7 +2221,7 @@ static void *thread_func(void *arg)
 static void *read_thread_func(void *arg)
 {
 	db_thread* data = (db_thread*)arg;
-	int i,j;
+	int i,j,rc;
 	data->isopen = 1;
 
 	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
@@ -2248,10 +2248,19 @@ static void *read_thread_func(void *arg)
 				item->cmd.conn->wal.rthreadId = pthread_self();
 				item->cmd.conn->wal.rthread = data;
 			}
-			mdb_txn_renew(data->txn);
-			mdb_cursor_renew(data->txn, data->cursorLog);
-			mdb_cursor_renew(data->txn, data->cursorPages);
-			mdb_cursor_renew(data->txn, data->cursorInfo);
+			if ((rc = mdb_txn_renew(data->txn)) != MDB_SUCCESS)
+				break;
+			if ((rc = mdb_cursor_renew(data->txn, data->cursorLog)) != MDB_SUCCESS)
+			{
+				// If open read txn before writetxn handles will be bad.
+				mdb_txn_abort(data->txn);
+				open_rtxn(data);
+			}
+			else
+			{
+				mdb_cursor_renew(data->txn, data->cursorPages);
+				mdb_cursor_renew(data->txn, data->cursorInfo);
+			}
 
 			if (item->cmd.ref == 0)
 			{

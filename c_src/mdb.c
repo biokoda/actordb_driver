@@ -7173,8 +7173,10 @@ mdb_cursor_renew(MDB_txn *txn, MDB_cursor *mc)
 	if (!mc || !TXN_DBI_EXIST(txn, mc->mc_dbi))
 		return EINVAL;
 
+
 	if ((mc->mc_flags & C_UNTRACK) || txn->mt_cursors)
 		return EINVAL;
+
 
 	if (txn->mt_flags & MDB_TXN_ERROR)
 		return MDB_BAD_TXN;

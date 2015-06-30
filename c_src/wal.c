@@ -238,17 +238,14 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 
 	// u32 pgno2 = *(u32*)(key.mv_data+sizeof(u64));
 	// DBG((g_log,"RUN %d\n",pgno2));
-	DBG((g_log,"PRECURSOR\n"));
 	rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
 	if (rc == MDB_SUCCESS)
 	{
-		DBG((g_log,"PRECURSOR 2\n"));
 		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
 		if (rc == MDB_SUCCESS)
 		{
 			while (1)
 			{
-				DBG((g_log,"PRECURSOR 3\n"));
 				char frag1 = *(char*)(data.mv_data+sizeof(u64)*2);
 				int frag = frag1;
 				u64 term, evnum;
@@ -280,7 +277,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 				{
 					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
 					frag = *(u8*)(data.mv_data+sizeof(u64)*2);
-					DBG((g_log,"SUCCESS? %d frag=%d, size=%ld\n",pgno,frag,data.mv_size));
+					// DBG((g_log,"SUCCESS? %d frag=%d, size=%ld\n",pgno,frag,data.mv_size));
 					thr->resFrames[frag--] = data;
 				}
 				*piRead = 1;
@@ -308,7 +305,11 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 
 int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
-	db_thread *thr = pWal->thread;
+	db_thread *thr;
+	if (pthread_equal(pthread_self(), pWal->rthreadId))
+		thr = pWal->rthread;
+	else
+		thr = pWal->thread;
 	DBG((g_log,"Read frame\n"));
 	// i64 term, evnum;
 	if (thr->nResFrames == 0)

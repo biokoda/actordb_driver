@@ -162,7 +162,9 @@ exec_read(Sql,Db) ->
 exec_read(Sql,{actordb_driver, _Ref, Connection},Timeout) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql),
-	receive_answer(Ref,Connection,Timeout).
+	receive_answer(Ref,Connection,Timeout);
+exec_read(Sql,Recs,{actordb_driver, _Ref, _Connection} = Db) ->
+	exec_read(Sql,Recs,Db,infinity).
 exec_read(Sql,Recs,{actordb_driver, _Ref, Connection},Timeout) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs),
