@@ -8,6 +8,8 @@ open/5,
 open/6,
 exec_script/7,
 exec_script/8,
+exec_read/4,
+exec_read/5,
 store_prepared_table/2,
 close/3,
 noop/3,
@@ -20,6 +22,7 @@ tcp_connect/6,
 tcp_connect/7,
 tcp_reconnect/0,
 replicate_opts/3,
+replication_done/1,
 page_size/0,
 iterate_db/4,
 iterate_db/5,
@@ -38,6 +41,15 @@ fsync/0
 ]).
 
 actor_info(_,_,_,_) ->
+	exit(nif_library_not_loaded).
+
+exec_read(_,_,_,_) ->
+	exit(nif_library_not_loaded).
+
+exec_read(_,_,_,_,_) ->
+	exit(nif_library_not_loaded).
+
+replication_done(_) ->
 	exit(nif_library_not_loaded).
 
 fsync() ->

@@ -3,6 +3,8 @@
 -define(READTHREADS,1).
 -define(DBSIZE,4096*1024*128).
 -define(INIT,actordb_driver:init({{"."},{},?DBSIZE,?READTHREADS})).
+-define(READ,actordb_driver:exec_script).
+
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
@@ -34,7 +36,7 @@ modes() ->
 		"$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
 		"$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
-	{ok,[_]} = actordb_driver:exec_script("SELECT * from tab;",Db).
+	{ok,[_]} = ?READ("SELECT * from tab;",Db).
 
 dbcopy() ->
 	?INIT,
@@ -50,7 +52,8 @@ dbcopy() ->
 	0 = actordb_driver:fsync_num(Db),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,EN+1,<<>>),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,EN+2,<<>>),
-	{ok,Select} = actordb_driver:exec_script("select * from tab;",Db),
+	ok = actordb_driver:replication_done(Db),
+	{ok,Select} = ?READ("select * from tab;",Db),
 	% ?debugFmt("Select ~p",[Select]),
 	{ok,Copy} = actordb_driver:open("copy"),
 	{ok,Iter,Bin,Head,Done} =  actordb_driver:iterate_db(Db,0,0),
@@ -69,7 +72,7 @@ dbcopy() ->
 	% ?debugFmt("pages=~pB, evterm=~p, evnum=~p",[byte_size(Bin), Evterm, Evnum1]),
 	file:close(F),
 	?debugFmt("Reading from exported sqlite file: ~p",[os:cmd("sqlite3 sq \"select * from tab\"")]),
-	{ok,Select} = actordb_driver:exec_script("select * from tab;",Copy),
+	{ok,Select} = ?READ("select * from tab;",Copy),
 	?debugFmt("Reading from copy!: ~p",[Select]),
 	file:delete("sq"),
 
@@ -97,7 +100,7 @@ dbcopy() ->
 	% ok = actordb_driver:checkpoint(Db,60).
 	ok = actordb_driver:wal_rewind(Db,100),
 	{ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
-      {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_] = Rows}]]} = actordb_driver:exec_script("select * from tab;",Db),
+      {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_] = Rows}]]} = ?READ("select * from tab;",Db),
 	[{102,<<"aaa">>,2}|_] = lists:reverse(Rows).
 	% ?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
 
@@ -107,7 +110,7 @@ checkpoint() ->
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,S} = actordb_driver:exec_script("select * from tab;",Db),
 	ok = actordb_driver:checkpoint(Db,60),
-	{ok,S} = actordb_driver:exec_script("select * from tab;",Db),
+	{ok,S} = ?READ("select * from tab;",Db),
 	[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
       {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_]}]] = S,
 	% ?debugFmt("AfterCheckpoint ~p",[S]),
@@ -176,14 +179,14 @@ bigtrans() ->
 	SR = {ok,[[{columns,{<<"id">>,<<"val">>}},{rows,[{555,<<"secondstatement">>},
 	{444,<<"secondstat">>},{333,<<"fromparam3">>},{222,<<"fromparam2">>},{111,<<"fromparam1">>},
 	{9,<<"0">>},{7,<<"614475188">>},{4,<<"task">>},{3,<<"7">>},{1,<<"0">>}]}]]},
-	SR = actordb_driver:exec_script("SELECT * FROM __adb;",Db),
+	SR = ?READ("SELECT * FROM __adb;",Db),
 	?debugFmt("select=~p",[SR]),
 
 	SR2 = [[{columns,{<<"id">>,<<"val">>}},{rows,[{555,<<"secondstatement">>}]}],
 		   [{columns,{<<"id">>,<<"val">>}},{rows,[{444,<<"secondstat">>}]}],
 		   [{columns,{<<"id">>,<<"val">>}},{rows,[{9,<<"0">>}]}],
 		   [{columns,{<<"id">>,<<"val">>}},{rows,[{3,<<"7">>}]}]],
-	{ok,SR2} = actordb_driver:exec_script(["SELECT * FROM __adb where id=?1;",
+	{ok,SR2} = ?READ(["SELECT * FROM __adb where id=?1;",
 	"SELECT * FROM __adb where id=?1;"],[[[3],[9]],[[444],[555]]],Db),
 	?debugFmt("Double param select=~p",[SR2]).
 
@@ -198,6 +201,6 @@ bigtrans_check() ->
 
 	Sql = "select * from __adb;",
 	{ok,Db2} = actordb_driver:open("big.db"),
-	R = actordb_driver:exec_script(Sql,Db2),
+	R = ?READ(Sql,Db2),
 	?debugFmt("~p",[R]),
 	ok.

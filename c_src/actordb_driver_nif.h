@@ -64,6 +64,8 @@ struct priv_data
 
 struct Wal {
 	db_thread *thread;
+	db_thread *rthread;
+	pthread_t rthreadId;
 	u64 index;
 	u64 firstCompleteTerm;
 	u64 firstCompleteEvnum;
@@ -71,6 +73,11 @@ struct Wal {
 	u64 lastCompleteEvnum;
 	u64 inProgressTerm;
 	u64 inProgressEvnum;
+	// This is set from lastCompleteXXXX once write is safely replicated.
+	// Or after a rewind. Used by read thread.
+	u64 readSafeTerm;
+	u64 readSafeEvnum;
+	Pgno readSafeMxPage;
 	Pgno mxPage;
 	u32 allPages; // mxPage + unused pages
 	u8 changed;
@@ -98,8 +105,7 @@ struct db_thread
 	MDB_dbi actorsdb;
 	// MDB_dbi testdb;
 	MDB_env *env;
-	MDB_txn *wtxn;
-    MDB_txn *rtxn;
+	MDB_txn *txn;
 	MDB_cursor *cursorLog;
 	MDB_cursor *cursorPages;
 	MDB_cursor *cursorInfo;
@@ -124,7 +130,7 @@ struct db_thread
 	u32 pagesChanged;
 	u8 forceCommit;
 	int index;        // Index in table of threads.
-	int nthreads;
+	// int nthreads;
 	int nResFrames;
 
 	// All DB paths are relative to this thread path.
@@ -158,8 +164,6 @@ struct db_connection
 	// Variable part of packet prefix
 	ErlNifBinary packetVarPrefix;
 	#endif
-	// index in thread table of actors (thread->conns)
-	// int connindex;
 	// 0   - do not replicate
 	// > 0 - replicate to socket types that match number
 	int doReplicate;
@@ -256,10 +260,10 @@ ERL_NIF_TERM atom_done;
 ERL_NIF_TERM atom_iter;
 
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
-static ERL_NIF_TERM push_command(int thread,priv_data *pd, qitem *cmd);
+static ERL_NIF_TERM push_command(int thread, int readThreadNum,priv_data *pd, qitem *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 // int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
-qitem *command_create(int threadnum,priv_data* pd);
+static qitem *command_create(int threadnum,int readThreadNum,priv_data* pd);
 static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
@@ -269,28 +273,17 @@ void fail_send(int i,priv_data *priv);
 
 int reopen_db(db_connection *conn, db_thread *thread);
 void close_prepared(db_connection *conn);
-// int wal_iterate_from(db_connection *conn, iterate_resource *iter, int bufSize, u8* buffer, int *nFilled,char *activeWal);
 SQLITE_API int sqlite3_wal_data(sqlite3 *db,void *pArg);
-// int wal_rewind(db_connection *conn, u64 evnum);
-// int wal_iterate(db_connection *conn, int bufSize, char* buffer, char *done, char *activeWal);
 int checkpoint_continue(db_thread *thread);
-// wal_file *new_wal_file(char* filename,sqlite3_vfs *vfs);
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);
-// int read_thread_wal(db_thread*);
-// u64 readUInt64(u8* buf);
 int read_thread_wal(db_thread*);
-// void writeUInt64(u8* buf, u64 num);
-// void write32bit(char *p, int v);
-// void write16bit(char *p, int v);
-void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
+
 
 
 queue *queue_create(void);
 void queue_destroy(queue *queue);
 int queue_push(queue *queue, qitem* item);
 qitem* queue_pop(queue *queue);
-// void* queue_get_item_data(void* item);
-// void queue_set_item_data(void* item, void *ndata);
 void queue_recycle(queue *queue,qitem* item);
 qitem* queue_get_item(queue *queue);
 int queue_size(queue *queue);

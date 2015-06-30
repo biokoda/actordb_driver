@@ -4,18 +4,18 @@
 -module(actordb_driver).
 
 -export([init/1,noop/1,
-		 open/1,open/2,open/3,open/4,
-		 exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
-		 store_prepared_table/2,
-		 close/1,inject_page/3,
-		 parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0, %wal_pages/1,
-		 % backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
-		 lz4_compress/1,lz4_decompress/2,lz4_decompress/3, %replicate_status/1,
-		 iterate_close/1, fsync_num/1,fsync/1,fsync/0,
-		 replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
-		 checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,
-		 tcp_connect_async/4,tcp_connect_async/5,%make_wal_header/1, wal_checksum/4,
-		 tcp_reconnect/0]).
+		open/1,open/2,open/3,open/4,
+		exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
+		exec_read/2,exec_read/3,exec_read/4,
+		store_prepared_table/2,
+		close/1,inject_page/3,
+		parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0,
+		replication_done/1,
+		lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
+		iterate_close/1, fsync_num/1,fsync/1,fsync/0,
+		replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
+		checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,
+		tcp_connect_async/4,tcp_connect_async/5,tcp_reconnect/0]).
 
 % Every path is a write thread.
 % {{Path1,Path2,...},{StaticSql1,StaticSql2,...},MaxDbSize, ReadThreadsPerWriteThread}
@@ -71,12 +71,6 @@ checkpoint({actordb_driver, _Ref, Connection}, Evnum) ->
 	ok = actordb_driver_nif:checkpoint(Connection,Ref,self(),Evnum),
 	receive_answer(Ref).
 
-% make_wal_header(PageSize) ->
-%     actordb_driver_nif:wal_header(PageSize).
-
-% wal_checksum(Bin,C1,C2,Size) ->
-%     actordb_driver_nif:wal_checksum(Bin,C1,C2,Size).
-
 parse_helper(Bin) ->
 	parse_helper(Bin,0).
 parse_helper(Bin,Offset) ->
@@ -87,8 +81,8 @@ replicate_opts(Con,PacketPrefix) ->
 replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix,Type) ->
 	ok = actordb_driver_nif:replicate_opts(Connection,PacketPrefix,Type).
 
-% replicate_status({actordb_driver, _Ref, Connection}) ->
-%     actordb_driver_nif:replicate_status(Connection).
+replication_done({actordb_driver, _Ref, Connection}) ->
+	ok = actordb_driver_nif:replication_done(Connection).
 
 tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
 	Ref = make_ref(),
@@ -163,6 +157,17 @@ noop({actordb_driver, _Ref, Connection}) ->
 	ok = actordb_driver_nif:noop(Connection, Ref, self()),
 	receive_answer(Ref).
 
+exec_read(Sql,Db) ->
+	exec_read(Sql,Db,infinity).
+exec_read(Sql,{actordb_driver, _Ref, Connection},Timeout) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql),
+	receive_answer(Ref,Connection,Timeout).
+exec_read(Sql,Recs,{actordb_driver, _Ref, Connection},Timeout) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs),
+	receive_answer(Ref,Connection,Timeout).
+
 exec_script(Sql, Db) ->
 	exec_script(Sql,Db,infinity,0,0,<<>>).
 exec_script(Sql,Recs, Db) when is_list(Recs) ->
@@ -171,7 +176,7 @@ exec_script(Sql, Db, Timeout) when is_integer(Timeout) ->
 	exec_script(Sql,Db,Timeout,0,0,<<>>).
 exec_script(Sql, Recs, Db, Timeout) when is_integer(Timeout), is_list(Recs) ->
 	exec_script(Sql,Recs,Db,Timeout,0,0,<<>>).
-exec_script(Sql,  {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+exec_script(Sql, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
 	receive_answer(Ref,Connection,Timeout).

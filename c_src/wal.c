@@ -46,7 +46,7 @@
 ** actually new mxPage or not. With regular write nTruncate will always be mxPage.
 */
 static int checkpoint(Wal *pWal, u64 evnum);
-static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum);
+static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum);
 static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor);
 static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delPages);
 static u64 get8byte(u8* buf);
@@ -111,7 +111,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		data.mv_size = sizeof(u64);
 		data.mv_data = (void*)&index;
 		DBG((g_log,"Writing index %lld\r\n",index));
-		if (mdb_put(thr->wtxn,actorsdb,&key1,&data,0) != MDB_SUCCESS)
+		if (mdb_put(thr->txn,actorsdb,&key1,&data,0) != MDB_SUCCESS)
 		{
 			mdb_txn_abort(txn);
 			return SQLITE_ERROR;
@@ -120,7 +120,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		// key is already set to actorname
 		data.mv_size = sizeof(u64);
 		data.mv_data = (void*)&pWal->index;
-		if (mdb_put(thr->wtxn,actorsdb,&key,&data,0) != MDB_SUCCESS)
+		if (mdb_put(thr->txn,actorsdb,&key,&data,0) != MDB_SUCCESS)
 		{
 			mdb_txn_abort(txn);
 			return SQLITE_ERROR;
@@ -152,6 +152,9 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 			memcpy(&pWal->inProgressEvnum,   data.mv_data+1+sizeof(u64)*5, sizeof(u64));
 			memcpy(&pWal->mxPage,   data.mv_data+1+sizeof(u64)*6,            sizeof(u32));
 			memcpy(&pWal->allPages, data.mv_data+1+sizeof(u64)*6+sizeof(u32),sizeof(u32));
+			pWal->readSafeTerm = pWal->lastCompleteTerm;
+			pWal->readSafeEvnum = pWal->lastCompleteEvnum;
+			pWal->readSafeMxPage = pWal->mxPage;
 
 			if (pWal->inProgressTerm != 0)
 			{
@@ -211,15 +214,16 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 /* Read a page from the write-ahead log, if it is present. */
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
-	if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
-		return findframe(pWal, pgno, piRead, pWal->inProgressTerm, pWal->inProgressEvnum, NULL, NULL);
+	if (pthread_equal(pthread_self(), pWal->rthreadId))
+		return findframe(pWal->rthread, pWal, pgno, piRead, pWal->readSafeTerm, pWal->readSafeEvnum, NULL, NULL);
+	else if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
+		return findframe(pWal->thread, pWal, pgno, piRead, pWal->inProgressTerm, pWal->inProgressEvnum, NULL, NULL);
 	else
-		return findframe(pWal, pgno, piRead, pWal->lastCompleteTerm, pWal->lastCompleteEvnum, NULL, NULL);
+		return findframe(pWal->thread, pWal, pgno, piRead, pWal->lastCompleteTerm, pWal->lastCompleteEvnum, NULL, NULL);
 }
 
-static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum)
+static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum)
 {
-	db_thread *thr = pWal->thread;
 	MDB_val key, data;
 	int rc;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
@@ -234,14 +238,17 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 
 	// u32 pgno2 = *(u32*)(key.mv_data+sizeof(u64));
 	// DBG((g_log,"RUN %d\n",pgno2));
+	DBG((g_log,"PRECURSOR\n"));
 	rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
 	if (rc == MDB_SUCCESS)
 	{
+		DBG((g_log,"PRECURSOR 2\n"));
 		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
 		if (rc == MDB_SUCCESS)
 		{
 			while (1)
 			{
+				DBG((g_log,"PRECURSOR 3\n"));
 				char frag1 = *(char*)(data.mv_data+sizeof(u64)*2);
 				int frag = frag1;
 				u64 term, evnum;
@@ -273,7 +280,7 @@ static int findframe(Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limit
 				{
 					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
 					frag = *(u8*)(data.mv_data+sizeof(u64)*2);
-					// DBG((g_log,"SUCCESS? %d frag=%d, size=%ld\n",pgno,frag,data.mv_size));
+					DBG((g_log,"SUCCESS? %d frag=%d, size=%ld\n",pgno,frag,data.mv_size));
 					thr->resFrames[frag--] = data;
 				}
 				*piRead = 1;
@@ -337,7 +344,6 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 
 		if (LZ4_decompress_safe((char*)pagesBuf,(char*)pOut,pos,nOut) > 0)
 		{
-			DBG((g_log,"DECOMPRESSED!\n"));
 			return SQLITE_OK;
 		}
 
@@ -367,9 +373,8 @@ int sqlite3WalEndWriteTransaction(Wal *pWal)
 	return SQLITE_OK;
 }
 
-static int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize)
+static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, int bufsize)
 {
-	db_thread *thr = pWal->thread;
 	int bufused = 0;
 	int frags = thr->nResFrames;
 	int frsize = 0;
@@ -401,16 +406,21 @@ static int fillbuff(Wal *pWal, iterate_resource *iter, u8* buf, int bufsize)
 // return number of bytes written
 static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
+	db_thread *thr;
+	if (pthread_equal(pthread_self(), pWal->rthreadId))
+		thr = pWal->rthread;
+	else
+		thr = pWal->thread;
 	if (!iter->started)
 	{
 		if (iter->evnum + iter->evterm == 0)
 		{
 			// If any writes come after iterator started, we must ignore those pages.
-			iter->evnum = pWal->lastCompleteEvnum;
-			iter->evterm = pWal->lastCompleteTerm;
+			iter->evnum = pWal->readSafeEvnum;
+			iter->evterm = pWal->readSafeTerm;
 			iter->pgnoPos = 1;
 			iter->entiredb = 1;
-			iter->mxPage = pWal->mxPage;
+			iter->mxPage = pWal->readSafeMxPage;
 			if (pWal->mxPage == 0)
 			{
 				DBG((g_log,"ERROR: Iterate on empty DB %llu\n",pWal->lastCompleteEvnum));
@@ -430,7 +440,7 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 	if (iter->entiredb)
 	{
 		u32 iRead = 0;
-		findframe(pWal, iter->pgnoPos, &iRead, iter->evterm, iter->evnum, NULL, NULL);
+		findframe(thr, pWal, iter->pgnoPos, &iRead, iter->evterm, iter->evnum, NULL, NULL);
 
 		if (!iRead)
 		{
@@ -438,7 +448,7 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			*done = iter->mxPage;
 			return 0;
 		}
-		DBG((g_log,"Iter pos=%u, mx=%u, mxdb=%u\n",iter->pgnoPos, iter->mxPage, pWal->mxPage));
+		DBG((g_log,"Iter pos=%u, mx=%u, mxdb=%u\n",iter->pgnoPos, iter->mxPage, pWal->readSafeMxPage));
 		if (iter->pgnoPos == iter->mxPage)
 			*done = iter->mxPage;
 		put8byte(hdr,                           iter->evterm);
@@ -446,12 +456,11 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 		put4byte(hdr+sizeof(u64)*2,             iter->pgnoPos);
 		put4byte(hdr+sizeof(u64)*2+sizeof(u32), *done);
 		iter->pgnoPos++;
-		return fillbuff(pWal, iter, buf, bufsize);
+		return fillbuff(thr, pWal, iter, buf, bufsize);
 	}
 	else
 	{
 		MDB_val logKey, logVal;
-		db_thread *thr = pWal->thread;
 		int logop;
 		u8 logKeyBuf[sizeof(u64)*3];
 		int rc;
@@ -469,16 +478,16 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			// Evterm/evnum combination not found. Check if evnum is there.
 			// If so return evterm. It will mean a node is in conflict.
 			DBG((g_log,"Key not found in log\n"));
-			if (pWal->lastCompleteEvnum == iter->evnum)
+			if (pWal->readSafeEvnum == iter->evnum)
 			{
-				iter->evterm = pWal->lastCompleteTerm;
+				iter->evterm = pWal->readSafeTerm;
 				iter->termMismatch = 1;
 			}
 			else
 			{
 				memcpy(logKeyBuf,                 &pWal->index,  sizeof(u64));
-				memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
-				memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
+				memcpy(logKeyBuf + sizeof(u64),   &pWal->readSafeTerm, sizeof(u64));
+				memcpy(logKeyBuf + sizeof(u64)*2, &pWal->readSafeEvnum,sizeof(u64));
 				if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 				{
 					DBG((g_log,"Key not found in log for undo\n"));
@@ -540,7 +549,7 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			if (pgno <= iter->pgnoPos)
 				continue;
 
-			findframe(pWal, pgno, &iRead, iter->evterm, iter->evnum, &evterm, &evnum);
+			findframe(thr, pWal, pgno, &iRead, iter->evterm, iter->evnum, &evterm, &evnum);
 
 			if (iRead == 0)
 			{
@@ -566,7 +575,7 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			put8byte(hdr+sizeof(u64),               iter->evnum);
 			put4byte(hdr+sizeof(u64)*2,             iter->pgnoPos);
 			put4byte(hdr+sizeof(u64)*2+sizeof(u32), *done);
-			return fillbuff(pWal, iter, buf, bufsize);
+			return fillbuff(thr, pWal, iter, buf, bufsize);
 		}
 		*done = 1;
 		return 0;
