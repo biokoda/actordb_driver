@@ -1221,14 +1221,11 @@ static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread)
 	priv_data *pd = thread->pd;
 
 	enif_mutex_lock(pd->thrMutexes[thread->index]);
-	if (cmd->conn && cmd->conn->syncNum >= pd->syncNumbers[thread->index])
+	if (!cmd->conn || cmd->conn->syncNum >= pd->syncNumbers[thread->index])
 	{
 		pd->syncNumbers[thread->index]++;
 		mdb_txn_commit(thread->txn);
-		mdb_env_sync(thread->env,1);
-	}
-	else if (!cmd->conn)
-	{
+		thread->txn = NULL;
 		mdb_env_sync(thread->env,1);
 	}
 	enif_mutex_unlock(pd->thrMutexes[thread->index]);
@@ -2102,12 +2099,43 @@ static MDB_txn* open_rtxn(db_thread *data)
   return data->txn;
 }
 
+static void thread_ex(db_thread *data, qitem *item)
+{
+	DBG((g_log,"thread=%d command=%d.\n",data->index,item->cmd.type));
+
+	if (item->cmd.ref == 0)
+	{
+		evaluate_command(&item->cmd,data);
+		enif_clear_env(item->cmd.env);
+	}
+	else
+	{
+		ERL_NIF_TERM answer = make_answer(&item->cmd, evaluate_command(&item->cmd,data));
+		DBG((g_log,"thread=%d command done 1. pagesChanged=%d\n",data->index,data->pagesChanged));
+		// if (data->pagesChanged != pagesChanged)
+		if (data->forceCommit)
+		{
+			data->forceCommit = 0;
+			mdb_txn_commit(data->txn);
+			data->txn = NULL;
+		}
+		enif_send(NULL, &item->cmd.pid, item->cmd.env, answer);
+		enif_clear_env(item->cmd.env);
+	}
+
+	if (item->cmd.conn != NULL)
+	{
+		enif_release_resource(item->cmd.conn);
+	}
+
+	DBG((g_log,"thread=%d command done 2.\n",data->index));
+}
+
 static void *thread_func(void *arg)
 {
-	int i,j,chkCounter = 0;
+	int i,j,chkCounter = 0, syncListSize = 0;
 	db_thread* data = (db_thread*)arg;
-	u32 pagesChanged = 0;
-	u8 reopen = 0;
+	qitem *syncList = NULL;
 
 	data->isopen = 1;
 
@@ -2115,24 +2143,11 @@ static void *thread_func(void *arg)
 	{
 		data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 		data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
-		reopen = 1;
 	}
 
 	while(1)
 	{
 		qitem *item = queue_pop(data->tasks);
-		chkCounter++;
-		pagesChanged = data->pagesChanged;
-
-		if (reopen)
-		{
-			if (open_wtxn(data) == NULL)
-				break;
-			reopen = 0;
-		}
-
-		// printf("Queue size %d\r\n",queue_size(data->tasks));
-		DBG((g_log,"thread=%d command=%d.\n",data->index,item->cmd.type));
 
 		if (item->cmd.type == cmd_stop)
 		{
@@ -2144,36 +2159,55 @@ static void *thread_func(void *arg)
 			}
 			break;
 		}
+		if (item->cmd.type == cmd_sync)
+		{
+			if (syncList == NULL)
+				chkCounter = 0;
 
-		if (item->cmd.ref == 0)
-		{
-			evaluate_command(&item->cmd,data);
-			enif_clear_env(item->cmd.env);
-		}
-		else
-		{
-			ERL_NIF_TERM answer = make_answer(&item->cmd, evaluate_command(&item->cmd,data));
-			DBG((g_log,"thread=%d command done 1. pagesChanged=%d\n",data->index,data->pagesChanged));
-			// if (data->pagesChanged != pagesChanged)
-			if (data->forceCommit)
+			// Sync only when nothing else to do.
+			// So if sync item, check if there is anything else we could do first and put sync task in a list.
+			if (queue_size(data->tasks) != 0)
 			{
-				data->forceCommit = 0;
-				mdb_txn_commit(data->txn);
-				reopen = 1;
+				item->next = syncList;
+				syncList = item;
+				syncListSize++;
+				continue;
 			}
-			else if (item->cmd.type == cmd_sync)
-				reopen = 1;
-			enif_send(NULL, &item->cmd.pid, item->cmd.env, answer);
-			enif_clear_env(item->cmd.env);
+		}
+		chkCounter++;
+
+		if (data->env && data->txn == NULL)
+		{
+			if (open_wtxn(data) == NULL)
+				break;
 		}
 
-		if (item->cmd.conn != NULL)
+		// printf("Queue size %d\r\n",queue_size(data->tasks));
+		thread_ex(data, item);
+
+		// Execute list of syncs if:
+		// - we just did a sync
+		// - more than 100 requests went by since we started list
+		// - sync list size over 10 items
+		if (syncList != NULL &&
+			(queue_size(data->tasks) == 0 || chkCounter > 100 || syncListSize > 10 || item->cmd.type == cmd_sync))
 		{
-			enif_release_resource(item->cmd.conn);
+			if (data->txn == NULL)
+				open_wtxn(data);
+
+			while (syncList != NULL)
+			{
+				thread_ex(data, syncList);
+				if (data->txn != NULL)
+					open_wtxn(data);
+
+				queue_recycle(data->tasks,item);
+				syncList = syncList->next;
+			}
+			chkCounter = 0;
+			syncListSize = 0;
 		}
 		queue_recycle(data->tasks,item);
-
-		DBG((g_log,"thread=%d command done 2.\n",data->index));
 	}
 	queue_destroy(data->tasks);
 	data->isopen = 0;
@@ -3337,6 +3371,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 					return -1;
 				if (mdb_txn_commit(curThread->txn) != MDB_SUCCESS)
 					return -1;
+				curThread->txn = NULL;
 			}
 
 			if (k == -1)
