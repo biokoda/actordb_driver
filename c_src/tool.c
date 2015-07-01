@@ -173,13 +173,13 @@ static int do_print(char *pth)
 	if (mdb_txn_begin(menv, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return -1;
 
-    if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != MDB_SUCCESS)
+    if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY, &infodb) != MDB_SUCCESS)
 		return -1;
     if (mdb_dbi_open(txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
 		return -1;
-	if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
+	if (mdb_dbi_open(txn, "log", MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
 		return -1;
-	if (mdb_dbi_open(txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
+	if (mdb_dbi_open(txn, "pages", MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
 		return -1;
 	if (mdb_set_compare(txn, logdb, logdb_cmp) != MDB_SUCCESS)
 		return -1;

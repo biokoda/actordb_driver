@@ -2065,14 +2065,6 @@ static MDB_txn* open_wtxn(db_thread *data)
 {
 	if (mdb_txn_begin(data->env, NULL, 0, &data->txn) != MDB_SUCCESS)
 		return NULL;
-	if (mdb_dbi_open(data->txn, "info", MDB_INTEGERKEY | MDB_CREATE, &data->infodb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &data->logdb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "pages", MDB_CREATE | MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
-		return NULL;
 	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_set_compare(data->txn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
@@ -2092,14 +2084,6 @@ static MDB_txn* open_wtxn(db_thread *data)
 static MDB_txn* open_rtxn(db_thread *data)
 {
 	if (mdb_txn_begin(data->env, NULL, MDB_RDONLY, &data->txn) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "info", MDB_INTEGERKEY | MDB_CREATE, &data->infodb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "actors", MDB_CREATE, &data->actorsdb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &data->logdb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "pages", MDB_CREATE | MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;
@@ -2130,13 +2114,6 @@ static void *thread_func(void *arg)
 	{
 		data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 		data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
-
-		if (open_wtxn(data) == NULL)
-			return NULL;
-		// if db empty, our 4 databases were created. Commit.
-		if (mdb_txn_commit(data->txn) != MDB_SUCCESS)
-			return NULL;
-
 		reopen = 1;
 	}
 
@@ -2179,7 +2156,6 @@ static void *thread_func(void *arg)
 			// if (data->pagesChanged != pagesChanged)
 			if (data->forceCommit)
 			{
-				DBG((g_log,"Committing\n"));
 				data->forceCommit = 0;
 				mdb_txn_commit(data->txn);
 				reopen = 1;
@@ -2226,10 +2202,7 @@ static void *read_thread_func(void *arg)
 
 	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 	data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
-	if (open_rtxn(data) == NULL)
-		return NULL;
 
-	mdb_txn_reset(data->txn);
 	while (1)
 	{
 		qitem *item = queue_pop(data->tasks);
@@ -2248,18 +2221,48 @@ static void *read_thread_func(void *arg)
 				item->cmd.conn->wal.rthreadId = pthread_self();
 				item->cmd.conn->wal.rthread = data;
 			}
-			if ((rc = mdb_txn_renew(data->txn)) != MDB_SUCCESS)
-				break;
-			if ((rc = mdb_cursor_renew(data->txn, data->cursorLog)) != MDB_SUCCESS)
+			if (!data->txn)
 			{
-				// If open read txn before writetxn handles will be bad.
-				mdb_txn_abort(data->txn);
-				open_rtxn(data);
+				DBG((g_log,"Open read transaction\n"));
+				if (open_rtxn(data) == NULL)
+				{
+					ERL_NIF_TERM errterm;
+					DBG((g_log,"Can not open read transaction\n"));
+
+					errterm = make_error_tuple(item->cmd.env, "lmdb_unreadable_1");
+					enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, errterm));
+					enif_clear_env(item->cmd.env);
+					continue;
+				}
 			}
 			else
 			{
-				mdb_cursor_renew(data->txn, data->cursorPages);
-				mdb_cursor_renew(data->txn, data->cursorInfo);
+				if ((rc = mdb_txn_renew(data->txn)) != MDB_SUCCESS)
+					break;
+				if ((rc = mdb_cursor_renew(data->txn, data->cursorLog)) != MDB_SUCCESS)
+				{
+					DBG((g_log,"Unable to renew cursor, reopening read txn\n"));
+					mdb_cursor_close(data->cursorLog);
+					mdb_cursor_close(data->cursorPages);
+					mdb_cursor_close(data->cursorInfo);
+					mdb_txn_abort(data->txn);
+					if (open_rtxn(data) == NULL)
+					{
+						ERL_NIF_TERM errterm;
+						DBG((g_log,"Unable to open read transaction\n"));
+						data = NULL;
+
+						errterm = make_error_tuple(item->cmd.env, "lmdb_unreadable_2");
+						enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, errterm));
+						enif_clear_env(item->cmd.env);
+						continue;
+					}
+				}
+				else
+				{
+					mdb_cursor_renew(data->txn, data->cursorPages);
+					mdb_cursor_renew(data->txn, data->cursorInfo);
+				}
 			}
 
 			if (item->cmd.ref == 0)
@@ -3010,7 +3013,7 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	  item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // evnum
 
 	enif_consume_timeslice(env,500);
-	return push_command(res->thread, -1, pd, item);
+	return push_command(res->thread, res->rthread, pd, item);
 }
 
 static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -3286,36 +3289,52 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 	for (i = 0; i < priv->nthreads; i++)
 	{
+		MDB_env *menv = NULL;
+		MDB_dbi infodb;
+		MDB_dbi logdb;
+		MDB_dbi pagesdb;
+		MDB_dbi actorsdb;
 		int j,k;
 		// start with -1 for write thread
 		for (k = -1; k < priv->nReadThreads; k++)
 		{
-			MDB_env *menv;
 			char lmpath[MAX_PATHNAME];
 			db_thread *curThread = malloc(sizeof(db_thread));
-			int rwflag = 0;
-
-			if (k >= 0)
-				rwflag = MDB_RDONLY;
 
 			memset(curThread,0,sizeof(db_thread));
 
 			if (!(enif_get_string(env,param1[i],curThread->path,MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
 				return -1;
 
-			// strcat(curThread->path,"/lmdb");
 			sprintf(lmpath,"%s/lmdb",curThread->path);
 
-			// MDB INIT
-			if (mdb_env_create(&menv) != MDB_SUCCESS)
-				return -1;
-			if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
-				return -1;
-			if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
-				return -1;
-			// Syncs are handled from erlang.
-			if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOSYNC|rwflag, 0664) != MDB_SUCCESS)
-				return -1;
+			if (k == -1)
+			{
+				// MDB INIT
+				if (mdb_env_create(&menv) != MDB_SUCCESS)
+					return -1;
+				if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
+					return -1;
+				if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
+					return -1;
+				// Syncs are handled from erlang.
+				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOSYNC, 0664) != MDB_SUCCESS)
+					return -1;
+
+				// Create databases if they do not exist yet
+				if (mdb_txn_begin(menv, NULL, 0, &curThread->txn) != MDB_SUCCESS)
+					return -1;
+				if (mdb_dbi_open(curThread->txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != MDB_SUCCESS)
+					return -1;
+				if (mdb_dbi_open(curThread->txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
+					return -1;
+				if (mdb_dbi_open(curThread->txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
+					return -1;
+				if (mdb_dbi_open(curThread->txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
+					return -1;
+				if (mdb_txn_commit(curThread->txn) != MDB_SUCCESS)
+					return -1;
+			}
 
 			if (k == -1)
 				priv->thrMutexes[i] = enif_mutex_create("thrmutex");
@@ -3324,6 +3343,10 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			curThread->index = i;
 			curThread->tasks = queue_create();
 			curThread->pd = priv;
+			curThread->infodb = infodb;
+			curThread->actorsdb = actorsdb;
+			curThread->logdb = logdb;
+			curThread->pagesdb = pagesdb;
 			if (k == -1)
 				priv->wtasks[i] = curThread->tasks;
 			else
