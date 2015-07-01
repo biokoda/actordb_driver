@@ -226,6 +226,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 {
 	MDB_val key, data;
 	int rc;
+	size_t ndupl = 0;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 
 	DBG((g_log,"FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu\n",pgno,pWal->index,limitTerm,limitEvnum));
@@ -241,6 +242,12 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 	rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
 	if (rc == MDB_SUCCESS)
 	{
+		mdb_cursor_count(thr->cursorPages,&ndupl);
+		if (ndupl == 0)
+		{
+			*piRead = 0;
+			return SQLITE_OK;
+		}
 		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
 		if (rc == MDB_SUCCESS)
 		{
