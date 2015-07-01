@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1224,6 +1224,7 @@ static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread)
 	if (cmd->conn && cmd->conn->syncNum >= pd->syncNumbers[thread->index])
 	{
 		pd->syncNumbers[thread->index]++;
+		mdb_txn_commit(thread->txn);
 		mdb_env_sync(thread->env,1);
 	}
 	else if (!cmd->conn)
@@ -2160,6 +2161,8 @@ static void *thread_func(void *arg)
 				mdb_txn_commit(data->txn);
 				reopen = 1;
 			}
+			else if (item->cmd.type == cmd_sync)
+				reopen = 1;
 			enif_send(NULL, &item->cmd.pid, item->cmd.env, answer);
 			enif_clear_env(item->cmd.env);
 		}
