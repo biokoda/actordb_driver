@@ -1322,35 +1322,16 @@ static ERL_NIF_TERM do_checkpoint(db_command *cmd, db_thread *thread)
 
 static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 {
-	ErlNifBinary bin;
-	int rc = 0,i;
-	unsigned int rowcount = 0;
-	sqlite3_stmt *statement = NULL;
-	const char *readpoint;
-	const char *end;
-	int column_count;
-	ERL_NIF_TERM column_names = 0;
-	ERL_NIF_TERM results;
-	// insert records are a list of lists.
-	ERL_NIF_TERM listTop = 0, headTop = 0, headBot = 0;
-	int skip = 0;
-	int statementlen = 0;
-	ERL_NIF_TERM rows;
-	char *errat = NULL;
-	char dofinalize = 1;
 	u32 pagesPre = thread->pagesChanged;
+	int rc = 0,i;
 	u64 newTerm,newEvnum;
 	ERL_NIF_TERM *stackArray = NULL;
-
-	const ERL_NIF_TERM *insertRow;
-	int rowLen = 0;
-	listTop = cmd->arg4;
+	sqlite3_stmt *statement = NULL;
+	char *errat = NULL;
+	ERL_NIF_TERM results;
 
 	if (!cmd->conn->wal_configured)
 		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
-
-	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
-		return make_error_tuple(cmd->env, "not_iolist");
 
 	if (cmd->arg1)
 	{
@@ -1371,325 +1352,344 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		cmd->conn->wal.inProgressTerm = newTerm;
 		cmd->conn->wal.inProgressEvnum = newEvnum;
 	}
+	do{
+		ErlNifBinary bin;
+		unsigned int rowcount = 0;
+		const char *readpoint;
+		const char *end;
+		int column_count;
+		ERL_NIF_TERM column_names = 0;
+		// insert records are a list of lists.
+		ERL_NIF_TERM listTop = 0, headTop = 0, headBot = 0;
+		int skip = 0;
+		int statementlen = 0;
+		ERL_NIF_TERM rows;
+		char dofinalize = 1;
+		const ERL_NIF_TERM *insertRow;
+		int rowLen = 0;
+		listTop = cmd->arg4;
 
-#ifdef _TESTDBG_
-	if (bin.size > 1024*10)
-	{
-		DBG((g_log,"Executing %.*s...\n", 1024*10,bin.data));
-	}
-	else
-	{
-		DBG((g_log,"Executing %lld %.*s\n",(i64)&cmd->conn->wal, (int)bin.size,bin.data));
-	}
-#endif
-	end = (char*)bin.data + bin.size;
-	readpoint = (char*)bin.data;
-	results = enif_make_list(cmd->env,0);
+		if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
+			return make_error_tuple(cmd->env, "not_iolist");
 
-	while (readpoint < end || headTop != 0)
-	{
-		if (readpoint[0] == '$')
-			skip = 1;
-		else
-			skip = 0;
-		statementlen = end-readpoint;
-
-		// if _insert, then this is a prepared statement with multiple rows in arg4
-		if (headTop == 0 && statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
-			 (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N'))
+	#ifdef _TESTDBG_
+		if (bin.size > 1024*10)
 		{
-			skip++;
-			rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
-			if(rc != SQLITE_OK)
-			{
-				errat = "_prepare";
-				sqlite3_finalize(statement);
-				break;
-			}
-			rc = SQLITE_DONE;
-
-			if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
-			{
-				rc = SQLITE_INTERRUPT;
-				sqlite3_finalize(statement);
-				break;
-			}
-
-			// Move over a list of records.
-			// First element is ignored as it is presumed to be record name.
-			while (rc == SQLITE_DONE && enif_get_list_cell(cmd->env, headTop, &headBot, &headTop))
-			{
-				if (!enif_get_tuple(cmd->env, headBot, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
-				{
-					rc = SQLITE_INTERRUPT;
-					break;
-				}
-
-				for (i = 1; i < rowLen; i++)
-				{
-					if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
-					{
-						errat = "cant_bind";
-						sqlite3_finalize(statement);
-						break;
-					}
-				}
-				rc = sqlite3_step(statement);
-				sqlite3_reset(statement);
-			}
+			DBG((g_log,"Executing %.*s...\n", 1024*10,bin.data));
 		}
 		else
 		{
-			// static prepared statements
-			if (headTop == 0 && statementlen >= 5 && readpoint[skip] == '#' && (readpoint[skip+1] == 's' || readpoint[skip+1] == 'd') && readpoint[skip+4] == ';')
+			DBG((g_log,"Executing %lld %.*s\n",(i64)&cmd->conn->wal, (int)bin.size,bin.data));
+		}
+	#endif
+		end = (char*)bin.data + bin.size;
+		readpoint = (char*)bin.data;
+		results = enif_make_list(cmd->env,0);
+
+		while (readpoint < end || headTop != 0)
+		{
+			if (readpoint[0] == '$')
+				skip = 1;
+			else
+				skip = 0;
+			statementlen = end-readpoint;
+
+			// if _insert, then this is a prepared statement with multiple rows in arg4
+			if (headTop == 0 && statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
+				 (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N'))
 			{
-				dofinalize = 0;
-				i = (readpoint[skip+2] - '0')*10 + (readpoint[skip+3] - '0');
-				if (readpoint[skip+1] == 's')
-					skip = 1;
-
-				if (cmd->conn->staticPrepared == NULL)
-				{
-					cmd->conn->staticPrepared = malloc(sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
-					memset(cmd->conn->staticPrepared,0,sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
-				}
-
-				if (cmd->conn->staticPrepared[i] == NULL)
-				{
-					rc = sqlite3_prepare_v2(cmd->conn->db, (char *)thread->staticSqls[i], -1, &(cmd->conn->staticPrepared[i]), NULL);
-					if(rc != SQLITE_OK)
-					{
-						errat = "prepare";
-						break;
-					}
-				}
-				readpoint += 5;
-				statement = cmd->conn->staticPrepared[i];
-			}
-			// user set prepared statements
-			else if (headTop == 0  && statementlen >= 6 && readpoint[skip] == '#' && (readpoint[skip+1] == 'r' || readpoint[skip+1] == 'w') && readpoint[skip+6] == ';')
-			{
-				dofinalize = 0;
-				// actor type index
-				i = (readpoint[skip+2] - '0')*10 + (readpoint[skip+3] - '0');
-				// statement index
-				rowLen = (readpoint[skip+4] - '0')*10 + (readpoint[skip+5] - '0');
-
-				if (thread->prepSize <= i)
-				{
-					errat = "prepare";
-					break;
-				}
-
-				if (cmd->conn->prepared == NULL)
-				{
-					cmd->conn->prepared = malloc(MAX_PREP_SQLS*sizeof(sqlite3_stmt*));
-					memset(cmd->conn->prepared,0,MAX_PREP_SQLS*sizeof(sqlite3_stmt*));
-					cmd->conn->prepVersions = malloc(MAX_PREP_SQLS*sizeof(int));
-					memset(cmd->conn->prepVersions,0,MAX_PREP_SQLS*sizeof(int));
-				}
-
-				if (cmd->conn->prepared[rowLen] == NULL || cmd->conn->prepVersions[rowLen] != thread->prepVersions[i][rowLen])
-				{
-					if (thread->prepSqls[i][rowLen] == NULL)
-					{
-						errat = "prepare";
-						break;
-					}
-					if (cmd->conn->prepared[rowLen] != NULL)
-						sqlite3_finalize(cmd->conn->prepared[rowLen]);
-
-					rc = sqlite3_prepare_v2(cmd->conn->db, thread->prepSqls[i][rowLen], -1, &(cmd->conn->prepared[rowLen]), NULL);
-					if(rc != SQLITE_OK)
-					{
-						DBG((g_log,"Prepared statement failed\n"));
-						errat = "prepare";
-						break;
-					}
-					cmd->conn->prepVersions[rowLen] = thread->prepVersions[i][rowLen];
-				}
-				readpoint += 7;
-				statement = cmd->conn->prepared[rowLen];
-			}
-			else if (headTop == 0)
-			{
-				dofinalize = 1;
-				// #ifdef _TESTDBG_
-				//     if (statementlen > 1024)
-				//     {
-				//         DBG((g_log,"Executing %.*s\n",1024,readpoint));
-				//     }
-				//     else
-				//     {
-				//         DBG((g_log,"Executing %.*s\n",(int)statementlen,readpoint));
-				//     }
-				// #endif
-				rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &statement, &readpoint);
+				skip++;
+				rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
 				if(rc != SQLITE_OK)
 				{
-					errat = "prepare";
+					errat = "_prepare";
 					sqlite3_finalize(statement);
 					break;
 				}
-			}
+				rc = SQLITE_DONE;
 
-			if (headTop != 0 || sqlite3_bind_parameter_count(statement))
-			{
-				// Single prepared statement can have multiple rows that it wants to execute
-				// We execute one at a time. If headTop /= 0, we are still in previous statement.
-				if (headTop == 0)
+				if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
 				{
-					// List can be:
-					// [[Tuple1,Tuple2],...] -> for every statement, list of rows.
-					// [[[Column1,Column2,..],..],...] -> for every statement, for every row, list of columns.
-					if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
+					rc = SQLITE_INTERRUPT;
+					sqlite3_finalize(statement);
+					break;
+				}
+
+				// Move over a list of records.
+				// First element is ignored as it is presumed to be record name.
+				while (rc == SQLITE_DONE && enif_get_list_cell(cmd->env, headTop, &headBot, &headTop))
+				{
+					if (!enif_get_tuple(cmd->env, headBot, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
 					{
 						rc = SQLITE_INTERRUPT;
 						break;
 					}
+
+					for (i = 1; i < rowLen; i++)
+					{
+						if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
+						{
+							errat = "cant_bind";
+							sqlite3_finalize(statement);
+							break;
+						}
+					}
+					rc = sqlite3_step(statement);
+					sqlite3_reset(statement);
+				}
+			}
+			else
+			{
+				// static prepared statements
+				if (headTop == 0 && statementlen >= 5 && readpoint[skip] == '#' && (readpoint[skip+1] == 's' || readpoint[skip+1] == 'd') && readpoint[skip+4] == ';')
+				{
+					dofinalize = 0;
+					i = (readpoint[skip+2] - '0')*10 + (readpoint[skip+3] - '0');
+					if (readpoint[skip+1] == 's')
+						skip = 1;
+
+					if (cmd->conn->staticPrepared == NULL)
+					{
+						cmd->conn->staticPrepared = malloc(sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
+						memset(cmd->conn->staticPrepared,0,sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
+					}
+
+					if (cmd->conn->staticPrepared[i] == NULL)
+					{
+						rc = sqlite3_prepare_v2(cmd->conn->db, (char *)thread->staticSqls[i], -1, &(cmd->conn->staticPrepared[i]), NULL);
+						if(rc != SQLITE_OK)
+						{
+							errat = "prepare";
+							break;
+						}
+					}
+					readpoint += 5;
+					statement = cmd->conn->staticPrepared[i];
+				}
+				// user set prepared statements
+				else if (headTop == 0  && statementlen >= 6 && readpoint[skip] == '#' && (readpoint[skip+1] == 'r' || readpoint[skip+1] == 'w') && readpoint[skip+6] == ';')
+				{
+					dofinalize = 0;
+					// actor type index
+					i = (readpoint[skip+2] - '0')*10 + (readpoint[skip+3] - '0');
+					// statement index
+					rowLen = (readpoint[skip+4] - '0')*10 + (readpoint[skip+5] - '0');
+
+					if (thread->prepSize <= i)
+					{
+						errat = "prepare";
+						break;
+					}
+
+					if (cmd->conn->prepared == NULL)
+					{
+						cmd->conn->prepared = malloc(MAX_PREP_SQLS*sizeof(sqlite3_stmt*));
+						memset(cmd->conn->prepared,0,MAX_PREP_SQLS*sizeof(sqlite3_stmt*));
+						cmd->conn->prepVersions = malloc(MAX_PREP_SQLS*sizeof(int));
+						memset(cmd->conn->prepVersions,0,MAX_PREP_SQLS*sizeof(int));
+					}
+
+					if (cmd->conn->prepared[rowLen] == NULL || cmd->conn->prepVersions[rowLen] != thread->prepVersions[i][rowLen])
+					{
+						if (thread->prepSqls[i][rowLen] == NULL)
+						{
+							errat = "prepare";
+							break;
+						}
+						if (cmd->conn->prepared[rowLen] != NULL)
+							sqlite3_finalize(cmd->conn->prepared[rowLen]);
+
+						rc = sqlite3_prepare_v2(cmd->conn->db, thread->prepSqls[i][rowLen], -1, &(cmd->conn->prepared[rowLen]), NULL);
+						if(rc != SQLITE_OK)
+						{
+							DBG((g_log,"Prepared statement failed\n"));
+							errat = "prepare";
+							break;
+						}
+						cmd->conn->prepVersions[rowLen] = thread->prepVersions[i][rowLen];
+					}
+					readpoint += 7;
+					statement = cmd->conn->prepared[rowLen];
+				}
+				else if (headTop == 0)
+				{
+					dofinalize = 1;
+					// #ifdef _TESTDBG_
+					//     if (statementlen > 1024)
+					//     {
+					//         DBG((g_log,"Executing %.*s\n",1024,readpoint));
+					//     }
+					//     else
+					//     {
+					//         DBG((g_log,"Executing %.*s\n",(int)statementlen,readpoint));
+					//     }
+					// #endif
+					rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &statement, &readpoint);
+					if(rc != SQLITE_OK)
+					{
+						errat = "prepare";
+						sqlite3_finalize(statement);
+						break;
+					}
 				}
 
-				// Every row is a list. It can be a list of tuples (which implies records thus we start at offset 1),
-				//   or a list of columns.
-				if (enif_get_list_cell(cmd->env, headTop, &headBot, &headTop))
+				if (headTop != 0 || sqlite3_bind_parameter_count(statement))
 				{
-					// If tuple bind from tuple
-					if (enif_is_tuple(cmd->env, headBot))
+					// Single prepared statement can have multiple rows that it wants to execute
+					// We execute one at a time. If headTop /= 0, we are still in previous statement.
+					if (headTop == 0)
 					{
-						if (!enif_get_tuple(cmd->env, headBot, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
+						// List can be:
+						// [[Tuple1,Tuple2],...] -> for every statement, list of rows.
+						// [[[Column1,Column2,..],..],...] -> for every statement, for every row, list of columns.
+						if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
 						{
 							rc = SQLITE_INTERRUPT;
 							break;
 						}
+					}
 
-						for (i = 1; i < rowLen; i++)
+					// Every row is a list. It can be a list of tuples (which implies records thus we start at offset 1),
+					//   or a list of columns.
+					if (enif_get_list_cell(cmd->env, headTop, &headBot, &headTop))
+					{
+						// If tuple bind from tuple
+						if (enif_is_tuple(cmd->env, headBot))
 						{
-							if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
+							if (!enif_get_tuple(cmd->env, headBot, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
 							{
-								errat = "cant_bind";
 								rc = SQLITE_INTERRUPT;
 								break;
 							}
-						}
-					}
-					// If list, bind from list
-					else if (enif_is_list(cmd->env,headBot))
-					{
-						ERL_NIF_TERM rowHead;
-						// Index is from 1 because sqlite bind param start with 1 not 0
-						for (i = 1; enif_get_list_cell(cmd->env, headBot, &rowHead, &headBot); i++)
-						{
-							if (bind_cell(cmd->env, rowHead, statement, i) == -1)
+
+							for (i = 1; i < rowLen; i++)
 							{
-								errat = "cant_bind";
-								rc = SQLITE_INTERRUPT;
-								break;
+								if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
+								{
+									errat = "cant_bind";
+									rc = SQLITE_INTERRUPT;
+									break;
+								}
 							}
 						}
+						// If list, bind from list
+						else if (enif_is_list(cmd->env,headBot))
+						{
+							ERL_NIF_TERM rowHead;
+							// Index is from 1 because sqlite bind param start with 1 not 0
+							for (i = 1; enif_get_list_cell(cmd->env, headBot, &rowHead, &headBot); i++)
+							{
+								if (bind_cell(cmd->env, rowHead, statement, i) == -1)
+								{
+									errat = "cant_bind";
+									rc = SQLITE_INTERRUPT;
+									break;
+								}
+							}
+						}
+						if (rc == SQLITE_INTERRUPT)
+						{
+							break;
+						}
 					}
-					if (rc == SQLITE_INTERRUPT)
+					else
 					{
-						break;
+						dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
+						headTop = 0;
+						column_names = 0;
+						statement = NULL;
+						continue;
 					}
 				}
-				else
+
+				column_count = sqlite3_column_count(statement);
+				if (column_count > 0 && column_names == 0)
 				{
-					dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
-					headTop = 0;
-					column_names = 0;
-					statement = NULL;
-					continue;
+					u8 dofree = 1;
+					ERL_NIF_TERM *array;
+					if (column_count > 100)
+					{
+						array = (ERL_NIF_TERM *)malloc(sizeof(ERL_NIF_TERM) * column_count);
+						dofree = 1;
+					}
+					else
+					{
+						if (!stackArray)
+							stackArray = alloca(sizeof(ERL_NIF_TERM)*column_count);
+						array = stackArray;
+						dofree = 0;
+					}
+
+					for(i = 0; i < column_count; i++)
+					{
+						const char* cname = sqlite3_column_name(statement, i);
+						array[i] = make_binary(cmd->env, cname,strlen(cname));
+					}
+
+					column_names = enif_make_tuple_from_array(cmd->env, array, column_count);
+					if (dofree)
+						free(array);
+				}
+
+				rows = enif_make_list(cmd->env,0);
+				rowcount = 0;
+				while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
+				{
+					ERL_NIF_TERM *array = NULL;
+					u8 dofree = 1;
+					if (column_count > 100)
+					{
+						dofree = 1;
+						array = (ERL_NIF_TERM*)malloc(sizeof(ERL_NIF_TERM)*column_count);
+					}
+					else
+					{
+						array = stackArray;
+						dofree = 0;
+					}
+
+					for(i = 0; i < column_count; i++)
+						array[i] = make_cell(cmd->env, statement, i);
+
+					rows = enif_make_list_cell(cmd->env, enif_make_tuple_from_array(cmd->env, array, column_count), rows);
+
+					if (dofree)
+						free(array);
+					rowcount++;
 				}
 			}
 
-			column_count = sqlite3_column_count(statement);
-			if (column_count > 0 && column_names == 0)
+			if (rc > 0 && rc < 100)
 			{
-				u8 dofree = 1;
-				ERL_NIF_TERM *array;
-				if (column_count > 100)
-				{
-					array = (ERL_NIF_TERM *)malloc(sizeof(ERL_NIF_TERM) * column_count);
-					dofree = 1;
-				}
-				else
-				{
-					if (!stackArray)
-						stackArray = alloca(sizeof(ERL_NIF_TERM)*column_count);
-					array = stackArray;
-					dofree = 0;
-				}
-
-				for(i = 0; i < column_count; i++)
-				{
-					const char* cname = sqlite3_column_name(statement, i);
-					array[i] = make_binary(cmd->env, cname,strlen(cname));
-				}
-
-				column_names = enif_make_tuple_from_array(cmd->env, array, column_count);
-				if (dofree)
-					free(array);
+				errat = "step";
+				dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
+				break;
 			}
-
-			rows = enif_make_list(cmd->env,0);
-			rowcount = 0;
-			while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
+			if (skip == 0 && (rowcount > 0 || column_count > 0))
 			{
-				ERL_NIF_TERM *array = NULL;
-				u8 dofree = 1;
-				if (column_count > 100)
-				{
-					dofree = 1;
-					array = (ERL_NIF_TERM*)malloc(sizeof(ERL_NIF_TERM)*column_count);
-				}
-				else
-				{
-					array = stackArray;
-					dofree = 0;
-				}
-
-				for(i = 0; i < column_count; i++)
-					array[i] = make_cell(cmd->env, statement, i);
-
-				rows = enif_make_list_cell(cmd->env, enif_make_tuple_from_array(cmd->env, array, column_count), rows);
-
-				if (dofree)
-					free(array);
-				rowcount++;
+				ERL_NIF_TERM cols = enif_make_tuple2(cmd->env,atom_columns,column_names);
+				ERL_NIF_TERM rowst = enif_make_tuple2(cmd->env,atom_rows,rows);
+				ERL_NIF_TERM res1 = enif_make_list2(cmd->env,cols,rowst);
+				results = enif_make_list_cell(cmd->env, res1,results);
 			}
-		}
-
-		if (rc > 0 && rc < 100)
-		{
-			errat = "step";
+			else if (skip == 0 && statementlen > 6)
+			{
+				ERL_NIF_TERM nchanges = enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db));
+				ERL_NIF_TERM lirowid = enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db));
+				ERL_NIF_TERM changes = enif_make_tuple3(cmd->env,atom_changes,lirowid,nchanges);
+				results = enif_make_list_cell(cmd->env, changes, results);
+			}
+			// if we are not done with prepared statement (because it has multiple invocations with prepared statements)
+			if (headTop != 0)
+			{
+				sqlite3_reset(statement);
+				continue;
+			}
 			dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
-			break;
+			statement = NULL;
+			column_names = 0;
 		}
-		if (skip == 0 && (rowcount > 0 || column_count > 0))
-		{
-			ERL_NIF_TERM cols = enif_make_tuple2(cmd->env,atom_columns,column_names);
-			ERL_NIF_TERM rowst = enif_make_tuple2(cmd->env,atom_rows,rows);
-			ERL_NIF_TERM res1 = enif_make_list2(cmd->env,cols,rowst);
-			results = enif_make_list_cell(cmd->env, res1,results);
-		}
-		else if (skip == 0 && statementlen > 6)
-		{
-			ERL_NIF_TERM nchanges = enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db));
-			ERL_NIF_TERM lirowid = enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db));
-			ERL_NIF_TERM changes = enif_make_tuple3(cmd->env,atom_changes,lirowid,nchanges);
-			results = enif_make_list_cell(cmd->env, changes, results);
-		}
-		// if we are not done with prepared statement (because it has multiple invocations with prepared statements)
-		if (headTop != 0)
-		{
-			sqlite3_reset(statement);
-			continue;
-		}
-		dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
-		statement = NULL;
-		column_names = 0;
-	}
-
+	} while (0);
 
 	// Pages have been written to wal, but we are returning error.
 	// Call a rollback.
@@ -1698,10 +1698,6 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
 		sqlite3_step(statement);
 		sqlite3_finalize(statement);
-
-		// mdb_txn_abort(thread->wtxn);
-		// open_wtxn(thread);
-		// thread->pagesChanged = pagesPre;
 	}
 
 	// enif_release_resource(cmd->conn);
