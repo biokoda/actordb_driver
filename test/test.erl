@@ -36,7 +36,12 @@ modes() ->
 		"$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
 		"$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
-	{ok,[_]} = ?READ("SELECT * from tab;",Db).
+	{ok,[_]} = ?READ("SELECT * from tab;",Db),
+	Sql1 = "INSERT INTO tab VALUES (2, 'asdadad',1);",
+	Sql2 = "INSERT INTO tab VALUES (3, 'tritri',1);",
+	Sql3 = "SELECT * FROM tab;",
+	{ok,{_,_,_}} = R = actordb_driver:exec_script({Sql1,Sql2,Sql3},Db),
+	?debugFmt("Tuple exec ~p", [R]).
 
 dbcopy() ->
 	?INIT,

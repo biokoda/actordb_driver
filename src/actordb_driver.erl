@@ -172,17 +172,20 @@ exec_read(Sql,Recs,{actordb_driver, _Ref, Connection},Timeout) ->
 
 exec_script(Sql, Db) ->
 	exec_script(Sql,Db,infinity,0,0,<<>>).
-exec_script(Sql,Recs, Db) when is_list(Recs) ->
+
+exec_script(Sql,Recs, Db) when element(1,Db) == actordb_driver ->
 	exec_script(Sql,Recs,Db,infinity,0,0,<<>>);
-exec_script(Sql, Db, Timeout) when is_integer(Timeout) ->
+exec_script(Sql, Db, Timeout) when element(1,Db) == actordb_driver ->
 	exec_script(Sql,Db,Timeout,0,0,<<>>).
-exec_script(Sql, Recs, Db, Timeout) when is_integer(Timeout), is_list(Recs) ->
+
+exec_script(Sql, Recs, Db, Timeout) when is_integer(Timeout), element(1,Db) == actordb_driver ->
 	exec_script(Sql,Recs,Db,Timeout,0,0,<<>>).
+
 exec_script(Sql, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
 	receive_answer(Ref,Connection,Timeout).
-exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) when is_list(Recs) ->
+exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
 	receive_answer(Ref,Connection,Timeout).

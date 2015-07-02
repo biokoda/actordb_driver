@@ -112,7 +112,6 @@ struct db_thread
 	// MDB_cursor *cursorTest;
 	// so currently executing connection data is accessible from wal callback
 	db_connection *curConn;
-	int maxvalsize;
 
 	// Raft page replication
 	// MAX_CONNECTIONS (8) servers to replicate write log to
@@ -122,21 +121,22 @@ struct db_thread
 	#ifndef _TESTAPP_
 	queue *tasks;
 	control_data *control;
+	ERL_NIF_TERM *columnSpace;
 	#endif
 
-	unsigned int dbcount;
-	unsigned int inactivity;
-	int isopen;
+	int columnSpaceSize;
 	u32 pagesChanged;
-	u8 forceCommit;
 	int index;        // Index in table of threads.
-	// int nthreads;
+	int maxvalsize;
 	int nResFrames;
+	u8 forceCommit;
+	u8 isopen;
 
 	// All DB paths are relative to this thread path.
 	// This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
 	char path[MAX_PATHNAME];
 	int pathlen;
+
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
 
