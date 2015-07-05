@@ -7,6 +7,8 @@
 		open/1,open/2,open/3,open/4,
 		exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
 		exec_read/2,exec_read/3,exec_read/4,
+		exec_read_async/2,exec_read_async/3,
+		exec_script_async/2,exec_script_async/3,exec_script_async/5,exec_script_async/6,
 		store_prepared_table/2,
 		close/1,inject_page/3,
 		parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0,
@@ -189,6 +191,30 @@ exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,App
 	Ref = make_ref(),
 	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
 	receive_answer(Ref,Connection,Timeout).
+
+
+exec_read_async(Sql,{actordb_driver, _Ref, Connection}) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql),
+	Ref.
+exec_read_async(Sql,Recs,{actordb_driver, _Ref, Connection}) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs),
+	Ref.
+
+exec_script_async(Sql,Recs, Db) when element(1,Db) == actordb_driver ->
+	exec_script_async(Sql,Recs,Db,0,0,<<>>).
+exec_script_async(Sql, Db) when element(1,Db) == actordb_driver ->
+	exec_script_async(Sql,Db,0,0,<<>>).
+
+exec_script_async(Sql, {actordb_driver, _Ref, Connection},Term,Index,AppendParam) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
+	Ref.
+exec_script_async(Sql, Recs, {actordb_driver, _Ref, Connection},Term,Index,AppendParam) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
+	Ref.
 
 checkpoint_lock({actordb_driver, _Ref, Connection},Lock) ->
 	case Lock of
