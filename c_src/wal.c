@@ -215,7 +215,15 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
-		return findframe(pWal->rthread, pWal, pgno, piRead, pWal->readSafeTerm, pWal->readSafeEvnum, NULL, NULL);
+	{
+		u64 readSafeEvnum, readSafeTerm;
+		enif_mutex_lock(pWal->mtx);
+		readSafeEvnum = pWal->readSafeEvnum;
+		readSafeTerm = pWal->readSafeTerm;
+		enif_mutex_unlock(pWal->mtx);
+
+		return findframe(pWal->rthread, pWal, pgno, piRead, readSafeTerm, readSafeEvnum, NULL, NULL);
+	}
 	else if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
 		return findframe(pWal->thread, pWal, pgno, piRead, pWal->inProgressTerm, pWal->inProgressEvnum, NULL, NULL);
 	else
@@ -415,20 +423,29 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
 	db_thread *thr;
+	u32 mxPage;
+	u64 readSafeEvnum, readSafeTerm;
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
 		thr = pWal->rthread;
 	else
 		thr = pWal->thread;
+
+	enif_mutex_lock(pWal->mtx);
+	readSafeEvnum = pWal->readSafeEvnum;
+	readSafeTerm = pWal->readSafeTerm;
+	mxPage = pWal->readSafeMxPage;
+	enif_mutex_unlock(pWal->mtx);
+
 	if (!iter->started)
 	{
 		if (iter->evnum + iter->evterm == 0)
 		{
 			// If any writes come after iterator started, we must ignore those pages.
-			iter->evnum = pWal->readSafeEvnum;
-			iter->evterm = pWal->readSafeTerm;
+			iter->evnum = readSafeEvnum;
+			iter->evterm = readSafeTerm;
 			iter->pgnoPos = 1;
 			iter->entiredb = 1;
-			iter->mxPage = pWal->readSafeMxPage;
+			iter->mxPage = mxPage;
 			if (pWal->mxPage == 0)
 			{
 				DBG((g_log,"ERROR: Iterate on empty DB %llu\n",pWal->lastCompleteEvnum));
@@ -472,7 +489,6 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 		int logop;
 		u8 logKeyBuf[sizeof(u64)*3];
 		int rc;
-
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 
 		memcpy(logKeyBuf,                 &pWal->index,  sizeof(u64));
@@ -486,16 +502,16 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			// Evterm/evnum combination not found. Check if evnum is there.
 			// If so return evterm. It will mean a node is in conflict.
 			DBG((g_log,"Key not found in log\n"));
-			if (pWal->readSafeEvnum == iter->evnum)
+			if (readSafeEvnum == iter->evnum)
 			{
-				iter->evterm = pWal->readSafeTerm;
+				iter->evterm = readSafeTerm;
 				iter->termMismatch = 1;
 			}
 			else
 			{
 				memcpy(logKeyBuf,                 &pWal->index,  sizeof(u64));
-				memcpy(logKeyBuf + sizeof(u64),   &pWal->readSafeTerm, sizeof(u64));
-				memcpy(logKeyBuf + sizeof(u64)*2, &pWal->readSafeEvnum,sizeof(u64));
+				memcpy(logKeyBuf + sizeof(u64),   &readSafeTerm, sizeof(u64));
+				memcpy(logKeyBuf + sizeof(u64)*2, &readSafeEvnum,sizeof(u64));
 				if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 				{
 					DBG((g_log,"Key not found in log for undo\n"));

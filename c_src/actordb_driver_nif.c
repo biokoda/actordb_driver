@@ -469,6 +469,7 @@ static void destruct_connection(ErlNifEnv *env, void *arg)
 	{
 		DBG((g_log,"ERROR! closing %d\n",rc));
 	}
+	enif_mutex_destroy(conn->wal.mtx);
 }
 
 // static void
@@ -552,6 +553,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	conn->thread = thread->index;
 	conn->wal.thread = thread;
 	conn->rthread = readThrIndex % thread->pd->nReadThreads;
+	conn->wal.mtx = enif_mutex_create("conmutex");
 
 	if (filename[0] != ':')
 	{
@@ -1087,10 +1089,12 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	// no dirty pages, but will write info
 	sqlite3WalFrames(pWal, SQLITE_DEFAULT_PAGE_SIZE, NULL, pWal->mxPage, 1, 0);
 	pWal->changed = 1;
+
+	enif_mutex_lock(pWal->mtx);
 	pWal->readSafeTerm = pWal->lastCompleteTerm;
 	pWal->readSafeEvnum = pWal->lastCompleteEvnum;
 	pWal->readSafeMxPage = pWal->readSafeEvnum;
-
+	enif_mutex_unlock(pWal->mtx);
 	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
 	return atom_ok;
 }
@@ -1243,6 +1247,7 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 	PgHdr page;
 	int doreplicate = cmd->conn->doReplicate;;
 	ErlNifBinary header;
+	Wal *pWal = &cmd->conn->wal;
 
 	if (!enif_is_binary(cmd->env,cmd->arg))
 		return make_error_tuple(cmd->env,"not_bin");
@@ -1265,15 +1270,15 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 
 	// If inprogress > 0 and does not match input evterm/evnum, than we have leftowers
 	// from a failed inject. We must clean up. During a single iteration or write, evnum/evterm does not change.
-	if (cmd->conn->wal.inProgressTerm+cmd->conn->wal.inProgressEvnum > 0 &&
-		(cmd->conn->wal.inProgressTerm != evterm || cmd->conn->wal.inProgressEvnum != evnum))
+	if (pWal->inProgressTerm + pWal->inProgressEvnum > 0 &&
+		(pWal->inProgressTerm != evterm || pWal->inProgressEvnum != evnum))
 	{
 		doundo(&cmd->conn->wal,NULL,NULL,1);
 	}
-	else if (cmd->conn->wal.inProgressTerm+cmd->conn->wal.inProgressEvnum == 0)
+	else if (pWal->inProgressTerm + pWal->inProgressEvnum == 0)
 	{
-		cmd->conn->wal.inProgressTerm = evterm;
-		cmd->conn->wal.inProgressEvnum = evnum;
+		pWal->inProgressTerm = evterm;
+		pWal->inProgressEvnum = evnum;
 	}
 
 	rc = LZ4_decompress_safe((char*)(bin.data),(char*)pbuf,bin.size,sizeof(pbuf));
@@ -1290,17 +1295,19 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 		}
 	}
 	cmd->conn->doReplicate = 0;
-	rc = sqlite3WalFrames(&cmd->conn->wal, sizeof(pbuf), &page, commit, commit, 0);
+	rc = sqlite3WalFrames(pWal, sizeof(pbuf), &page, commit, commit, 0);
 	cmd->conn->doReplicate = doreplicate;
 	if (rc != SQLITE_OK)
 	{
 		DBG((g_log,"Unable to write inject page\r\n"));
 		return make_error_tuple(cmd->env,"cant_inject");
 	}
-	cmd->conn->wal.readSafeTerm = cmd->conn->wal.lastCompleteTerm;
-	cmd->conn->wal.readSafeEvnum = cmd->conn->wal.lastCompleteEvnum;
-	cmd->conn->wal.readSafeMxPage = cmd->conn->wal.mxPage;
-	cmd->conn->wal.changed = 1;
+	enif_mutex_lock(pWal->mtx);
+	pWal->readSafeTerm = cmd->conn->wal.lastCompleteTerm;
+	pWal->readSafeEvnum = cmd->conn->wal.lastCompleteEvnum;
+	pWal->readSafeMxPage = cmd->conn->wal.mxPage;
+	enif_mutex_unlock(pWal->mtx);
+	pWal->changed = 1;
 	return atom_ok;
 }
 
@@ -2563,9 +2570,11 @@ static ERL_NIF_TERM replication_done(ErlNifEnv *env, int argc, const ERL_NIF_TER
 	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
 		return make_error_tuple(env, "invalid_connection");
 
+	enif_mutex_lock(res->wal.mtx);
 	res->wal.readSafeTerm = res->wal.lastCompleteTerm;
 	res->wal.readSafeEvnum = res->wal.lastCompleteEvnum;
 	res->wal.readSafeMxPage = res->wal.mxPage;
+	enif_mutex_unlock(res->wal.mtx);
 
 	return atom_ok;
 }
