@@ -115,6 +115,12 @@ struct db_thread
 	// MDB_cursor *cursorTest;
 	// so currently executing connection data is accessible from wal callback
 	db_connection *curConn;
+	// For read threads. Before executing sql on a connection, copy over term/evnum upper limit.
+	// Reads/writes can be completely asynchronous, at least from our code
+	// we make no assumptions about sqlite.
+	// We can't allow readSafeTerm/readSafeEvnum to change in the middle of a read.
+	u64 readSafeTerm;
+	u64 readSafeEvnum;
 
 	// Raft page replication
 	// MAX_CONNECTIONS (8) servers to replicate write log to

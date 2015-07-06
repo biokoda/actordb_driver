@@ -1363,6 +1363,14 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		cmd->conn->wal.inProgressTerm = newTerm;
 		cmd->conn->wal.inProgressEvnum = newEvnum;
 	}
+	else
+	{
+		// Copy over safe read limits.
+		enif_mutex_lock(cmd->conn->wal.mtx);
+		thread->readSafeTerm = cmd->conn->wal.readSafeTerm;
+		thread->readSafeEvnum = cmd->conn->wal.readSafeEvnum;
+		enif_mutex_unlock(cmd->conn->wal.mtx);
+	}
 
 	if (enif_get_tuple(cmd->env, cmd->arg, &tupleSize, &inputTuple))
 	{

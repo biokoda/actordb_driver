@@ -218,8 +218,8 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 	{
 		u64 readSafeEvnum, readSafeTerm;
 		enif_mutex_lock(pWal->mtx);
-		readSafeEvnum = pWal->readSafeEvnum;
-		readSafeTerm = pWal->readSafeTerm;
+		readSafeEvnum = pWal->rthread->readSafeEvnum;
+		readSafeTerm = pWal->rthread->readSafeTerm;
 		enif_mutex_unlock(pWal->mtx);
 
 		return findframe(pWal->rthread, pWal, pgno, piRead, readSafeTerm, readSafeEvnum, NULL, NULL);
@@ -473,7 +473,7 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			*done = iter->mxPage;
 			return 0;
 		}
-		DBG((g_log,"Iter pos=%u, mx=%u, mxdb=%u\n",iter->pgnoPos, iter->mxPage, pWal->readSafeMxPage));
+		DBG((g_log,"Iter pos=%u, mx=%u, safemx=%u\n",iter->pgnoPos, iter->mxPage, mxPage));
 		if (iter->pgnoPos == iter->mxPage)
 			*done = iter->mxPage;
 		put8byte(hdr,                           iter->evterm);
@@ -1182,8 +1182,8 @@ SQLITE_API int sqlite3_wal_data(
 
 static u64 get8byte(u8* buf)
 {
-  return ((u64)buf[0] << 56) + ((u64)buf[1] << 48) + ((u64)buf[2] << 40) + ((u64)buf[3] << 32) +
-	   ((u64)buf[4] << 24) + ((u64)buf[5] << 16)  + ((u64)buf[6] << 8) + buf[7];
+	return ((u64)buf[0] << 56) + ((u64)buf[1] << 48) + ((u64)buf[2] << 40) + ((u64)buf[3] << 32) +
+		((u64)buf[4] << 24) + ((u64)buf[5] << 16)  + ((u64)buf[6] << 8) + buf[7];
 }
 static void put8byte(u8* buf, u64 num)
 {
