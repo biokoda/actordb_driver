@@ -431,9 +431,9 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 		thr = pWal->thread;
 
 	enif_mutex_lock(pWal->mtx);
-	readSafeEvnum = pWal->readSafeEvnum;
-	readSafeTerm = pWal->readSafeTerm;
-	mxPage = pWal->readSafeMxPage;
+	readSafeEvnum = pWal->lastCompleteEvnum;
+	readSafeTerm = pWal->lastCompleteTerm;
+	mxPage = pWal->mxPage;
 	enif_mutex_unlock(pWal->mtx);
 
 	if (!iter->started)
@@ -591,10 +591,11 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 			}
 
 			iter->pgnoPos = pgno;
-			if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop) == MDB_SUCCESS)
+			if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 				*done = 0;
 			else
 				*done = iter->pgnoPos;
+			DBG((g_log, "logcursor get next %d, done=%u\n",rc,*done));
 			put8byte(hdr,                           iter->evterm);
 			put8byte(hdr+sizeof(u64),               iter->evnum);
 			put4byte(hdr+sizeof(u64)*2,             iter->pgnoPos);
@@ -1068,9 +1069,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		if (isCommit)
 		{
 			DBG((g_log,"Commit fct=%llu, fcev=%llu, lct=%llu, lcev=%llu, int=%llu, inev=%llu\n",
-			pWal->firstCompleteTerm, pWal->firstCompleteEvnum, pWal->lastCompleteTerm,
-			pWal->lastCompleteEvnum, pWal->inProgressTerm,pWal->inProgressEvnum));
+				pWal->firstCompleteTerm, pWal->firstCompleteEvnum, pWal->lastCompleteTerm,
+				pWal->lastCompleteEvnum, pWal->inProgressTerm,pWal->inProgressEvnum));
 
+			enif_mutex_lock(pWal->mtx);
 			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? pWal->inProgressTerm : pWal->lastCompleteTerm;
 			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? pWal->inProgressEvnum : pWal->lastCompleteEvnum;
 			if (pWal->firstCompleteTerm == 0)
@@ -1082,6 +1084,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			pWal->mxPage =  pWal->mxPage > nTruncate ? pWal->mxPage : nTruncate;
 			pWal->changed = 0;
 			thr->forceCommit = 1;
+			enif_mutex_unlock(pWal->mtx);
 			DBG((g_log,"cur mxpage=%u\n",pWal->mxPage));
 		}
 		else
