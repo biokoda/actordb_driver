@@ -1700,7 +1700,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					rowcount++;
 				}
 			}
-
+			// DBG((g_log,"exec rc=%d, rowcount=%d, column_count=%d", rc, rowcount, column_count));
 			if (rc > 0 && rc < 100)
 			{
 				errat = "step";
@@ -1714,7 +1714,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				ERL_NIF_TERM res1 = enif_make_list2(cmd->env,cols,rowst);
 				results = enif_make_list_cell(cmd->env, res1,results);
 			}
-			else if (skip == 0 && statementlen > 6)
+			else if (skip == 0)
 			{
 				ERL_NIF_TERM nchanges = enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db));
 				ERL_NIF_TERM lirowid = enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db));
