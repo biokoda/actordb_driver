@@ -60,7 +60,7 @@ dbcopy() ->
 	ok = actordb_driver:replication_done(Db),
 	{ok,Select} = ?READ("select * from tab;",Db),
 
-	{error,_} = actordb_driver:exec_script("SAVEPOINT 'adb';INSERT INTO tab VALUES (3,'ccc',4,5);",Db,infinity,1,EN+3,<<>>),
+	{ok,_} = actordb_driver:exec_script("SAVEPOINT 'adb'; UPDATE tab SET txt='ccc123' where id=3;",Db,infinity,1,EN+3,<<>>),
 	{ok,_} = actordb_driver:exec_script("ROLLBACK;",Db),
 	{ok,Select} = ?READ("select * from tab;",Db),
 	% ?debugFmt("Select ~p",[Select]),

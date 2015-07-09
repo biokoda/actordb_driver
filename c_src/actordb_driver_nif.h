@@ -67,7 +67,9 @@ struct Wal {
 	db_thread *rthread;
 	// for access to readSafeXXX values. They are set on write/scheduler thread and read
 	// on read thread.
+	#ifndef _TESTAPP_
 	ErlNifMutex *mtx;
+	#endif
 	pthread_t rthreadId;
 	u64 index;
 	u64 firstCompleteTerm;

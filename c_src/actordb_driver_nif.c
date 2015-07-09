@@ -1420,11 +1420,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	#ifdef _TESTDBG_
 		if (bin.size > 1024*10)
 		{
-			DBG((g_log,"Executing %.*s...\n", 1024*10,bin.data));
+			DBG((g_log,"Executing actor=%llu %.*s...\n",cmd->conn->wal.index, 1024*10,bin.data));
 		}
 		else
 		{
-			DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
+			DBG((g_log,"Executing actor=%llu %.*s\n",cmd->conn->wal.index,(int)bin.size,bin.data));
 		}
 	#endif
 		end = (char*)bin.data + bin.size;

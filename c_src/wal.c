@@ -217,10 +217,14 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
 	{
 		u64 readSafeEvnum, readSafeTerm;
+		#ifndef _TESTAPP_
 		enif_mutex_lock(pWal->mtx);
+		#endif
 		readSafeEvnum = pWal->rthread->readSafeEvnum;
 		readSafeTerm = pWal->rthread->readSafeTerm;
+		#ifndef _TESTAPP_
 		enif_mutex_unlock(pWal->mtx);
+		#endif
 
 		return findframe(pWal->rthread, pWal, pgno, piRead, readSafeTerm, readSafeEvnum, NULL, NULL);
 	}
@@ -430,11 +434,15 @@ static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *
 	else
 		thr = pWal->thread;
 
+	#ifndef _TESTAPP_
 	enif_mutex_lock(pWal->mtx);
+	#endif
 	readSafeEvnum = pWal->lastCompleteEvnum;
 	readSafeTerm = pWal->lastCompleteTerm;
 	mxPage = pWal->mxPage;
+	#ifndef _TESTAPP_
 	enif_mutex_unlock(pWal->mtx);
+	#endif
 
 	if (!iter->started)
 	{
@@ -1072,7 +1080,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 				pWal->firstCompleteTerm, pWal->firstCompleteEvnum, pWal->lastCompleteTerm,
 				pWal->lastCompleteEvnum, pWal->inProgressTerm,pWal->inProgressEvnum));
 
+			#ifndef _TESTAPP_
 			enif_mutex_lock(pWal->mtx);
+			#endif
 			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? pWal->inProgressTerm : pWal->lastCompleteTerm;
 			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? pWal->inProgressEvnum : pWal->lastCompleteEvnum;
 			if (pWal->firstCompleteTerm == 0)
@@ -1084,7 +1094,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			pWal->mxPage =  pWal->mxPage > nTruncate ? pWal->mxPage : nTruncate;
 			pWal->changed = 0;
 			thr->forceCommit = 1;
+			#ifndef _TESTAPP_
 			enif_mutex_unlock(pWal->mtx);
+			#endif
 			DBG((g_log,"cur mxpage=%u\n",pWal->mxPage));
 		}
 		else
