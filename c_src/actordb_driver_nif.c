@@ -1424,7 +1424,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		}
 		else
 		{
-			DBG((g_log,"Executing %lld %.*s\n",(i64)&cmd->conn->wal, (int)bin.size,bin.data));
+			DBG((g_log,"Executing %.*s\n",(int)bin.size,bin.data));
 		}
 	#endif
 		end = (char*)bin.data + bin.size;
@@ -1575,6 +1575,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &statement, &readpoint);
 					if(rc != SQLITE_OK)
 					{
+						DBG((g_log,"Prepare statement failed\n"));
 						errat = "prepare";
 						sqlite3_finalize(statement);
 						break;
@@ -1700,7 +1701,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					rowcount++;
 				}
 			}
-			// DBG((g_log,"exec rc=%d, rowcount=%d, column_count=%d", rc, rowcount, column_count));
+			DBG((g_log,"exec rc=%d, rowcount=%d, column_count=%d\n", rc, rowcount, column_count));
 			if (rc > 0 && rc < 100)
 			{
 				errat = "step";
@@ -1745,8 +1746,6 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			free(tupleResult);
 	}
 
-	// Pages have been written to wal, but we are returning error.
-	// Call a rollback.
 	if (rc > 0 && rc < 100 && pagesPre != thread->pagesChanged)
 	{
 		sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);

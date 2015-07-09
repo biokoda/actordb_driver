@@ -9,12 +9,12 @@ run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
 	[fun lz4/0,
-	 fun modes/0,
-	 fun dbcopy/0,
-	 fun checkpoint/0,
-	 fun bigtrans/0,
-	 fun bigtrans_check/0
-		 ].
+	fun modes/0,
+	fun dbcopy/0,
+	fun checkpoint/0,
+	fun bigtrans/0,
+	fun bigtrans_check/0
+	].
 
 
 lz4() ->
@@ -58,6 +58,10 @@ dbcopy() ->
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,EN+1,<<>>),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,EN+2,<<>>),
 	ok = actordb_driver:replication_done(Db),
+	{ok,Select} = ?READ("select * from tab;",Db),
+
+	{error,_} = actordb_driver:exec_script("SAVEPOINT 'adb';INSERT INTO tab VALUES (3,'ccc',4,5);",Db,infinity,1,EN+3,<<>>),
+	{ok,_} = actordb_driver:exec_script("ROLLBACK;",Db),
 	{ok,Select} = ?READ("select * from tab;",Db),
 	% ?debugFmt("Select ~p",[Select]),
 	{ok,Copy} = actordb_driver:open("copy"),
