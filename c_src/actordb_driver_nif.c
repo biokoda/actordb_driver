@@ -373,21 +373,25 @@ static const char *get_sqlite3_error_msg(int error_code, sqlite3 *db)
 	return sqlite3_errmsg(db);
 }
 
-static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code, sqlite3 *db)
+static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code, int pos, sqlite3 *db)
 {
 	const char *error_code_msg = get_sqlite3_return_code_msg(error_code);
 	const char *msg = get_sqlite3_error_msg(error_code, db);
 
 	if (calledfrom == NULL)
 		return enif_make_tuple2(env, atom_error,
-			enif_make_tuple3(env, enif_make_string(env,"",ERL_NIF_LATIN1),
-							  make_atom(env, error_code_msg),
-							  enif_make_string(env, msg, ERL_NIF_LATIN1)));
+			enif_make_tuple4(env,
+				enif_make_int(env,pos),
+				enif_make_string(env,"",ERL_NIF_LATIN1),
+				make_atom(env, error_code_msg),
+				enif_make_string(env, msg, ERL_NIF_LATIN1)));
 	else
 		return enif_make_tuple2(env, atom_error,
-			enif_make_tuple3(env, enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
-							  make_atom(env, error_code_msg),
-							  enif_make_string(env, msg, ERL_NIF_LATIN1)));
+			enif_make_tuple4(env,
+				enif_make_int(env,pos),
+				enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
+				make_atom(env, error_code_msg),
+				enif_make_string(env, msg, ERL_NIF_LATIN1)));
 }
 
 // static void
@@ -537,7 +541,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	rc = sqlite3_open(filename,&(db));
 	if(rc != SQLITE_OK)
 	{
-		result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
+		result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc,0, cmd->conn->db);
 		sqlite3_close(db);
 		cmd->conn = NULL;
 		return result;
@@ -1756,10 +1760,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	// enif_release_resource(cmd->conn);
 	// Errors are from 1 to 99.
 	if (rc > 0 && rc < 100 && rc != SQLITE_INTERRUPT)
-		return make_sqlite3_error_tuple(cmd->env, errat, rc, cmd->conn->db);
+		return make_sqlite3_error_tuple(cmd->env, errat, rc, tuplePos, cmd->conn->db);
 	else if (rc == SQLITE_INTERRUPT)
 	{
-		return make_error_tuple(cmd->env, "query_aborted");
+		// return make_error_tuple(cmd->env, "query_aborted");
+		return make_sqlite3_error_tuple(cmd->env, "query_aborted", rc, tuplePos, cmd->conn->db);
 	}
 	else
 	{
