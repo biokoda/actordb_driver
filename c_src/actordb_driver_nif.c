@@ -1736,14 +1736,17 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			statement = NULL;
 			column_names = 0;
 		}
+		if (rc > 0 && rc < 100)
+			break;
 		if (tupleResult)
 		{
 			tupleResult[tuplePos] = results;
 		}
 		tuplePos++;
+		DBG((g_log,"Tuple pos=%d, size=%d\n",tuplePos, tupleSize));
 	} while (tuplePos < tupleSize);
 
-	if (tupleResult)
+	if (tupleResult && !(rc > 0 && rc < 100))
 	{
 		results = enif_make_tuple_from_array(cmd->env, tupleResult, tupleSize);
 		if (tupleSize > 200)
