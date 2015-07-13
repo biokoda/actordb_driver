@@ -1384,9 +1384,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			return atom_false;
 
 		if (tupleSize > 200)
-			tupleResult = malloc(sizeof(ERL_NIF_TERM));
+			tupleResult = malloc(sizeof(ERL_NIF_TERM)*tupleSize);
 		else
-			tupleResult = alloca(sizeof(ERL_NIF_TERM));
+			tupleResult = alloca(sizeof(ERL_NIF_TERM)*tupleSize);
 	}
 
 	do{
