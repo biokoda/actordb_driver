@@ -18,9 +18,9 @@
 **   that have changed.
 
 ** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
-									LastCompleteTerm:64,LastCompleteEvnum:64,
-									InprogressTerm:64,InProgressEvnum:64, DbSize:32,
-									CurrentTerm:64,VFSize:8,VotedFor:VFSize/binary>>}
+			LastCompleteTerm:64,LastCompleteEvnum:64,
+			InprogressTerm:64,InProgressEvnum:64, DbSize:32,
+			CurrentTerm:64,VFSize:8,VotedFor:VFSize/binary>>}
 **   V (version) = 1
 **   FirstComplete(term/evnum) - First entry for actor in Log DB.
 **   LastComplete(term/evnum) - Last entry in log that is commited.
@@ -70,10 +70,13 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	if (zWalName[0] == '/')
 		offset = 1;
 
-	DBG((g_log,"Wal name=%s, at=%lld\n",zWalName,(i64)pWal));
+	DBG((g_log,"Wal name=%s\n",zWalName));
 
-	if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+	if (pthread_equal(pthread_self(), pWal->rthreadId))
+		txn = thr->txn;
+	else if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return SQLITE_ERROR;
+		
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = strlen(zWalName+offset)-4;
@@ -140,7 +143,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		{
 			if (*(u8*)data.mv_data != 1)
 			{
-				mdb_txn_abort(txn);
+				if (txn != thr->txn)
+					mdb_txn_abort(txn);
 				return SQLITE_ERROR;
 			}
 			memcpy(&pWal->firstCompleteTerm, data.mv_data+1, sizeof(u64));
@@ -167,15 +171,17 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	}
 	else
 	{
-		mdb_txn_abort(txn);
+		if (txn != thr->txn)
+			mdb_txn_abort(txn);
 		return SQLITE_ERROR;
 	}
 
-	mdb_txn_abort(txn);
+	if (txn != thr->txn)
+		mdb_txn_abort(txn);
 
 	pWal->changed = 1;
-    if (ppWal != NULL)
-	   (*ppWal) = pWal;
+	if (ppWal != NULL)
+		(*ppWal) = pWal;
 	return SQLITE_OK;
 }
 
@@ -423,7 +429,7 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 }
 
 // return number of bytes written
-static int iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
+static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
 	db_thread *thr;
 	u32 mxPage;

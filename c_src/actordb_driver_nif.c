@@ -916,7 +916,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 
 	// 4 pages of buffer size
 	// This might contain many more actual db pages because data is compressed
-	nfilled = iterate(&cmd->conn->wal, iter, buf, PAGE_BUFF_SIZE, hdrbuf, &done);
+	nfilled = wal_iterate(&cmd->conn->wal, iter, buf, PAGE_BUFF_SIZE, hdrbuf, &done);
 	DBG((g_log,"nfilled %d\n",nfilled));
 
 	if (nfilled > 0)
@@ -2021,9 +2021,9 @@ static ERL_NIF_TERM make_answer(db_command *cmd, ERL_NIF_TERM answer)
 }
 
 
-static MDB_txn* open_wtxn(db_thread *data)
+static MDB_txn* open_txn(db_thread *data, int flags)
 {
-	if (mdb_txn_begin(data->env, NULL, 0, &data->txn) != MDB_SUCCESS)
+	if (mdb_txn_begin(data->env, NULL, flags, &data->txn) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;
@@ -2038,28 +2038,9 @@ static MDB_txn* open_wtxn(db_thread *data)
 	if (mdb_cursor_open(data->txn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
 		return NULL;
 
-  return data->txn;
+	return data->txn;
 }
 
-static MDB_txn* open_rtxn(db_thread *data)
-{
-	if (mdb_txn_begin(data->env, NULL, MDB_RDONLY, &data->txn) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_set_compare(data->txn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_set_dupsort(data->txn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_cursor_open(data->txn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_cursor_open(data->txn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_cursor_open(data->txn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
-		return NULL;
-
-  return data->txn;
-}
 
 static void thread_ex(db_thread *data, qitem *item)
 {
@@ -2141,7 +2122,7 @@ static void *thread_func(void *arg)
 
 		if (data->env && data->txn == NULL)
 		{
-			if (open_wtxn(data) == NULL)
+			if (open_txn(data,0) == NULL)
 				break;
 		}
 
@@ -2156,13 +2137,13 @@ static void *thread_func(void *arg)
 			(queue_size(data->tasks) == 0 || chkCounter > 100 || syncListSize > 10 || item->cmd.type == cmd_sync))
 		{
 			if (data->txn == NULL)
-				open_wtxn(data);
+				open_txn(data,0);
 
 			while (syncList != NULL)
 			{
 				thread_ex(data, syncList);
 				if (data->txn != NULL)
-					open_wtxn(data);
+					open_txn(data,0);
 
 				queue_recycle(data->tasks,item);
 				syncList = syncList->next;
@@ -2227,7 +2208,7 @@ static void *read_thread_func(void *arg)
 			if (!data->txn)
 			{
 				DBG((g_log,"Open read transaction\n"));
-				if (open_rtxn(data) == NULL)
+				if (open_txn(data,MDB_RDONLY) == NULL)
 				{
 					ERL_NIF_TERM errterm;
 					DBG((g_log,"Can not open read transaction\n"));
@@ -2249,7 +2230,7 @@ static void *read_thread_func(void *arg)
 					mdb_cursor_close(data->cursorPages);
 					mdb_cursor_close(data->cursorInfo);
 					mdb_txn_abort(data->txn);
-					if (open_rtxn(data) == NULL)
+					if (open_txn(data,MDB_RDONLY) == NULL)
 					{
 						ERL_NIF_TERM errterm;
 						DBG((g_log,"Unable to open read transaction\n"));
