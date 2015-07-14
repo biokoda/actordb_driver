@@ -464,15 +464,15 @@ int main(int argc, const char* argv[])
 	}
 	else
 	{
-		printf("Diagnostic print DB structure. This can be a lot of data!\n");
-		printf("%s print [all|info|pages|log|actors] /path/to/lmdb_file\n",argv[0]);
-		printf("\n");
 		printf("Backup:\n");
 		printf("%s backup /path/to/source/lmdb /path/to/backup/lmdb\n",argv[0]);
 		printf("To backup to stdout, use -\n");
 		printf("\n");
 		printf("Extract an individual actor to an sqlite file\n");
 		printf("%s extract /path/to/lmdb_file actorname actortype out_file\n",argv[0]);
+		printf("\n");
+		printf("Diagnostic print DB structure. This can be a lot of data!\n");
+		printf("%s print [all|info|pages|log|actors] /path/to/lmdb_file\n",argv[0]);
 		printf("\n");
 		return 1;
 	}
