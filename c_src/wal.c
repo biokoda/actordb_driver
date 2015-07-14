@@ -4,7 +4,6 @@
 ** LMDB schema:
 ** - Actors DB: {<<ActorName/binary>>, <<ActorIndex:64>>}
 **   {"?",MaxInteger} -> when adding actors, increment this value
-**                    -> Indexes start at 100
 
 ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,FragIndex:8,CompressedPage/binary>>}
 **   Pages db is a dupsort database. It stores lz4 compressed sqlite pages. There can be multiple
@@ -1210,4 +1209,74 @@ static void put8byte(u8* buf, u64 num)
 	buf[5] = num >> 16;
 	buf[6] = num >> 8;
 	buf[7] = num;
+}
+
+static int logdb_cmp(const MDB_val *a, const MDB_val *b)
+{
+	i64 aActor,aEvterm,aEvnum,bActor,bEvterm,bEvnum;
+	int diff;
+
+	memcpy(&aActor,a->mv_data,sizeof(i64));
+	memcpy(&bActor,b->mv_data,sizeof(i64));
+	diff = aActor - bActor;
+	if (diff == 0)
+	{
+		memcpy(&aEvterm, a->mv_data+sizeof(i64), sizeof(i64));
+		memcpy(&bEvterm, b->mv_data+sizeof(i64), sizeof(i64));
+		diff = aEvterm - bEvterm;
+		if (diff == 0)
+		{
+			memcpy(&aEvnum, a->mv_data+sizeof(i64)*2, sizeof(i64));
+			memcpy(&bEvnum, b->mv_data+sizeof(i64)*2, sizeof(i64));
+			return aEvnum - bEvnum;
+		}
+		return diff;
+	}
+	return diff;
+}
+
+static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
+{
+	i64 aActor;
+	i64 bActor;
+	u32 aPgno;
+	u32 bPgno;
+	int diff;
+
+	memcpy(&aActor,a->mv_data,sizeof(i64));
+	memcpy(&bActor,b->mv_data,sizeof(i64));
+	diff = aActor - bActor;
+	if (diff == 0)
+	{
+		memcpy(&aPgno,a->mv_data + sizeof(i64),sizeof(u32));
+		memcpy(&bPgno,b->mv_data + sizeof(i64),sizeof(u32));
+		return aPgno - bPgno;
+	}
+	return diff;
+}
+
+static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
+{
+	i64 aEvterm,aEvnum;
+	i64 bEvterm,bEvnum;
+	u8 aCounter, bCounter;
+	int diff;
+
+	memcpy(&aEvterm, a->mv_data, sizeof(i64));
+	memcpy(&bEvterm, b->mv_data, sizeof(i64));
+	diff = aEvterm - bEvterm;
+	if (diff == 0)
+	{
+		memcpy(&aEvnum, a->mv_data+sizeof(i64), sizeof(i64));
+		memcpy(&bEvnum, b->mv_data+sizeof(i64), sizeof(i64));
+		diff = aEvnum - bEvnum;
+		if (diff == 0)
+		{
+			aCounter = ((u8*)a->mv_data)[sizeof(i64)*2];
+			bCounter = ((u8*)b->mv_data)[sizeof(i64)*2];
+			return aCounter - bCounter;
+		}
+		return diff;
+	}
+	return diff;
 }

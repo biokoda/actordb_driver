@@ -2020,75 +2020,6 @@ static ERL_NIF_TERM make_answer(db_command *cmd, ERL_NIF_TERM answer)
 	return enif_make_tuple2(cmd->env, cmd->ref, answer);
 }
 
-static int logdb_cmp(const MDB_val *a, const MDB_val *b)
-{
-	i64 aActor,aEvterm,aEvnum,bActor,bEvterm,bEvnum;
-	int diff;
-
-	memcpy(&aActor,a->mv_data,sizeof(i64));
-	memcpy(&bActor,b->mv_data,sizeof(i64));
-	diff = aActor - bActor;
-	if (diff == 0)
-	{
-		memcpy(&aEvterm, a->mv_data+sizeof(i64), sizeof(i64));
-		memcpy(&bEvterm, b->mv_data+sizeof(i64), sizeof(i64));
-		diff = aEvterm - bEvterm;
-		if (diff == 0)
-		{
-			memcpy(&aEvnum, a->mv_data+sizeof(i64)*2, sizeof(i64));
-			memcpy(&bEvnum, b->mv_data+sizeof(i64)*2, sizeof(i64));
-			return aEvnum - bEvnum;
-		}
-		return diff;
-	}
-	return diff;
-}
-
-static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
-{
-	i64 aActor;
-	i64 bActor;
-	u32 aPgno;
-	u32 bPgno;
-	int diff;
-
-	memcpy(&aActor,a->mv_data,sizeof(i64));
-	memcpy(&bActor,b->mv_data,sizeof(i64));
-	diff = aActor - bActor;
-	if (diff == 0)
-	{
-		memcpy(&aPgno,a->mv_data + sizeof(i64),sizeof(u32));
-		memcpy(&bPgno,b->mv_data + sizeof(i64),sizeof(u32));
-		return aPgno - bPgno;
-	}
-	return diff;
-}
-
-static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
-{
-	i64 aEvterm,aEvnum;
-	i64 bEvterm,bEvnum;
-	u8 aCounter, bCounter;
-	int diff;
-
-	memcpy(&aEvterm, a->mv_data, sizeof(i64));
-	memcpy(&bEvterm, b->mv_data, sizeof(i64));
-	diff = aEvterm - bEvterm;
-	if (diff == 0)
-	{
-		memcpy(&aEvnum, a->mv_data+sizeof(i64), sizeof(i64));
-		memcpy(&bEvnum, b->mv_data+sizeof(i64), sizeof(i64));
-		diff = aEvnum - bEvnum;
-		if (diff == 0)
-		{
-			aCounter = ((u8*)a->mv_data)[sizeof(i64)*2];
-			bCounter = ((u8*)b->mv_data)[sizeof(i64)*2];
-			return aCounter - bCounter;
-		}
-		return diff;
-	}
-	return diff;
-}
 
 static MDB_txn* open_wtxn(db_thread *data)
 {
@@ -2187,6 +2118,7 @@ static void *thread_func(void *arg)
 			{
 				mdb_txn_commit(data->txn);
 				mdb_env_sync(data->env,1);
+				mdb_env_close(data->env);
 			}
 			break;
 		}
@@ -3463,7 +3395,8 @@ static void on_unload(ErlNifEnv* env, void* pd)
 
 	for (i = -1; i < nthreads; i++)
 	{
-		for (k = -1; k < priv->nReadThreads; k++)
+		// first close read threads, then close write thread, which will close lmdb env
+		for (k = priv->nReadThreads-1; k >= -1; k--)
 		{
 			qitem *item = command_create(i,k,priv);
 			item->cmd.type = cmd_stop;
