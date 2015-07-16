@@ -114,6 +114,8 @@ struct db_thread
 	MDB_cursor *cursorLog;
 	MDB_cursor *cursorPages;
 	MDB_cursor *cursorInfo;
+	sqlite3 *db;
+	Wal dummyWal;
 	// MDB_cursor *cursorTest;
 	// so currently executing connection data is accessible from wal callback
 	db_connection *curConn;
@@ -123,6 +125,7 @@ struct db_thread
 	// We can't allow readSafeTerm/readSafeEvnum to change in the middle of a read.
 	u64 readSafeTerm;
 	u64 readSafeEvnum;
+	sqlite3_stmt **staticPrepared;
 
 	// Raft page replication
 	// MAX_CONNECTIONS (8) servers to replicate write log to
@@ -163,7 +166,6 @@ struct db_connection
 {
 	struct Wal wal;
 	sqlite3 *db;
-	sqlite3_stmt **staticPrepared;
 	sqlite3_stmt **prepared;
 	int *prepVersions;
 	u64 syncNum;
@@ -189,6 +191,7 @@ struct db_connection
 	u8 thread;
 	// Read thread index
 	u8 rthread;
+	u8 mem;
 };
 
 struct iterate_resource

@@ -58,19 +58,29 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	MDB_val key, data;
 	int rc;
 	db_thread *thr = (db_thread*)walData;
-	Wal *pWal = &thr->curConn->wal;
+	Wal *pWal = NULL; 
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn;
-	int offset = 0;
+	int offset = 0, cutoff = 4;
 
-	pWal->thread = thr;
 	actorsdb = thr->actorsdb;
 	infodb = thr->infodb;
 
 	if (zWalName[0] == '/')
 		offset = 1;
-
-	DBG((g_log,"Wal name=%s\n",zWalName));
+	if (zWalName[offset] == '?' && zWalName[offset+1] == '?')
+	{
+		*ppWal = &thr->dummyWal;
+		return SQLITE_OK;
+	}
+	else
+	{
+		pWal = &thr->curConn->wal;
+		pWal->thread = thr;
+	}
+	
+	if (pVfs == NULL)
+		cutoff = 0;
 
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
 		txn = thr->txn;
@@ -79,7 +89,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		
 
 	// shorten size to ignore "-wal" at the end
-	key.mv_size = strlen(zWalName+offset)-4;
+	key.mv_size = strlen(zWalName+offset)-cutoff;
 	key.mv_data = (void*)zWalName+offset;//thr->curConn->dbpath;
 	rc = mdb_get(txn,actorsdb,&key,&data);
 
@@ -384,7 +394,7 @@ Pgno sqlite3WalDbsize(Wal *pWal)
 		DBG((g_log,"Dbsize %u\n",pWal->mxPage));
 		return pWal->mxPage;
 	}
-	DBG((g_log,"Dbsize 0\n"));
+	DBG((g_log,"Dbsize nowal 0\n"));
 	return 0;
 }
 
@@ -1133,7 +1143,6 @@ int sqlite3WalCheckpoint(
   int *pnCkpt                     /* OUT: Number of backfilled frames in WAL */
 )
 {
-	DBG((g_log,"Checkpoint\n"));
 	return SQLITE_OK;
 }
 
@@ -1163,20 +1172,13 @@ int sqlite3WalExclusiveMode(Wal *pWal, int op)
 */
 int sqlite3WalHeapMemory(Wal *pWal)
 {
-	DBG((g_log,"heap\n"));
 	return pWal != NULL;
 }
 
 
-
-
-
-// New function. It adds thread pointer to wal structure.
-SQLITE_API int sqlite3_wal_data(
-  sqlite3 *db,
-  void *pArg
-  ){
-
+// It adds thread pointer to wal structure.
+SQLITE_API int sqlite3_set_wal(sqlite3 *db,Wal *pWal)
+{
 	int rt = SQLITE_NOTFOUND;
 	int i;
 	for(i=0; i<db->nDb; i++)
@@ -1187,11 +1189,38 @@ SQLITE_API int sqlite3_wal_data(
 			Pager *pPager = sqlite3BtreePager(pBt);
 			if (pPager->pWal)
 			{
-				// pPager->pWal->thread = (db_thread*)pArg;
+				pPager->pWal = pWal;
+				pWal->changed = 1;
+			}
+			else
+			{
+				rt = SQLITE_OK;
+			}
+		}
+	}
+	return rt;
+}
+
+
+
+// It adds thread pointer to wal structure.
+SQLITE_API int sqlite3_wal_data(sqlite3 *db,void *pArg)
+{
+	int rt = SQLITE_NOTFOUND;
+	int i;
+	for(i=0; i<db->nDb; i++)
+	{
+		Btree *pBt = db->aDb[i].pBt;
+		if( pBt )
+		{
+			Pager *pPager = sqlite3BtreePager(pBt);
+			if (pPager->pWal)
+			{
 				rt = SQLITE_OK;
 			}
 			else
 			{
+
 				pPager->walData = pArg;
 				rt = SQLITE_OK;
 			}

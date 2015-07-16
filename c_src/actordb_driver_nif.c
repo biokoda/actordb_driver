@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -424,36 +424,36 @@ static qitem* command_create(int threadnum, int readThreadNum, priv_data *p)
 
 	return item;
 }
-void close_prepared(db_connection *conn)
-{
-	int i;
-	if (conn->prepared != NULL)
-	{
-		for (i = 0; i < MAX_PREP_SQLS; i++)
-		{
-			if (conn->prepared[i] != 0)
-			{
-				sqlite3_finalize(conn->prepared[i]);
-			}
+// void close_prepared(db_connection *conn)
+// {
+// 	int i;
+// 	if (conn->prepared != NULL)
+// 	{
+// 		for (i = 0; i < MAX_PREP_SQLS; i++)
+// 		{
+// 			if (conn->prepared[i] != 0)
+// 			{
+// 				sqlite3_finalize(conn->prepared[i]);
+// 			}
 
-			conn->prepared[i] = NULL;
-		}
-		free(conn->prepVersions);
-		conn->prepVersions = NULL;
-	}
-	free(conn->prepared);
-	conn->prepared = NULL;
-	if (conn->staticPrepared)
-	{
-		for (i = 0; i < MAX_STATIC_SQLS; i++)
-		{
-			sqlite3_finalize(conn->staticPrepared[i]);
-			conn->staticPrepared[i] = NULL;
-		}
-		free(conn->staticPrepared);
-	}
-	conn->staticPrepared = NULL;
-}
+// 			conn->prepared[i] = NULL;
+// 		}
+// 		free(conn->prepVersions);
+// 		conn->prepVersions = NULL;
+// 	}
+// 	free(conn->prepared);
+// 	conn->prepared = NULL;
+// 	if (conn->staticPrepared)
+// 	{
+// 		for (i = 0; i < MAX_STATIC_SQLS; i++)
+// 		{
+// 			sqlite3_finalize(conn->staticPrepared[i]);
+// 			conn->staticPrepared[i] = NULL;
+// 		}
+// 		free(conn->staticPrepared);
+// 	}
+// 	conn->staticPrepared = NULL;
+// }
 
 static void destruct_connection(ErlNifEnv *env, void *arg)
 {
@@ -467,11 +467,14 @@ static void destruct_connection(ErlNifEnv *env, void *arg)
 		conn->packetPrefix = NULL;
 		conn->packetPrefixSize = 0;
 	}
-	close_prepared(conn);
-	rc = sqlite3_close(conn->db);
-	if(rc != SQLITE_OK)
+	// close_prepared(conn);
+	if (conn->mem)
 	{
-		DBG((g_log,"ERROR! closing %d\n",rc));
+		rc = sqlite3_close(conn->db);
+		if(rc != SQLITE_OK)
+		{
+			DBG((g_log,"ERROR! closing %d\n",rc));
+		}
 	}
 	enif_mutex_destroy(conn->wal.mtx);
 }
@@ -538,14 +541,19 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	if(size <= 0 || size >= MAX_ACTOR_NAME)
 		return make_error_tuple(cmd->env, "invalid_filename");
 
-	rc = sqlite3_open(filename,&(db));
-	if(rc != SQLITE_OK)
+	if (filename[0] == ':')
 	{
-		result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc,0, cmd->conn->db);
-		sqlite3_close(db);
-		cmd->conn = NULL;
-		return result;
+		rc = sqlite3_open(filename,&(db));
+		if(rc != SQLITE_OK)
+		{
+			result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc,0, cmd->conn->db);
+			sqlite3_close(db);
+			cmd->conn = NULL;
+			return result;
+		}
 	}
+	else
+		db = NULL;
 	conn = enif_alloc_resource(thread->pd->db_connection_type, sizeof(db_connection));
 	if(!conn)
 		return make_error_tuple(cmd->env, "no_memory");
@@ -561,10 +569,12 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 
 	if (filename[0] != ':')
 	{
-		conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
+		sqlite3WalOpen(NULL, NULL, filename,0, 0, NULL, thread);
+		//conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
 		// PRAGMA locking_mode=EXCLUSIVE
-		sqlite3_exec(cmd->conn->db,"PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
+		//sqlite3_exec(cmd->conn->db,"PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
+		
 		// else if (strcmp(mode,"off") == 0)
 		// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=off;",NULL,NULL,NULL);
 		// else if (strcmp(mode,"delete") == 0)
@@ -574,6 +584,12 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 		// else if (strcmp(mode,"persist") == 0)
 		// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=persist;",NULL,NULL,NULL);
 	}
+	else
+	{
+		conn->mem = 1;
+		conn->wal_configured = 1;
+	}
+		
 
 	DBG((g_log,"opened new thread=%d name=%s mode=%s.\n",thread->index,filename,mode));
 	result = enif_make_resource(cmd->env, conn);
@@ -1134,7 +1150,7 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread)
 		memset(&con, 0, sizeof(db_connection));
 		memset(pth, 0, MAX_PATHNAME);
 		memcpy(pth, name.data, name.size);
-		strcat(pth,"-wal");
+		// strcat(pth,"-wal");
 		thread->curConn = &con;
 		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL, thread);
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
@@ -1499,15 +1515,15 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					if (readpoint[skip+1] == 's')
 						skip = 1;
 
-					if (cmd->conn->staticPrepared == NULL)
+					if (thread->staticPrepared == NULL)
 					{
-						cmd->conn->staticPrepared = malloc(sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
-						memset(cmd->conn->staticPrepared,0,sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
+						thread->staticPrepared = malloc(sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
+						memset(thread->staticPrepared,0,sizeof(sqlite3_stmt*)*MAX_STATIC_SQLS);
 					}
 
-					if (cmd->conn->staticPrepared[i] == NULL)
+					if (thread->staticPrepared[i] == NULL)
 					{
-						rc = sqlite3_prepare_v2(cmd->conn->db, (char *)thread->staticSqls[i], -1, &(cmd->conn->staticPrepared[i]), NULL);
+						rc = sqlite3_prepare_v2(cmd->conn->db, (char *)thread->staticSqls[i], -1, &(thread->staticPrepared[i]), NULL);
 						if(rc != SQLITE_OK)
 						{
 							errat = "prepare";
@@ -1515,7 +1531,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 						}
 					}
 					readpoint += 5;
-					statement = cmd->conn->staticPrepared[i];
+					statement = thread->staticPrepared[i];
 				}
 				// user set prepared statements
 				else if (headTop == 0  && statementlen >= 6 && readpoint[skip] == '#' &&
@@ -1902,6 +1918,13 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 {
 	thread->curConn = cmd->conn;
 
+	if (cmd->conn && !cmd->conn->mem)
+	{
+		DBG((g_log,"Setting wal\n"));
+		cmd->conn->db = thread->db;
+		sqlite3_set_wal(thread->db,&cmd->conn->wal);
+	}
+
 	switch(cmd->type)
 	{
 	case cmd_open:
@@ -1916,6 +1939,11 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 			cmd->arg = cmd->arg2;
 			cmd->arg1 = 0;
 			cmd->arg2 = 0;
+			if (!cmd->conn->mem)
+			{
+				cmd->conn->db = thread->db;
+				sqlite3_set_wal(thread->db,&cmd->conn->wal);
+			}
 			return enif_make_tuple3(cmd->env,atom_ok,connres,do_exec_script(cmd,thread));
 		}
 	}
@@ -2055,6 +2083,8 @@ static void thread_ex(db_thread *data, qitem *item)
 	{
 		ERL_NIF_TERM answer = make_answer(&item->cmd, evaluate_command(&item->cmd,data));
 		DBG((g_log,"thread=%d command done 1. pagesChanged=%d\n",data->index,data->pagesChanged));
+		// if (item->cmd.conn->db && !item->cmd.conn->mem)
+		// 	item->cmd.conn->db = NULL;
 		// if (data->pagesChanged != pagesChanged)
 		if (data->forceCommit)
 		{
@@ -2086,6 +2116,15 @@ static void *thread_func(void *arg)
 	{
 		data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 		data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
+
+		if (sqlite3_open("??",&(data->db)) != SQLITE_OK)
+		{
+			DBG((g_log,"Cant open\n"));
+			return NULL;
+		}
+		data->dummyWal.thread = data;
+		sqlite3_wal_data(data->db,(void*)data);
+		sqlite3_exec(data->db,"PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
 	}
 
 	while(1)
@@ -2126,7 +2165,6 @@ static void *thread_func(void *arg)
 				break;
 		}
 
-		// printf("Queue size %d\r\n",queue_size(data->tasks));
 		thread_ex(data, item);
 
 		// Execute list of syncs if:
@@ -2186,6 +2224,10 @@ static void *read_thread_func(void *arg)
 
 	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 	data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
+
+	sqlite3_open("??",&(data->db));
+	sqlite3_wal_data(data->db,(void*)data);
+	sqlite3_exec(data->db,"PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
 
 	while (1)
 	{

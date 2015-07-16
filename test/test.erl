@@ -12,8 +12,8 @@ run_test_() ->
 	fun modes/0,
 	fun dbcopy/0,
 	fun checkpoint/0,
-	fun bigtrans/0,
-	fun bigtrans_check/0
+	fun bigtrans/0
+	% fun bigtrans_check/0
 	].
 
 
@@ -46,6 +46,7 @@ modes() ->
 dbcopy() ->
 	?INIT,
 	{ok,Db} = actordb_driver:open("original"),
+	?debugFmt("Cache ~p",[actordb_driver:exec_script("PRAGMA cache_size;",Db)]),
 	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
 	ok = actordb_driver:term_store(Db,10,<<"abcdef">>),
 	{{1,1},{1,1},{0,0},2,2,10,<<"abcdef">>} = actordb_driver:actor_info("original",0),
@@ -111,13 +112,13 @@ dbcopy() ->
 	{ok,[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
       {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_] = Rows}]]} = ?READ("select * from tab;",Db),
 	[{102,<<"aaa">>,2}|_] = lists:reverse(Rows).
-	% ?debugFmt("After rewind to evnum=2: ~p",[FirstInject]).
 
 checkpoint() ->
 	garbage_collect(),
 	?debugFmt("Checkpoint!",[]),
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,S} = actordb_driver:exec_script("select * from tab;",Db),
+	?debugFmt("~p",[S]),
 	ok = actordb_driver:checkpoint(Db,60),
 	{ok,S} = ?READ("select * from tab;",Db),
 	[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
@@ -183,7 +184,10 @@ bigtrans() ->
 	 {changes,111,1},{changes,10,1},{changes,7,1},{changes,9,1},{changes,1,1},{changes,4,1},{changes,3,1},
 	 {changes,9,1},{changes,1,1},{changes,0,1},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},
 	 {changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0},{changes,0,0}],
-	{ok,Res} = actordb_driver:exec_script(Sql,Param,Db),
+
+	X = actordb_driver:exec_script(Sql,Param,Db),
+	?debugFmt("~p",[X]),
+	% {ok,Res} = X,
 
 	SR = {ok,[[{columns,{<<"id">>,<<"val">>}},{rows,[{555,<<"secondstatement">>},
 	{444,<<"secondstat">>},{333,<<"fromparam3">>},{222,<<"fromparam2">>},{111,<<"fromparam1">>},
