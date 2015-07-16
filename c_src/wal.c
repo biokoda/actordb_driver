@@ -234,21 +234,26 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 		return findframe(pWal->rthread, pWal, pgno, piRead, readSafeTerm, readSafeEvnum, NULL, NULL);
 	}
 	else if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
-		return findframe(pWal->thread, pWal, pgno, piRead, pWal->inProgressTerm, pWal->inProgressEvnum, NULL, NULL);
+		return findframe(pWal->thread, pWal, pgno, piRead, pWal->inProgressTerm, 
+			pWal->inProgressEvnum, NULL, NULL);
 	else
-		return findframe(pWal->thread, pWal, pgno, piRead, pWal->lastCompleteTerm, pWal->lastCompleteEvnum, NULL, NULL);
+		return findframe(pWal->thread, pWal, pgno, piRead, pWal->lastCompleteTerm, 
+			pWal->lastCompleteEvnum, NULL, NULL);
 }
 
-static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, u64 limitEvnum, u64 *outTerm, u64 *outEvnum)
+static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, 
+	u64 limitEvnum, u64 *outTerm, u64 *outEvnum)
 {
 	MDB_val key, data;
 	int rc;
 	size_t ndupl = 0;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 
-	DBG((g_log,"FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu\n",pgno,pWal->index,limitTerm,limitEvnum));
+	DBG((g_log,"FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu\n",
+		pgno,pWal->index,limitTerm,limitEvnum));
 
-	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
+	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, 
+	// 			<<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
 	memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 	memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
 	key.mv_size = sizeof(pagesKeyBuf);
@@ -346,7 +351,8 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 				i64 term, evnum;
 				memcpy(&term,  thr->resFrames[0].mv_data,             sizeof(u64));
 				memcpy(&evnum, thr->resFrames[0].mv_data+sizeof(u64), sizeof(u64));
-				DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",term,evnum,(int)thr->resFrames[0].mv_size));
+				DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",
+					term,evnum,(int)thr->resFrames[0].mv_size));
 			}
 	#endif
 			return SQLITE_OK;
@@ -361,7 +367,9 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 		while (frags >= 0)
 		{
 			// DBG((g_log,"Read frame %d\n",pos));
-			memcpy(pagesBuf + pos, thr->resFrames[frags].mv_data+sizeof(u64)*2+1, thr->resFrames[frags].mv_size-(sizeof(u64)*2+1));
+			memcpy(pagesBuf + pos, 
+				thr->resFrames[frags].mv_data+sizeof(u64)*2+1, 
+				thr->resFrames[frags].mv_size-(sizeof(u64)*2+1));
 			pos += thr->resFrames[frags].mv_size-(sizeof(u64)*2+1);
 			frags--;
 		}
@@ -590,7 +598,8 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 
 			if (iRead == 0)
 			{
-				DBG((g_log,"ERROR: Did not find frame for pgno=%u, evterm=%llu, evnum=%llu",pgno, iter->evterm, iter->evnum));
+				DBG((g_log,"ERROR: Did not find frame for pgno=%u, evterm=%llu, evnum=%llu",
+					pgno, iter->evterm, iter->evnum));
 				*done = 1;
 				return 0;
 			}
@@ -929,8 +938,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		char fragment_index = 0;
 		int skipped = 0;
 
-		DBG((g_log,"Insert frame wal=%lld, actor=%lld, pgno=%u, term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
-		(i64)pWal,pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,isCommit,nTruncate,page_size));
+		DBG((g_log,"Insert frame wal=%lld, actor=%lld, pgno=%u, "
+			"term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d\n",
+		(i64)pWal,pWal->index,p->pgno,pWal->inProgressTerm,pWal->inProgressEvnum,
+		isCommit,nTruncate,page_size));
 
 		if (pCon->doReplicate)
 		{
@@ -1088,8 +1099,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			#ifndef _TESTAPP_
 			enif_mutex_lock(pWal->mtx);
 			#endif
-			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? pWal->inProgressTerm : pWal->lastCompleteTerm;
-			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? pWal->inProgressEvnum : pWal->lastCompleteEvnum;
+			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? 
+				pWal->inProgressTerm : pWal->lastCompleteTerm;
+			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? 
+				pWal->inProgressEvnum : pWal->lastCompleteEvnum;
 			if (pWal->firstCompleteTerm == 0)
 			{
 				pWal->firstCompleteTerm = pWal->inProgressTerm;
