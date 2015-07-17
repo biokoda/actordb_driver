@@ -531,7 +531,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	memset(filename,0,MAX_PATHNAME);
 
 	enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
-	if (strcmp(mode,"wal") != 0) //&& strcmp(mode, "blob") != 0)
+	if (strcmp(mode,"wal") != 0 )//&& strcmp(mode, "blob") != 0)
 		return atom_false;
 
 	size = enif_get_string(cmd->env, cmd->arg, filename, MAX_PATHNAME, ERL_NIF_LATIN1);
@@ -1361,6 +1361,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	const ERL_NIF_TERM *tupleRecs = NULL;
 	ERL_NIF_TERM *tupleResult = NULL;
 	int tupleSize = 0, tuplePos = 0, tupleRecsSize = 0;
+	int skip = 0;
 
 	if (!cmd->conn->wal_configured)
 		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
@@ -1416,7 +1417,6 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		ERL_NIF_TERM column_names = 0;
 		// insert records are a list of lists.
 		ERL_NIF_TERM listTop = 0, headTop = 0, headBot = 0;
-		int skip = 0;
 		int statementlen = 0;
 		ERL_NIF_TERM rows;
 		char dofinalize = 1;
@@ -1446,8 +1446,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		}
 		else
 		{
-			u32 pgno;
-			if (!enif_get_uint(cmd->env,headTop, &pgno))
+			PgHdr pg;
+			
+			memset(&pg,0,sizeof(PgHdr));
+			
+			if (!enif_get_uint(cmd->env,headTop, &pg.pgno))
 				return make_error_tuple(cmd->env,"not_pgno");
 
 			// Blob storage
@@ -1458,10 +1461,22 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			else
 			{
 				ErlNifBinary pageBody;
+				u32 commit = 0;
+				
 				// this is write
 				if (!enif_inspect_iolist_as_binary(cmd->env,listTop,&pageBody))
 					return make_error_tuple(cmd->env,"not_iolist");
 
+				if (pageBody.size > SQLITE_DEFAULT_PAGE_SIZE)
+					return make_error_tuple(cmd->env,"too_large");
+
+				pg.pData = pageBody.data;
+				commit = pg.pgno > cmd->conn->wal.mxPage ? pg.pgno : cmd->conn->wal.mxPage;
+				if (tupleSize > tuplePos)
+					commit = 0;
+
+				if (sqlite3WalFrames(&cmd->conn->wal, pageBody.size, &pg, commit, commit, 0) != SQLITE_OK)
+					return make_error_tuple(cmd->env,"write_error");
 			}
 
 			continue;
@@ -1486,7 +1501,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		{
 			if (readpoint[0] == '$')
 				skip = 1;
-			else
+			else if (headTop == 0)
 				skip = 0;
 			statementlen = end-readpoint;
 
@@ -1761,7 +1776,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					rowcount++;
 				}
 			}
-			DBG((g_log,"exec rc=%d, rowcount=%d, column_count=%d\n", rc, rowcount, column_count));
+			DBG((g_log,"exec rc=%d, rowcount=%d, column_count=%d, skip=%d\n", rc, rowcount, column_count,(int)skip));
 			if (rc > 0 && rc < 100)
 			{
 				errat = "step";
