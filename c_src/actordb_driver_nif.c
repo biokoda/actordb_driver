@@ -531,7 +531,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	memset(filename,0,MAX_PATHNAME);
 
 	enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
-	if (strcmp(mode,"wal") != 0 )//&& strcmp(mode, "blob") != 0)
+	if (strcmp(mode,"wal") != 0 && strcmp(mode, "blob") != 0)
 		return atom_false;
 
 	size = enif_get_string(cmd->env, cmd->arg, filename, MAX_PATHNAME, ERL_NIF_LATIN1);
@@ -1362,6 +1362,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	ERL_NIF_TERM *tupleResult = NULL;
 	int tupleSize = 0, tuplePos = 0, tupleRecsSize = 0;
 	int skip = 0;
+	u32 mxPage = cmd->conn->wal.mxPage;
 
 	if (!cmd->conn->wal_configured)
 		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
@@ -1447,7 +1448,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		else
 		{
 			PgHdr pg;
-			
+			rc = SQLITE_OK;
 			memset(&pg,0,sizeof(PgHdr));
 			
 			if (!enif_get_uint(cmd->env,headTop, &pg.pgno))
@@ -1457,6 +1458,30 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			if (listTop == 0)
 			{
 				// this is read
+				u32 foundFrame = 0;
+				ErlNifBinary binOut;
+				ERL_NIF_TERM termbin;
+				int actualsize;
+
+				results = enif_make_list(cmd->env,0);
+				sqlite3WalFindFrame(&cmd->conn->wal, pg.pgno, &foundFrame);
+				if (!foundFrame)
+					break;
+
+				enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE,&binOut);
+				actualsize = readframe(&cmd->conn->wal, 1, binOut.size, binOut.data);
+				if (actualsize != SQLITE_DEFAULT_PAGE_SIZE)
+					enif_realloc_binary(&binOut, actualsize);
+
+				termbin = enif_make_binary(cmd->env,&binOut);
+				enif_release_binary(&binOut);
+				
+				results = enif_make_list_cell(cmd->env, termbin, results);
+
+				if (tuplePos < tupleSize)
+					tupleResult[tuplePos] = results;
+				else
+					break;
 			}
 			else
 			{
@@ -1471,14 +1496,19 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					return make_error_tuple(cmd->env,"too_large");
 
 				pg.pData = pageBody.data;
-				commit = pg.pgno > cmd->conn->wal.mxPage ? pg.pgno : cmd->conn->wal.mxPage;
+				mxPage = pg.pgno > mxPage ? pg.pgno : mxPage;
 				if (tupleSize > tuplePos)
 					commit = 0;
 
-				if (sqlite3WalFrames(&cmd->conn->wal, pageBody.size, &pg, commit, commit, 0) != SQLITE_OK)
+				if (sqlite3WalFrames(&cmd->conn->wal, pageBody.size, &pg, mxPage, commit, 0) != SQLITE_OK)
 					return make_error_tuple(cmd->env,"write_error");
-			}
 
+				if (tupleSize <= tuplePos)
+				{
+					results = enif_make_list(cmd->env,0);
+					break;
+				}
+			}
 			continue;
 		}
 		headTop = 0;

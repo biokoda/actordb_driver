@@ -337,21 +337,27 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 	return SQLITE_OK;
 }
 
-int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
+static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
 	db_thread *thr;
+	int result = 0;
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
 		thr = pWal->rthread;
 	else
 		thr = pWal->thread;
+	
 	DBG((g_log,"Read frame\n"));
 	// i64 term, evnum;
 	if (thr->nResFrames == 0)
 	{
-		if (LZ4_decompress_safe((char*)(thr->resFrames[0].mv_data+sizeof(u64)*2+1),(char*)pOut,
-							  thr->resFrames[0].mv_size-(sizeof(u64)*2+1),nOut) > 0)
+		result = LZ4_decompress_safe((char*)(thr->resFrames[0].mv_data+sizeof(u64)*2+1),
+			(char*)pOut,
+			thr->resFrames[0].mv_size-(sizeof(u64)*2+1),
+			nOut);
+		#ifdef _TESTDBG_
+		if (result > 0)
 		{
-	#ifdef _TESTDBG_
+	
 			{
 				i64 term, evnum;
 				memcpy(&term,  thr->resFrames[0].mv_data,             sizeof(u64));
@@ -359,9 +365,8 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 				DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",
 					term,evnum,(int)thr->resFrames[0].mv_size));
 			}
-	#endif
-			return SQLITE_OK;
 		}
+		#endif
 	}
 	else
 	{
@@ -380,13 +385,17 @@ int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 		}
 		thr->nResFrames = 0;
 
-		if (LZ4_decompress_safe((char*)pagesBuf,(char*)pOut,pos,nOut) > 0)
-		{
-			return SQLITE_OK;
-		}
-
+		result = LZ4_decompress_safe((char*)pagesBuf,(char*)pOut,pos,nOut);
 	}
-	return SQLITE_ERROR;
+	return result;
+}
+
+int sqlite3WalReadFrame(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
+{
+	if (readframe(pWal,iRead,nOut,pOut) == SQLITE_DEFAULT_PAGE_SIZE)
+		return SQLITE_OK;
+	else
+		return SQLITE_ERROR;
 }
 
 /* If the WAL is not empty, return the size of the database. */
