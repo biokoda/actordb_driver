@@ -61,7 +61,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	Wal *pWal = &thr->curConn->wal;
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn;
-	int offset = 0;
+	int offset = 0, cutoff = 0;
+	size_t nmLen;
 
 	pWal->thread = thr;
 	actorsdb = thr->actorsdb;
@@ -69,6 +70,10 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 	if (zWalName[0] == '/')
 		offset = 1;
+	nmLen = strlen(zWalName+offset);
+	if (zWalName[offset+nmLen-1] == 'l' && zWalName[offset+nmLen-2] == 'a' && 
+		zWalName[offset+nmLen-3] == 'w' && zWalName[offset+nmLen-4] == '-')
+		cutoff = 4;
 
 	DBG((g_log,"Wal name=%s\n",zWalName));
 
@@ -79,7 +84,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		
 
 	// shorten size to ignore "-wal" at the end
-	key.mv_size = strlen(zWalName+offset)-4;
+	key.mv_size = nmLen-cutoff;
 	key.mv_data = (void*)zWalName+offset;//thr->curConn->dbpath;
 	rc = mdb_get(txn,actorsdb,&key,&data);
 

@@ -53,7 +53,7 @@ static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 	ERL_NIF_TERM atom;
 
 	if(enif_make_existing_atom(env, atom_name, &atom, ERL_NIF_LATIN1))
-	   return atom;
+		return atom;
 
 	return enif_make_atom(env, atom_name);
 }
@@ -521,17 +521,17 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 {
 	static int readThrIndex = 0;
 	char filename[MAX_PATHNAME];
-	unsigned int size;
+	unsigned int size = 0;
 	int rc;
-	ERL_NIF_TERM result;
-	db_connection *conn;
+	ERL_NIF_TERM result = atom_ok;
+	db_connection *conn = NULL;
 	char mode[10];
-	sqlite3 *db;
+	sqlite3 *db = NULL;
 
 	memset(filename,0,MAX_PATHNAME);
 
 	enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
-	if (strcmp(mode,"wal") != 0)
+	if (strcmp(mode,"wal") != 0) //&& strcmp(mode, "blob") != 0)
 		return atom_false;
 
 	size = enif_get_string(cmd->env, cmd->arg, filename, MAX_PATHNAME, ERL_NIF_LATIN1);
@@ -539,14 +539,21 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	if(size <= 0 || size >= MAX_ACTOR_NAME)
 		return make_error_tuple(cmd->env, "invalid_filename");
 
-	rc = sqlite3_open(filename,&(db));
-	if(rc != SQLITE_OK)
+	// Blob type uses lmdb directly. 
+	// Stores data in binary chunks (like pages of sqlite). 
+	// Blob connections have db=NULL
+	if (strcmp(mode, "blob") != 0)
 	{
-		result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc,0, cmd->conn->db);
-		sqlite3_close(db);
-		cmd->conn = NULL;
-		return result;
+		rc = sqlite3_open(filename,&(db));
+		if(rc != SQLITE_OK)
+		{
+			result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc,0, cmd->conn->db);
+			sqlite3_close(db);
+			cmd->conn = NULL;
+			return result;
+		}
 	}
+	
 	conn = enif_alloc_resource(thread->pd->db_connection_type, sizeof(db_connection));
 	if(!conn)
 		return make_error_tuple(cmd->env, "no_memory");
@@ -560,7 +567,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	conn->rthread = readThrIndex % thread->pd->nReadThreads;
 	conn->wal.mtx = enif_mutex_create("conmutex");
 
-	if (filename[0] != ':')
+	if (filename[0] != ':' && db)
 	{
 		conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
@@ -574,6 +581,11 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 		// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=truncate;",NULL,NULL,NULL);
 		// else if (strcmp(mode,"persist") == 0)
 		// 	sqlite3_exec(cmd->conn->db,"PRAGMA journal_mode=persist;",NULL,NULL,NULL);
+	}
+	else if (!db)
+	{
+		// open wal directly
+		sqlite3WalOpen(NULL, NULL, filename, 0, 0, NULL, thread);
 	}
 
 	DBG((g_log,"opened new thread=%d name=%s mode=%s.\n",thread->index,filename,mode));
@@ -1140,7 +1152,6 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread)
 		memset(&con, 0, sizeof(db_connection));
 		memset(pth, 0, MAX_PATHNAME);
 		memcpy(pth, name.data, name.size);
-		strcat(pth,"-wal");
 		thread->curConn = &con;
 		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL, thread);
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
@@ -1418,15 +1429,44 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				listTop = tupleRecs[tuplePos];
 			else
 				listTop = 0;
-			if (!enif_inspect_iolist_as_binary(cmd->env, inputTuple[tuplePos], &bin))
-				return make_error_tuple(cmd->env, "not_iolist");
+
+			// use headTop as a tmp variable to store input sql
+			headTop = inputTuple[tuplePos];
 		}
 		else
 		{
 			listTop = cmd->arg4;
-			if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
+			headTop = cmd->arg;
+		}
+
+		if (cmd->conn->db)
+		{
+			if (!enif_inspect_iolist_as_binary(cmd->env, headTop, &bin))
 				return make_error_tuple(cmd->env, "not_iolist");
 		}
+		else
+		{
+			u32 pgno;
+			if (!enif_get_uint(cmd->env,headTop, &pgno))
+				return make_error_tuple(cmd->env,"not_pgno");
+
+			// Blob storage
+			if (listTop == 0)
+			{
+				// this is read
+			}
+			else
+			{
+				ErlNifBinary pageBody;
+				// this is write
+				if (!enif_inspect_iolist_as_binary(cmd->env,listTop,&pageBody))
+					return make_error_tuple(cmd->env,"not_iolist");
+
+			}
+
+			continue;
+		}
+		headTop = 0;
 
 	#ifdef _TESTDBG_
 		if (bin.size > 1024*10)
@@ -2861,7 +2901,10 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 		return make_error_tuple(env, "invalid_ref");
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
-	if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3]) || enif_is_tuple(env,argv[3])))
+	// blob actor type, sql = page number, records = iolist
+	if (res->db == NULL && !enif_is_number(env,argv[3]))
+		return make_error_tuple(env,"sql_not_pagenumber");
+	else if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3]) || enif_is_tuple(env,argv[3])))
 		return make_error_tuple(env,"sql");
 	if (!enif_is_number(env,argv[4]))
 		return make_error_tuple(env, "term");
