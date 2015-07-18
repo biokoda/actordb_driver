@@ -9,11 +9,11 @@ run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
 	[fun lz4/0,
-	fun modes/0
-	% fun dbcopy/0,
-	% fun checkpoint/0,
-	% fun bigtrans/0,
-	% fun bigtrans_check/0
+	fun modes/0,
+	fun dbcopy/0,
+	fun checkpoint/0,
+	fun bigtrans/0,
+	fun bigtrans_check/0
 	].
 
 
@@ -44,7 +44,8 @@ modes() ->
 	% ?debugFmt("Tuple exec ~p", [R]).
 
 	{ok,Blob} = actordb_driver:open("myfile",0,blob),
-	{ok,[]} = actordb_driver:exec_script({1,2},{<<"page12">>,<<"page">>},Blob),
+	{ok,{[],[]}} = actordb_driver:exec_script({1,2},{<<"page12">>,<<"page">>},Blob),
+	{ok,{[<<"page12">>],[<<"page">>]}} = actordb_driver:exec_script({1,2},Blob),
 	ok.
 
 dbcopy() ->

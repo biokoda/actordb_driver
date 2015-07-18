@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+//#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1427,6 +1427,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		const ERL_NIF_TERM *insertRow;
 		int rowLen = 0;
 
+		results = enif_make_list(cmd->env,0);
+
 		if (inputTuple)
 		{
 			if (tupleRecs)
@@ -1479,8 +1481,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 				termbin = enif_make_binary(cmd->env,&binOut);
 				enif_release_binary(&binOut);
-				
-				results = enif_make_list_cell(cmd->env, termbin, results);
+
+				results = enif_make_list_cell(cmd->env,termbin,results);
 
 				if (tuplePos < tupleSize)
 					tupleResult[tuplePos] = results;
@@ -1502,13 +1504,14 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				if (tupleSize <= tuplePos+1)
 					commit = 1;
 
-				DBG((g_log,"write blob page pos=%d mxpage=%u, commit=%u, sz=%d\n",
-					tuplePos,mxPage,commit, pageBody.size));
+				//DBG((g_log,"write blob page pos=%d mxpage=%u, commit=%u, sz=%d\n",
+					//tuplePos,mxPage,commit, pageBody.size));
+
 				if (sqlite3WalFrames(&cmd->conn->wal, pageBody.size, &pg, mxPage, commit, 0) != SQLITE_OK)
 					return make_error_tuple(cmd->env,"write_error");
 
-				if (tupleSize <= tuplePos+1)
-					results = enif_make_list(cmd->env,0);
+				if (tuplePos < tupleSize)
+					tupleResult[tuplePos] = results;
 			}
 			tuplePos++;
 			if (tupleSize <= tuplePos)
@@ -1529,7 +1532,6 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	#endif
 		end = (char*)bin.data + bin.size;
 		readpoint = (char*)bin.data;
-		results = enif_make_list(cmd->env,0);
 
 		while (readpoint < end || headTop != 0)
 		{
@@ -2256,6 +2258,7 @@ static void *thread_func(void *arg)
 			chkCounter = 0;
 			syncListSize = 0;
 		}
+		DBG((g_log,"%lld, %lld\n", data->tasks, data->tasks->lock));
 		queue_recycle(data->tasks,item);
 	}
 	queue_destroy(data->tasks);
