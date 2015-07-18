@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -468,11 +468,14 @@ static void destruct_connection(ErlNifEnv *env, void *arg)
 		conn->packetPrefix = NULL;
 		conn->packetPrefixSize = 0;
 	}
-	close_prepared(conn);
-	rc = sqlite3_close(conn->db);
-	if(rc != SQLITE_OK)
+	if (conn->db)
 	{
-		DBG((g_log,"ERROR! closing %d\n",rc));
+		close_prepared(conn);
+		rc = sqlite3_close(conn->db);
+		if(rc != SQLITE_OK)
+		{
+			DBG((g_log,"ERROR! closing %d\n",rc));
+		}
 	}
 	enif_mutex_destroy(conn->wal.mtx);
 }
@@ -1364,7 +1367,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	int skip = 0;
 	u32 mxPage = cmd->conn->wal.mxPage;
 
-	if (!cmd->conn->wal_configured)
+	if (!cmd->conn->wal_configured && cmd->conn->db)
 		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
 	if (cmd->arg1)
@@ -1449,6 +1452,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		{
 			PgHdr pg;
 			rc = SQLITE_OK;
+			skip = 1;
 			memset(&pg,0,sizeof(PgHdr));
 			
 			if (!enif_get_uint(cmd->env,headTop, &pg.pgno))
@@ -1480,8 +1484,6 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 				if (tuplePos < tupleSize)
 					tupleResult[tuplePos] = results;
-				else
-					break;
 			}
 			else
 			{
@@ -1497,18 +1499,20 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 				pg.pData = pageBody.data;
 				mxPage = pg.pgno > mxPage ? pg.pgno : mxPage;
-				if (tupleSize > tuplePos)
-					commit = 0;
+				if (tupleSize <= tuplePos+1)
+					commit = 1;
 
+				DBG((g_log,"write blob page pos=%d mxpage=%u, commit=%u, sz=%d\n",
+					tuplePos,mxPage,commit, pageBody.size));
 				if (sqlite3WalFrames(&cmd->conn->wal, pageBody.size, &pg, mxPage, commit, 0) != SQLITE_OK)
 					return make_error_tuple(cmd->env,"write_error");
 
-				if (tupleSize <= tuplePos)
-				{
+				if (tupleSize <= tuplePos+1)
 					results = enif_make_list(cmd->env,0);
-					break;
-				}
 			}
+			tuplePos++;
+			if (tupleSize <= tuplePos)
+				break;
 			continue;
 		}
 		headTop = 0;
@@ -1854,7 +1858,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			free(tupleResult);
 	}
 
-	if (rc > 0 && rc < 100 && pagesPre != thread->pagesChanged)
+	if (rc > 0 && rc < 100 && pagesPre != thread->pagesChanged && cmd->conn->db)
 	{
 		sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
 		sqlite3_step(statement);
@@ -2947,7 +2951,7 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
 	// blob actor type, sql = page number, records = iolist
-	if (res->db == NULL && !enif_is_number(env,argv[3]))
+	if (res->db == NULL && !enif_is_number(env,argv[3]) && !enif_is_tuple(env,argv[3]))
 		return make_error_tuple(env,"sql_not_pagenumber");
 	else if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3]) || enif_is_tuple(env,argv[3])))
 		return make_error_tuple(env,"sql");

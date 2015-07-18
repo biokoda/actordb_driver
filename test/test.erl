@@ -9,11 +9,11 @@ run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
 	[fun lz4/0,
-	fun modes/0,
-	fun dbcopy/0,
-	fun checkpoint/0,
-	fun bigtrans/0,
-	fun bigtrans_check/0
+	fun modes/0
+	% fun dbcopy/0,
+	% fun checkpoint/0,
+	% fun bigtrans/0,
+	% fun bigtrans_check/0
 	].
 
 
@@ -41,7 +41,11 @@ modes() ->
 	Sql2 = "INSERT INTO tab VALUES (3, 'tritri',1);",
 	Sql3 = "SELECT * FROM tab;",
 	{ok,{_,_,_}} = R = actordb_driver:exec_script({Sql1,Sql2,Sql3},Db),
-	?debugFmt("Tuple exec ~p", [R]).
+	% ?debugFmt("Tuple exec ~p", [R]).
+
+	{ok,Blob} = actordb_driver:open("myfile",0,blob),
+	{ok,[]} = actordb_driver:exec_script({1,2},{<<"page12">>,<<"page">>},Blob),
+	ok.
 
 dbcopy() ->
 	?INIT,
