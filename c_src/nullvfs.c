@@ -457,11 +457,11 @@ sqlite3_vfs *sqlite3_nullvfs(void){
     unixRandomness,               /* xRandomness */
     unixSleep,                    /* xSleep */
     unixCurrentTime,              /* xCurrentTime */
-    unixGetLastError,     /* xGetLastError */               \
-    unixCurrentTimeInt64, /* xCurrentTimeInt64 */           \
-    unixSetSystemCall,    /* xSetSystemCall */              \
-    unixGetSystemCall,    /* xGetSystemCall */              \
-    unixNextSystemCall,   /* xNextSystemCall */             \
+    unixGetLastError,     /* xGetLastError */
+    unixCurrentTimeInt64, /* xCurrentTimeInt64 */
+    unixSetSystemCall,    /* xSetSystemCall */
+    unixGetSystemCall,    /* xGetSystemCall */
+    unixNextSystemCall,   /* xNextSystemCall */
     #else
     winDlOpen,
     winDlError,
