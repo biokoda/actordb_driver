@@ -24,9 +24,11 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <sys/file.h>
 #include <sys/param.h>
 #include <unistd.h>
+#endif
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -342,11 +344,24 @@ static int nullOpen(
   if( isReadonly )  openflags |= O_RDONLY;
   if( isReadWrite ) openflags |= O_RDWR;
   if( isCreate )    openflags |= O_CREAT;
+  #ifdef O_NOFOLLOW
   if( isExclusive ) openflags |= (O_EXCL|O_NOFOLLOW);
+  #else
+  if( isExclusive ) openflags |= (O_EXCL);
+  #endif
+  
+  #ifdef O_LARGEFILE
   openflags |= (O_LARGEFILE|O_BINARY);
+  #else
+  openflags |= (O_BINARY);
+  #endif
 
   if( pOutFlags ){
+    #ifdef O_LARGEFILE
     *pOutFlags = (openflags | O_LARGEFILE | O_BINARY);
+    #else
+    *pOutFlags = (openflags | O_BINARY); 
+    #endif
   }
   p->base.pMethods = &nullio;
   // printf("OPENOK\n");
@@ -434,6 +449,7 @@ sqlite3_vfs *sqlite3_nullvfs(void){
     nullDelete,                   /* xDelete */
     nullAccess,                   /* xAccess */
     nullFullPathname,             /* xFullPathname */
+    #ifndef _WIN32
     unixDlOpen,                   /* xDlOpen */
     unixDlError,                  /* xDlError */
     unixDlSym,                    /* xDlSym */
@@ -446,6 +462,20 @@ sqlite3_vfs *sqlite3_nullvfs(void){
     unixSetSystemCall,    /* xSetSystemCall */              \
     unixGetSystemCall,    /* xGetSystemCall */              \
     unixNextSystemCall,   /* xNextSystemCall */             \
+    #else
+    winDlOpen,
+    winDlError,
+    winDlSym,
+    winDlClose,
+    winRandomness,
+    winSleep,
+    winCurrentTime,      /* xCurrentTime */
+    winGetLastError,     /* xGetLastError */
+    winCurrentTimeInt64, /* xCurrentTimeInt64 */
+    winSetSystemCall,    /* xSetSystemCall */
+    winGetSystemCall,    /* xGetSystemCall */
+    winNextSystemCall,   /* xNextSystemCall */
+    #endif
   };
   return &nullvfs;
 }

@@ -206,8 +206,8 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 void fail_send(int i,priv_data *priv)
 {
 	// tell control thread to create new connections for position i
-	DBG((g_log,"FAIL SEND!\n"));
 	qitem *item = command_create(-1,-1,priv);
+	DBG((g_log,"FAIL SEND!\n"));
 	item->cmd.type = cmd_tcp_connect;
 	item->cmd.arg3 = enif_make_int(item->cmd.env,i);
 	push_command(-1,-1, priv, item);
@@ -1047,7 +1047,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 			while ((rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop)) == MDB_SUCCESS)
 			{
 				// memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
-				memcpy(&evnum,  pgVal.mv_data+sizeof(u64),sizeof(u64));
+				memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
 				DBG((g_log,"Deleting pgno=%u, evnum=%llu\r\n",pgno,evnum));
 				if (evnum >= limitEvnum)
 				{
@@ -1075,8 +1075,8 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 			break;
 		}
 		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
-		memcpy(&evterm, logKey.mv_data + sizeof(u64),   sizeof(u64));
-		memcpy(&evnum,  logKey.mv_data + sizeof(u64)*2, sizeof(u64));
+		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
+		memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
 
 		if (aindex != pWal->index)
 		{
@@ -1203,15 +1203,15 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr)
 			if (data.mv_size < sizeof(u64)*7+2+sizeof(u32))
 				return atom_error;
 
-			memcpy(&firstCompleteTerm,  data.mv_data+1,               sizeof(u64));
-			memcpy(&firstCompleteEvnum, data.mv_data+1+sizeof(u64),   sizeof(u64));
-			memcpy(&lastCompleteTerm,   data.mv_data+1+sizeof(u64)*2, sizeof(u64));
-			memcpy(&lastCompleteEvnum,  data.mv_data+1+sizeof(u64)*3, sizeof(u64));
-			memcpy(&inProgressTerm,     data.mv_data+1+sizeof(u64)*4, sizeof(u64));
-			memcpy(&inProgressEvnum,    data.mv_data+1+sizeof(u64)*5, sizeof(u64));
-			memcpy(&mxPage,             data.mv_data+1+sizeof(u64)*6, sizeof(u32));
-			memcpy(&allPages,           data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
-			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2, sizeof(u64));
+			memcpy(&firstCompleteTerm,  (u8*)data.mv_data+1,               sizeof(u64));
+			memcpy(&firstCompleteEvnum, (u8*)data.mv_data+1+sizeof(u64),   sizeof(u64));
+			memcpy(&lastCompleteTerm,   (u8*)data.mv_data+1+sizeof(u64)*2, sizeof(u64));
+			memcpy(&lastCompleteEvnum,  (u8*)data.mv_data+1+sizeof(u64)*3, sizeof(u64));
+			memcpy(&inProgressTerm,     (u8*)data.mv_data+1+sizeof(u64)*4, sizeof(u64));
+			memcpy(&inProgressEvnum,    (u8*)data.mv_data+1+sizeof(u64)*5, sizeof(u64));
+			memcpy(&mxPage,             (u8*)data.mv_data+1+sizeof(u64)*6, sizeof(u32));
+			memcpy(&allPages,           (u8*)data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
+			memcpy(&currentTerm, (u8*)data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2, sizeof(u64));
 			vfSize = ((u8*)data.mv_data)[1+sizeof(u64)*7+sizeof(u32)*2];
 			votedFor = (u8*)data.mv_data+2+sizeof(u64)*7+sizeof(u32)*2;
 
@@ -1269,7 +1269,7 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 	int rc;
 	u8 pbuf[SQLITE_DEFAULT_PAGE_SIZE];
 	PgHdr page;
-	int doreplicate = cmd->conn->doReplicate;;
+	int doreplicate = cmd->conn->doReplicate;
 	ErlNifBinary header;
 	Wal *pWal = &cmd->conn->wal;
 
@@ -2310,7 +2310,11 @@ static void *read_thread_func(void *arg)
 		{
 			if (item->cmd.conn && item->cmd.conn->wal.rthread == 0)
 			{
+				#ifndef _WIN32
 				item->cmd.conn->wal.rthreadId = pthread_self();
+				#else
+				item->cmd.conn->wal.rthreadId = GetCurrentThreadId();
+				#endif
 				item->cmd.conn->wal.rthread = data;
 			}
 			if (!data->txn)

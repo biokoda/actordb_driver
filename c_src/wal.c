@@ -77,7 +77,11 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 	DBG((g_log,"Wal name=%s\n",zWalName));
 
+	#ifndef _WIN32
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
+	#else
+	if (GetCurrentThreadId() == pWal->rthreadId)
+	#endif
 		txn = thr->txn;
 	else if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return SQLITE_ERROR;
@@ -85,7 +89,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = nmLen-cutoff;
-	key.mv_data = (void*)zWalName+offset;//thr->curConn->dbpath;
+	key.mv_data = (void*)(zWalName+offset);//thr->curConn->dbpath;
 	rc = mdb_get(txn,actorsdb,&key,&data);
 
 	// This is new actor, assign an index
@@ -152,14 +156,14 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 					mdb_txn_abort(txn);
 				return SQLITE_ERROR;
 			}
-			memcpy(&pWal->firstCompleteTerm, data.mv_data+1, sizeof(u64));
-			memcpy(&pWal->firstCompleteEvnum,data.mv_data+1+sizeof(u64), sizeof(u64));
-			memcpy(&pWal->lastCompleteTerm,  data.mv_data+1+sizeof(u64)*2, sizeof(u64));
-			memcpy(&pWal->lastCompleteEvnum, data.mv_data+1+sizeof(u64)*3, sizeof(u64));
-			memcpy(&pWal->inProgressTerm,    data.mv_data+1+sizeof(u64)*4, sizeof(u64));
-			memcpy(&pWal->inProgressEvnum,   data.mv_data+1+sizeof(u64)*5, sizeof(u64));
-			memcpy(&pWal->mxPage,   data.mv_data+1+sizeof(u64)*6,            sizeof(u32));
-			memcpy(&pWal->allPages, data.mv_data+1+sizeof(u64)*6+sizeof(u32),sizeof(u32));
+			memcpy(&pWal->firstCompleteTerm, ((u8*)data.mv_data)+1, sizeof(u64));
+			memcpy(&pWal->firstCompleteEvnum,((u8*)data.mv_data)+1+sizeof(u64), sizeof(u64));
+			memcpy(&pWal->lastCompleteTerm,  ((u8*)data.mv_data)+1+sizeof(u64)*2, sizeof(u64));
+			memcpy(&pWal->lastCompleteEvnum, ((u8*)data.mv_data)+1+sizeof(u64)*3, sizeof(u64));
+			memcpy(&pWal->inProgressTerm,    ((u8*)data.mv_data)+1+sizeof(u64)*4, sizeof(u64));
+			memcpy(&pWal->inProgressEvnum,   ((u8*)data.mv_data)+1+sizeof(u64)*5, sizeof(u64));
+			memcpy(&pWal->mxPage,   ((u8*)data.mv_data)+1+sizeof(u64)*6,            sizeof(u32));
+			memcpy(&pWal->allPages, ((u8*)data.mv_data)+1+sizeof(u64)*6+sizeof(u32),sizeof(u32));
 			pWal->readSafeTerm = pWal->lastCompleteTerm;
 			pWal->readSafeEvnum = pWal->lastCompleteEvnum;
 			pWal->readSafeMxPage = pWal->mxPage;
@@ -224,7 +228,11 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 /* Read a page from the write-ahead log, if it is present. */
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
+	#ifndef _WIN32
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
+	#else
+	if (GetCurrentThreadId() == pWal->rthreadId)
+	#endif
 	{
 		u64 readSafeEvnum, readSafeTerm;
 		#ifndef _TESTAPP_
@@ -280,12 +288,12 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 		{
 			while (1)
 			{
-				char frag1 = *(char*)(data.mv_data+sizeof(u64)*2);
+				char frag1 = *(char*)(((char*)data.mv_data)+sizeof(u64)*2);
 				int frag = frag1;
 				u64 term, evnum;
 
 				memcpy(&term,  data.mv_data,               sizeof(u64));
-				memcpy(&evnum, data.mv_data + sizeof(u64), sizeof(u64));
+				memcpy(&evnum, ((u8*)data.mv_data) + sizeof(u64), sizeof(u64));
 				if (term > limitTerm || evnum > limitEvnum)
 				{
 					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
@@ -310,7 +318,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 				while (frag >= 0)
 				{
 					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
-					frag = *(u8*)(data.mv_data+sizeof(u64)*2);
+					frag = *(((u8*)data.mv_data)+sizeof(u64)*2);
 					// DBG((g_log,"SUCCESS? %d frag=%d, size=%ld\n",pgno,frag,data.mv_size));
 					thr->resFrames[frag--] = data;
 				}
@@ -341,7 +349,12 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
 	db_thread *thr;
 	int result = 0;
+
+	#ifndef _WIN32
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
+	#else
+	if (GetCurrentThreadId() == pWal->rthreadId)
+	#endif
 		thr = pWal->rthread;
 	else
 		thr = pWal->thread;
@@ -350,7 +363,7 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 	// i64 term, evnum;
 	if (thr->nResFrames == 0)
 	{
-		result = LZ4_decompress_safe((char*)(thr->resFrames[0].mv_data+sizeof(u64)*2+1),
+		result = LZ4_decompress_safe((((char*)thr->resFrames[0].mv_data)+sizeof(u64)*2+1),
 			(char*)pOut,
 			thr->resFrames[0].mv_size-(sizeof(u64)*2+1),
 			nOut);
@@ -378,7 +391,7 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 		{
 			// DBG((g_log,"Read frame %d\n",pos));
 			memcpy(pagesBuf + pos, 
-				thr->resFrames[frags].mv_data+sizeof(u64)*2+1, 
+				((char*)thr->resFrames[frags].mv_data)+sizeof(u64)*2+1, 
 				thr->resFrames[frags].mv_size-(sizeof(u64)*2+1));
 			pos += thr->resFrames[frags].mv_size-(sizeof(u64)*2+1);
 			frags--;
@@ -439,7 +452,7 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 	{
 		const int pagesz = thr->resFrames[frags].mv_size - hsz;
 
-		memcpy(buf+bufused, thr->resFrames[frags].mv_data + hsz, pagesz);
+		memcpy(buf+bufused, (u8*)thr->resFrames[frags].mv_data + hsz, pagesz);
 		bufused += pagesz;
 		frags--;
 
@@ -456,7 +469,11 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 	db_thread *thr;
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
+	#ifndef _WIN32
 	if (pthread_equal(pthread_self(), pWal->rthreadId))
+	#else
+	if (GetCurrentThreadId() == pWal->rthreadId)
+	#endif
 		thr = pWal->rthread;
 	else
 		thr = pWal->thread;
@@ -557,8 +574,8 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 				{
 					u64 aindex, term, evnum;
 					memcpy(&aindex, logKey.mv_data,              sizeof(u64));
-					memcpy(&term,   logKey.mv_data+sizeof(u64),  sizeof(u64));
-					memcpy(&evnum,  logKey.mv_data+sizeof(u64)*2,sizeof(u64));
+					memcpy(&term,   (u8*)logKey.mv_data+sizeof(u64),  sizeof(u64));
+					memcpy(&evnum,  (u8*)logKey.mv_data+sizeof(u64)*2,sizeof(u64));
 
 					if (aindex != pWal->index)
 						break;
@@ -699,9 +716,9 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			mdb_cursor_count(thr->cursorPages,&ndupl);
 			while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 			{
-				u8 frag = *(u8*)(pgVal.mv_data+sizeof(u64)*2);
+				u8 frag = *((u8*)pgVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
-				memcpy(&evnum,  pgVal.mv_data+sizeof(u64),sizeof(u64));
+				memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
 				// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
 				//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
 				if (evnum < limitEvnum)
@@ -745,8 +762,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			break;
 		}
 		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
-		memcpy(&evterm, logKey.mv_data + sizeof(u64),   sizeof(u64));
-		memcpy(&evnum,  logKey.mv_data + sizeof(u64)*2, sizeof(u64));
+		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
+		memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
 
 		if (aindex != pWal->index)
 		{
@@ -823,7 +840,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 			while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 			{
 				memcpy(&term, pgVal.mv_data,            sizeof(u64));
-				memcpy(&evnum,pgVal.mv_data+sizeof(u64),sizeof(u64));
+				memcpy(&evnum,(u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
 				// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
 				//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
 				if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
@@ -896,11 +913,11 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 
 		if (rc == MDB_SUCCESS && data.mv_size >= (1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1))
 		{
-			memcpy(&currentTerm, data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2, sizeof(u64));
+			memcpy(&currentTerm, (u8*)data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2, sizeof(u64));
 			votedForSize = (u8)((u8*)data.mv_data)[1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)];
 			//votedFor = data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1;
 			votedFor = alloca(votedForSize);
-			memcpy(votedFor,data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1, votedForSize);
+			memcpy(votedFor,(u8*)data.mv_data+1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1, votedForSize);
 			// DBG((g_log,"Voted for %.*s\n",(int)votedForSize,(char*)votedFor));
 		}
 	}
@@ -987,7 +1004,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			{
 				u64 evnum, evterm;
 				memcpy(&evterm, data.mv_data,               sizeof(u64));
-				memcpy(&evnum,  data.mv_data + sizeof(u64), sizeof(u64));
+				memcpy(&evnum,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
 
 				while ((evterm > pWal->inProgressTerm || evnum >= pWal->inProgressEvnum) &&
 						(pWal->inProgressTerm + pWal->inProgressEvnum) > 0)
@@ -1011,7 +1028,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 					if (rc != MDB_SUCCESS)
 						break;
 					memcpy(&evterm, data.mv_data,               sizeof(u64));
-					memcpy(&evnum,  data.mv_data + sizeof(u64), sizeof(u64));
+					memcpy(&evnum,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
 				}
 			}
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
@@ -1254,13 +1271,13 @@ static int logdb_cmp(const MDB_val *a, const MDB_val *b)
 	diff = aActor - bActor;
 	if (diff == 0)
 	{
-		memcpy(&aEvterm, a->mv_data+sizeof(i64), sizeof(i64));
-		memcpy(&bEvterm, b->mv_data+sizeof(i64), sizeof(i64));
+		memcpy(&aEvterm, (u8*)a->mv_data+sizeof(i64), sizeof(i64));
+		memcpy(&bEvterm, (u8*)b->mv_data+sizeof(i64), sizeof(i64));
 		diff = aEvterm - bEvterm;
 		if (diff == 0)
 		{
-			memcpy(&aEvnum, a->mv_data+sizeof(i64)*2, sizeof(i64));
-			memcpy(&bEvnum, b->mv_data+sizeof(i64)*2, sizeof(i64));
+			memcpy(&aEvnum, (u8*)a->mv_data+sizeof(i64)*2, sizeof(i64));
+			memcpy(&bEvnum, (u8*)b->mv_data+sizeof(i64)*2, sizeof(i64));
 			return aEvnum - bEvnum;
 		}
 		return diff;
@@ -1281,8 +1298,8 @@ static int pagesdb_cmp(const MDB_val *a, const MDB_val *b)
 	diff = aActor - bActor;
 	if (diff == 0)
 	{
-		memcpy(&aPgno,a->mv_data + sizeof(i64),sizeof(u32));
-		memcpy(&bPgno,b->mv_data + sizeof(i64),sizeof(u32));
+		memcpy(&aPgno,(u8*)a->mv_data + sizeof(i64),sizeof(u32));
+		memcpy(&bPgno,(u8*)b->mv_data + sizeof(i64),sizeof(u32));
 		return aPgno - bPgno;
 	}
 	return diff;
@@ -1300,8 +1317,8 @@ static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
 	diff = aEvterm - bEvterm;
 	if (diff == 0)
 	{
-		memcpy(&aEvnum, a->mv_data+sizeof(i64), sizeof(i64));
-		memcpy(&bEvnum, b->mv_data+sizeof(i64), sizeof(i64));
+		memcpy(&aEvnum, (u8*)a->mv_data+sizeof(i64), sizeof(i64));
+		memcpy(&bEvnum, (u8*)b->mv_data+sizeof(i64), sizeof(i64));
 		diff = aEvnum - bEvnum;
 		if (diff == 0)
 		{

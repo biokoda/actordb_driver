@@ -70,7 +70,11 @@ struct Wal {
 	#ifndef _TESTAPP_
 	ErlNifMutex *mtx;
 	#endif
+	#ifndef _WIN32
 	pthread_t rthreadId;
+	#else
+	DWORD rthreadId;
+	#endif
 	u64 index;
 	u64 firstCompleteTerm;
 	u64 firstCompleteEvnum;
