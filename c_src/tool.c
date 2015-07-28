@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #define _TESTAPP_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
@@ -193,9 +193,12 @@ static int do_print(const char *pth, int what)
 		{
 			u64 index;
 			u32 pgno;
+			size_t ndupl;
+
 			memcpy(&index, key.mv_data, sizeof(u64));
 			memcpy(&pgno, key.mv_data + sizeof(u64), sizeof(u32));
-			printf("pagesdb: actor=%llu, pgno=%u\n",index, pgno);
+
+			mdb_cursor_count(lm.cursorPages,&ndupl);
 
 			op = MDB_FIRST_DUP;
 			while ((rc = mdb_cursor_get(lm.cursorPages,&key,&data, op)) == MDB_SUCCESS)
@@ -206,7 +209,11 @@ static int do_print(const char *pth, int what)
 				memcpy(&num,  data.mv_data + sizeof(u64), sizeof(u64));
 				frag = *(u8*)(data.mv_data + sizeof(u64)*2);
 				printf("  evterm=%lld, evnum=%lld, frag=%d, pgsize=%ld\n",term,num,(int)frag,data.mv_size-sizeof(u64)*2-1);
+
 				op = MDB_NEXT_DUP;
+				ndupl--;
+				if (ndupl == 0)
+					break;
 			}
 			rc = mdb_cursor_get(lm.cursorPages,&key,&data,MDB_NEXT);
 		}
@@ -346,7 +353,10 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	conn.wal.rthread = &thr;
 	conn.wal.rthreadId = pthread_self();
 
-	sprintf(actorpth,"actors/%s.%s-wal",actor,type);
+	if (strcmp("termstore",actor) == 0 && strcmp("termstore",type) == 0)
+		sprintf(actorpth,"termstore-wal",actor,type);
+	else
+		sprintf(actorpth,"actors/%s.%s-wal",actor,type);
 	if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL, &thr) == SQLITE_ERROR)
 	{
 		fprintf(stderr,"Can not open actor\n");
