@@ -2258,7 +2258,6 @@ static void *thread_func(void *arg)
 			chkCounter = 0;
 			syncListSize = 0;
 		}
-		DBG((g_log,"%lld, %lld\n", data->tasks, data->tasks->lock));
 		queue_recycle(data->tasks,item);
 	}
 	queue_destroy(data->tasks);
