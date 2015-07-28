@@ -374,7 +374,7 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 			{
 				i64 term, evnum;
 				memcpy(&term,  thr->resFrames[0].mv_data,             sizeof(u64));
-				memcpy(&evnum, thr->resFrames[0].mv_data+sizeof(u64), sizeof(u64));
+				memcpy(&evnum, (u8*)thr->resFrames[0].mv_data+sizeof(u64), sizeof(u64));
 				DBG((g_log,"Term=%lld, evnum=%lld, framesize=%d\n",
 					term,evnum,(int)thr->resFrames[0].mv_size));
 			}
