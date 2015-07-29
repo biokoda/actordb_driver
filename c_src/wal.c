@@ -999,6 +999,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
 		if (rc == MDB_SUCCESS)
 		{
+			size_t ndupl;
+			mdb_cursor_count(thr->cursorPages,&ndupl);
+
 			rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
 			if (rc == MDB_SUCCESS)
 			{
@@ -1006,11 +1009,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 				memcpy(&evterm, data.mv_data,               sizeof(u64));
 				memcpy(&evnum,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
 
-				while ((evterm > pWal->inProgressTerm || evnum >= pWal->inProgressEvnum) &&
-						(pWal->inProgressTerm + pWal->inProgressEvnum) > 0)
+				while ((evterm > pWal->inProgressTerm || evnum >= pWal->inProgressEvnum))
+						//(pWal->inProgressTerm + pWal->inProgressEvnum) > 0)
 				{
-					size_t ndupl;
-					mdb_cursor_count(thr->cursorPages,&ndupl);
 					DBG((g_log,"Deleting pages higher or equal to current. "
 					"Evterm=%llu, evnum=%llu, curterm=%llu, curevn=%llu, dupl=%ld\r\n",
 					evterm,evnum,pWal->inProgressTerm,pWal->inProgressEvnum,ndupl));
@@ -1095,27 +1096,30 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	}
 	// printf("\n");
 	// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
-	for(p=pList; p; p=p->pDirty)
+	if (pWal->inProgressTerm > 0)
 	{
-		u8 logKeyBuf[sizeof(u64)*3];
-
-		memcpy(logKeyBuf,                 &pWal->index,           sizeof(u64));
-		memcpy(logKeyBuf + sizeof(u64),   &pWal->inProgressTerm,  sizeof(u64));
-		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->inProgressEvnum, sizeof(u64));
-		key.mv_size = sizeof(logKeyBuf);
-		key.mv_data = logKeyBuf;
-
-		data.mv_size = sizeof(u32);
-		data.mv_data = &p->pgno;
-
-		if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
+		for(p=pList; p; p=p->pDirty)
 		{
-			// printf("Cursor put failed to log\n");
-			DBG((g_log,"ERROR: cursor put to log failed: %d\r\n",rc));
-			return SQLITE_ERROR;
-		}
+			u8 logKeyBuf[sizeof(u64)*3];
 
-		pWal->allPages++;
+			memcpy(logKeyBuf,                 &pWal->index,           sizeof(u64));
+			memcpy(logKeyBuf + sizeof(u64),   &pWal->inProgressTerm,  sizeof(u64));
+			memcpy(logKeyBuf + sizeof(u64)*2, &pWal->inProgressEvnum, sizeof(u64));
+			key.mv_size = sizeof(logKeyBuf);
+			key.mv_data = logKeyBuf;
+
+			data.mv_size = sizeof(u32);
+			data.mv_data = &p->pgno;
+
+			if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
+			{
+				// printf("Cursor put failed to log\n");
+				DBG((g_log,"ERROR: cursor put to log failed: %d\r\n",rc));
+				return SQLITE_ERROR;
+			}
+
+			pWal->allPages++;
+		}
 	}
   /** - Info DB: {<<ActorIndex:64>>, <<V,FirstCompleteTerm:64,FirstCompleteEvnum:64,
 										LastCompleteTerm:64,LastCompleteEvnum:64,
