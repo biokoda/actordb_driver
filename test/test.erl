@@ -45,7 +45,7 @@ modes() ->
 
 	{ok,Blob} = actordb_driver:open("myfile",0,blob),
 	{ok,{[],[]}} = actordb_driver:exec_script({1,2},{<<"page12">>,<<"page">>},Blob),
-	{ok,{[<<"page12">>],[<<"page">>]}} = actordb_driver:exec_script({1,2},Blob),
+	{ok,{[<<"page12">>],[<<"page">>],[]}} = actordb_driver:exec_script({1,2,3},Blob),
 	ok.
 
 dbcopy() ->

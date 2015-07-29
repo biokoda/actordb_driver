@@ -1471,18 +1471,18 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 				results = enif_make_list(cmd->env,0);
 				sqlite3WalFindFrame(&cmd->conn->wal, pg.pgno, &foundFrame);
-				if (!foundFrame)
-					break;
+				if (foundFrame)
+				{
+					enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE,&binOut);
+					actualsize = readframe(&cmd->conn->wal, 1, binOut.size, binOut.data);
+					if (actualsize != SQLITE_DEFAULT_PAGE_SIZE)
+						enif_realloc_binary(&binOut, actualsize);
 
-				enif_alloc_binary(SQLITE_DEFAULT_PAGE_SIZE,&binOut);
-				actualsize = readframe(&cmd->conn->wal, 1, binOut.size, binOut.data);
-				if (actualsize != SQLITE_DEFAULT_PAGE_SIZE)
-					enif_realloc_binary(&binOut, actualsize);
+					termbin = enif_make_binary(cmd->env,&binOut);
+					enif_release_binary(&binOut);
 
-				termbin = enif_make_binary(cmd->env,&binOut);
-				enif_release_binary(&binOut);
-
-				results = enif_make_list_cell(cmd->env,termbin,results);
+					results = enif_make_list_cell(cmd->env,termbin,results);
+				}
 
 				if (tuplePos < tupleSize)
 					tupleResult[tuplePos] = results;
