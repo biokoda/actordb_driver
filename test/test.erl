@@ -1,6 +1,6 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
--define(READTHREADS,1).
+-define(READTHREADS,2).
 -define(DBSIZE,4096*1024*128).
 -define(INIT,actordb_driver:init({{"."},{},?DBSIZE,?READTHREADS})).
 -define(READ,actordb_driver:exec_read).
@@ -62,10 +62,11 @@ async() ->
 		ok
 	end,
 	[exit(P,stop) || P <- Pids],
+	timer:sleep(3000),
 	?debugFmt("Reads: ~p, Writes: ~p",[ets:lookup(ops,r),ets:lookup(ops,w)]).
 
 w(N) ->
-	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N)),
+	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
 	Sql = "CREATE TABLE tab (id integer primary key, val text);",
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
 	w(Db,1).
