@@ -960,6 +960,11 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	key.mv_size = sizeof(u64);
 	key.mv_data = (void*)&pWal->index;
 
+	// Term/evnum must always be increasing
+	if ((pWal->inProgressTerm > 0 && pWal->inProgressTerm < pWal->lastCompleteTerm) ||
+		(pWal->inProgressEvnum > 0 && pWal->inProgressEvnum < pWal->lastCompleteEvnum))
+		return SQLITE_ERROR;
+
 	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Fragment,CompressedPage/binary>>}
 	for(p=pList; p; p=p->pDirty)
 	{
