@@ -301,7 +301,8 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 						continue;
 					else
 					{
-						DBG((g_log,"Cant move to prev dup\r\n"));
+						DBG((g_log,"Cant move to prev dup, term=%llu, evnum=%llu,"
+							" limitterm=%llu, limitevnum=%llu\r\n",term,evnum,limitTerm,limitEvnum));
 						*piRead = 0;
 						break;
 					}
@@ -1127,7 +1128,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	{
 		if (isCommit)
 		{
-			DBG((g_log,"Commit fct=%llu, fcev=%llu, lct=%llu, lcev=%llu, int=%llu, inev=%llu\n",
+			DBG((g_log,"Commit actor=%llu fct=%llu, fcev=%llu, lct=%llu, lcev=%llu, int=%llu, inev=%llu\n",
+				pWal->index,
 				pWal->firstCompleteTerm, pWal->firstCompleteEvnum, pWal->lastCompleteTerm,
 				pWal->lastCompleteEvnum, pWal->inProgressTerm,pWal->inProgressEvnum));
 

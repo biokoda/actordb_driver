@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #define _TESTAPP_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
@@ -198,6 +198,8 @@ static int do_print(const char *pth, int what)
 			memcpy(&index, key.mv_data, sizeof(u64));
 			memcpy(&pgno, key.mv_data + sizeof(u64), sizeof(u32));
 
+			printf("pagesdb: actor=%llu, pgno=%u\n",index, pgno);
+
 			mdb_cursor_count(lm.cursorPages,&ndupl);
 
 			op = MDB_FIRST_DUP;
@@ -354,9 +356,9 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	conn.wal.rthreadId = pthread_self();
 
 	if (strcmp("termstore",actor) == 0 && strcmp("termstore",type) == 0)
-		sprintf(actorpth,"termstore-wal",actor,type);
+		sprintf(actorpth,"termstore",actor,type);
 	else
-		sprintf(actorpth,"actors/%s.%s-wal",actor,type);
+		sprintf(actorpth,"actors/%s.%s",actor,type);
 	if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL, &thr) == SQLITE_ERROR)
 	{
 		fprintf(stderr,"Can not open actor\n");
