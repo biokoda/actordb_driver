@@ -13,7 +13,8 @@ run_test_() ->
 	fun dbcopy/0,
 	fun checkpoint/0,
 	fun bigtrans/0,
-	fun bigtrans_check/0
+	fun bigtrans_check/0,
+	{timeout,25,fun async/0}
 	].
 
 
@@ -47,6 +48,33 @@ modes() ->
 	{ok,{[],[]}} = actordb_driver:exec_script({1,2},{<<"page12">>,<<"page">>},Blob),
 	{ok,{[<<"page12">>],[<<"page">>],[]}} = actordb_driver:exec_script({1,2,3},Blob),
 	ok.
+
+async() ->
+	?debugFmt("Running many async reads/writes for 20s",[]),
+	Pids = [element(1,spawn_monitor(fun() -> w(P) end)) || P <- lists:seq(1,100)],
+	receive
+		{'DOWN',_Monitor,_,_PID,Reason} ->
+			exit(Reason)
+	after 20000 ->
+		ok
+	end,
+	[exit(P,stop) || P <- Pids].
+
+w(N) ->
+	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N)),
+	Sql = "CREATE TABLE tab (id integer primary key, val text);",
+	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
+	w(Db,1).
+w(Db,C) ->
+	case C rem 10 of
+		0 ->
+			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'bbb');"],
+			{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>);
+		_ ->
+			{ok,_} = ?READ("select * from tab",Db)
+	end,
+	w(Db,C+1).
+
 
 dbcopy() ->
 	?INIT,
