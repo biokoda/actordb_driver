@@ -51,6 +51,9 @@ modes() ->
 
 async() ->
 	?debugFmt("Running many async reads/writes for 20s",[]),
+	ets:new(ops,[set,public,named_table,{write_concurrency,true}]),
+	ets:insert(ops,{w,0}),
+	ets:insert(ops,{r,0}),
 	Pids = [element(1,spawn_monitor(fun() -> w(P) end)) || P <- lists:seq(1,100)],
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
@@ -58,7 +61,8 @@ async() ->
 	after 20000 ->
 		ok
 	end,
-	[exit(P,stop) || P <- Pids].
+	[exit(P,stop) || P <- Pids],
+	?debugFmt("Reads: ~p, Writes: ~p",[ets:lookup(ops,r),ets:lookup(ops,w)]).
 
 w(N) ->
 	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N)),
@@ -66,12 +70,14 @@ w(N) ->
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
 	w(Db,1).
 w(Db,C) ->
-	case C rem 10 of
+	case C rem 5 of
 		0 ->
 			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'bbb');"],
-			{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>);
+			{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>),
+			ets:update_counter(ops,w,{2,1});
 		_ ->
-			{ok,_} = ?READ("select * from tab",Db)
+			{ok,_} = ?READ("select * from tab",Db),
+			ets:update_counter(ops,r,{2,1})
 	end,
 	w(Db,C+1).
 
