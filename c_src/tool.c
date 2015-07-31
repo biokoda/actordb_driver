@@ -7,6 +7,8 @@
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
 #include <dlfcn.h>
+#include <signal.h>
+#include <pthread.h>
 #endif
 
 #include <string.h>
@@ -356,7 +358,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	conn.wal.rthreadId = pthread_self();
 
 	if (strcmp("termstore",actor) == 0 && strcmp("termstore",type) == 0)
-		sprintf(actorpth,"termstore",actor,type);
+		sprintf(actorpth,"termstore");
 	else
 		sprintf(actorpth,"actors/%s.%s",actor,type);
 	if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL, &thr) == SQLITE_ERROR)

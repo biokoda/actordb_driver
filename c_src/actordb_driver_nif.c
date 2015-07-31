@@ -2437,7 +2437,7 @@ static ERL_NIF_TERM parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
 		}
 	}
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 
 	return atom_ok;
 }
@@ -2483,7 +2483,7 @@ static ERL_NIF_TERM term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[1]); // evterm
 	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[2]); // votedfor
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(thread, -1, pd, item);
 }
 
@@ -2513,7 +2513,7 @@ static ERL_NIF_TERM get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	item->cmd.pid = pid;
 	item->cmd.arg = enif_make_copy(item->cmd.env,argv[2]);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(thread, -1, pd, item);
 }
 
@@ -2553,7 +2553,7 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	  item->cmd.arg2 = enif_make_copy(item->cmd.env, argv[5]);
 	}
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	// return enif_make_tuple2(env,push_command(conn->thread, item),db_conn);
 	return push_command(thread, -1, pd, item);
 }
@@ -2693,7 +2693,7 @@ static ERL_NIF_TERM tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
 	item->cmd.pid = pid;
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(-1,-1,pd,item);
 }
 
@@ -2703,7 +2703,7 @@ static ERL_NIF_TERM tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	qitem *item = command_create(-1,-1,pd);
 	item->cmd.type = cmd_tcp_reconnect;
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 
 	return push_command(-1,-1,pd,item);
 }
@@ -2728,7 +2728,7 @@ static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 
 	return push_command(-1,-1,pd, item);
 }
@@ -2787,7 +2787,7 @@ static ERL_NIF_TERM lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
 	enif_alloc_binary(sizeOriginal,&binOut);
 	rt = LZ4_decompress_safe((char*)binIn.data,(char*)binOut.data,sizeReadNum,sizeOriginal);
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	if (rt > 0)
 	{
 		ERL_NIF_TERM termout = enif_make_binary(env,&binOut);
@@ -2829,7 +2829,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 		item->cmd.pid = pid;
 		item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
 
-		enif_consume_timeslice(env,500);
+		enif_consume_timeslice(env,90);
 
 		push_command(i, -1, pd, item);
 	}
@@ -2861,7 +2861,7 @@ static ERL_NIF_TERM store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF
 		item->cmd.arg = enif_make_copy(item->cmd.env, argv[0]);
 		item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[1]);
 
-		enif_consume_timeslice(env,500);
+		enif_consume_timeslice(env,90);
 		push_command(i, -1, pd, item);
 	}
 	return atom_ok;
@@ -2897,7 +2897,7 @@ static ERL_NIF_TERM db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(res->thread, -1, pd, item);
 }
 
@@ -2933,7 +2933,7 @@ static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(res->thread, res->rthread, pd, item);
 }
 
@@ -2983,7 +2983,7 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(res->thread, -1, pd, item);
 }
 
@@ -3025,7 +3025,7 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 			item->cmd.conn = res;
 			enif_keep_resource(res);
 
-			enif_consume_timeslice(env,500);
+			enif_consume_timeslice(env,90);
 			return push_command(res->thread, -1, pd, item);
 		}
 		else
@@ -3078,7 +3078,7 @@ static ERL_NIF_TERM checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(res->thread, -1, pd, item);
 }
 
@@ -3116,7 +3116,7 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	if (argc == 5)
 	  item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // evnum
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(res->thread, res->rthread, pd, item);
 }
 
@@ -3180,7 +3180,7 @@ static ERL_NIF_TERM inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(res->thread, -1, pd, item);
 }
 
@@ -3213,7 +3213,7 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,500);
+	enif_consume_timeslice(env,90);
 	return push_command(res->thread, -1, pd, item);
 }
 
@@ -3358,12 +3358,12 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	for (i = 0; i < nstaticSqls; i++)
 		enif_get_string(env,param[i],staticSqls[i],256,ERL_NIF_LATIN1);
 
-	priv->db_connection_type = enif_open_resource_type(env, "actordb_driver_nif", "db_connection_type",
+	priv->db_connection_type = enif_open_resource_type(env, NULL, "db_connection_type",
 				destruct_connection, ERL_NIF_RT_CREATE, NULL);
 	if(!priv->db_connection_type)
 		return -1;
 
-	priv->iterate_type =  enif_open_resource_type(env, "actordb_driver_nif", "iterate_type",
+	priv->iterate_type =  enif_open_resource_type(env, NULL, "iterate_type",
 				destruct_iterate, ERL_NIF_RT_CREATE, NULL);
 	if(!priv->iterate_type)
 		return -1;

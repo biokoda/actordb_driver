@@ -674,7 +674,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	// if (pWal->inProgressTerm == 0)
 	// 	return SQLITE_OK;
 
-	DBG((g_log,"checkpoint %llu, %llu\r\n",pWal->firstCompleteTerm,pWal->firstCompleteEvnum));
+	DBG((g_log,"checkpoint actor=%llu, fct=%llu, fcev=%llu\r\n",pWal->index,
+		pWal->firstCompleteTerm,pWal->firstCompleteEvnum));
 
 	logKey.mv_data = logKeyBuf;
 	logKey.mv_size = sizeof(logKeyBuf);
@@ -689,6 +690,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 
 	while (pWal->firstCompleteEvnum < limitEvnum)
 	{
+		DBG((g_log,"checkpoint evnum=%llu\n",pWal->firstCompleteEvnum));
 		// For every page here
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
 		// Delete from
@@ -702,7 +704,10 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			MDB_val pgKey, pgVal;
 			u8 haveLeftover = 0;
 
+			logop = MDB_NEXT_DUP;
 			memcpy(&pgno, logVal.mv_data,sizeof(u32));
+
+			DBG((g_log,"checkpoint pgno=%u\n",pgno));
 
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
@@ -720,8 +725,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				u8 frag = *((u8*)pgVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
 				memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
-				// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
-				//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
+				DBG((g_log,"limit limitevnum %lld, curnum %lld, leftover %d\n",
+					limitEvnum, evnum,(int)haveLeftover));
 				if (evnum < limitEvnum)
 				{
 					// One write may have touched entirely different pages than another.
@@ -750,8 +755,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 
 				pgop = MDB_PREV_DUP;
 			}
-
-			logop = MDB_NEXT_DUP;
 		}
 		if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
 		{
