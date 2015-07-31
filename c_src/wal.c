@@ -993,7 +993,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 				put4byte(hdr+sizeof(u64)*2+sizeof(u32), 0);
 			else
 				put4byte(hdr+sizeof(u64)*2+sizeof(u32), nTruncate);
+			#ifndef _TESTAPP_
 			wal_page_hook(thr,pagesBuf+sizeof(u64)*2+1, page_size, hdr, sizeof(hdr));
+			#endif
 		}
 
 		memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
