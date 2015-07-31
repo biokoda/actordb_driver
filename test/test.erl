@@ -1,6 +1,6 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
--define(READTHREADS,2).
+-define(READTHREADS,1).
 -define(DBSIZE,4096*1024*128).
 -define(INIT,actordb_driver:init({{"."},{},?DBSIZE,?READTHREADS})).
 -define(READ,actordb_driver:exec_read).
@@ -72,12 +72,14 @@ w(N) ->
 	w(Db,1).
 w(Db,C) ->
 	case C rem 5 of
+		0 when C rem 20 == 0 ->
+			actordb_driver:checkpoint(Db,C-20);
 		0 ->
 			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'bbb');"],
 			{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>),
 			ets:update_counter(ops,w,{2,1});
 		_ ->
-			{ok,_} = ?READ("select * from tab",Db),
+			{ok,_} = ?READ("select * from tab limit 5",Db),
 			ets:update_counter(ops,r,{2,1})
 	end,
 	w(Db,C+1).
