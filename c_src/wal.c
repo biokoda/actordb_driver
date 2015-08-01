@@ -736,7 +736,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					if (haveLeftover || pgno > pWal->mxPage)
 					{
 						mdb_cursor_del(thr->cursorPages,0);
-						pWal->allPages--;
+						if (frag == 0)
+							pWal->allPages--;
 						ndupl--;
 						if (!ndupl)
 							break;
@@ -843,14 +844,16 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 			mdb_cursor_count(thr->cursorPages,&ndupl);
 			while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 			{
-				memcpy(&term, pgVal.mv_data,            sizeof(u64));
+				u8 frag = *((u8*)pgVal.mv_data+sizeof(u64)*2);
+				memcpy(&term, pgVal.mv_data,                 sizeof(u64));
 				memcpy(&evnum,(u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
 				// DBG((g_log,"progress term %lld, progress evnum %lld, curterm %lld, curnum %lld\n",
 				//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
 				if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
 				{
 					mdb_cursor_del(thr->cursorPages,0);
-					pWal->allPages--;
+					if (frag == 0)
+						pWal->allPages--;
 					ndupl--;
 					if (!ndupl)
 						break;
@@ -1017,6 +1020,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			if (rc == MDB_SUCCESS)
 			{
 				u64 evnum, evterm;
+				u8 frag = *((u8*)data.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, data.mv_data,               sizeof(u64));
 				memcpy(&evnum,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
 
@@ -1032,7 +1036,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 						DBG((g_log,"Cant delete!\n"));
 						break;
 					}
-					pWal->allPages--;
+					if (frag == 0)
+						pWal->allPages--;
 					ndupl--;
 					if (!ndupl)
 						break;
@@ -1041,6 +1046,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 						break;
 					memcpy(&evterm, data.mv_data,               sizeof(u64));
 					memcpy(&evnum,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
+					frag = *((u8*)data.mv_data+sizeof(u64)*2);
 				}
 			}
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
