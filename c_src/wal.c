@@ -782,21 +782,19 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				pgDelKey.mv_data = NULL;
 			}
 		}
-		// memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
-		// memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
-		// memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
-		// logKey.mv_data = logKeyBuf;
-		// logKey.mv_size = sizeof(logKeyBuf);
-		// if ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS)
-		// {
-		// 	DBG((g_log,"Unable set to key for cleanup %d\n",mrc));
-		// }
 
 		// move forward
 		if ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) != MDB_SUCCESS)
 		{
 			DBG((g_log,"Unable to move to next log %d\n",mrc));
 			logKey.mv_data = NULL;
+		}
+		else
+		{
+			// read next key data
+			memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
+			memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
+			memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
 		}
 
 		// delete prev key
@@ -815,10 +813,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		{
 			break;
 		}
-		// read next key data
-		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
-		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
-		memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
 
 		if (aindex != pWal->index)
 		{
@@ -827,6 +821,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		}
 		pWal->firstCompleteTerm = evterm;
 		pWal->firstCompleteEvnum = evnum;
+		DBG((g_log,"Checkpint fce now=%lld\n",(u64)evnum));
 	}
 
 	// no dirty pages, but will write info
@@ -1069,6 +1064,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
 			if (rc == MDB_SUCCESS)
 			{
+				MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 				u64 evnum, evterm;
 				u8 frag = *((u8*)data.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, data.mv_data,               sizeof(u64));
@@ -1081,11 +1077,24 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 					"Evterm=%llu, evnum=%llu, curterm=%llu, curevn=%llu, dupl=%ld\r\n",
 					evterm,evnum,pWal->inProgressTerm,pWal->inProgressEvnum,ndupl));
 
-					if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
+					if (pgDelKey.mv_data != NULL)
 					{
-						DBG((g_log,"Cant delete!\n"));
-						break;
+						if ((rc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
+						{
+							DBG((g_log,"Unable to cleanup page from pagedb %d\n",rc));
+							break;
+						}
+						pgDelKey.mv_data = NULL;
 					}
+					pgDelKey = key;
+					pgDelVal = data;
+
+					// if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
+					// {
+					// 	DBG((g_log,"Cant delete!\n"));
+					// 	break;
+					// }
+
 					if (frag == 0)
 						pWal->allPages--;
 					ndupl--;
@@ -1097,6 +1106,15 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 					memcpy(&evterm, data.mv_data,               sizeof(u64));
 					memcpy(&evnum,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
 					frag = *((u8*)data.mv_data+sizeof(u64)*2);
+				}
+				if (pgDelKey.mv_data != NULL)
+				{
+					if ((rc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
+					{
+						DBG((g_log,"Unable to cleanup page from pagedb %d\n",rc));
+						break;
+					}
+					pgDelKey.mv_data = NULL;
 				}
 			}
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
