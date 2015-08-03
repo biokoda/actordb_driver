@@ -8,10 +8,12 @@
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
-	[fun lz4/0,
+	[
+	fun lz4/0,
 	fun modes/0,
 	fun dbcopy/0,
 	fun checkpoint/0,
+	fun checkpoint1/0,
 	fun bigtrans/0,
 	fun bigtrans_check/0,
 	{timeout,25,fun async/0}
@@ -51,14 +53,15 @@ modes() ->
 
 async() ->
 	?debugFmt("Running many async reads/writes for 20s",[]),
+	application:ensure_all_started(crypto),
 	ets:new(ops,[set,public,named_table,{write_concurrency,true}]),
 	ets:insert(ops,{w,0}),
 	ets:insert(ops,{r,0}),
-	Pids = [element(1,spawn_monitor(fun() -> w(P) end)) || P <- lists:seq(1,100)],
+	Pids = [element(1,spawn_monitor(fun() -> w(P) end)) || P <- lists:seq(1,1)],
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
 			exit(Reason)
-	after 20000 ->
+	after 5000 ->
 		ok
 	end,
 	[exit(P,stop) || P <- Pids],
@@ -75,7 +78,7 @@ w(Db,C) ->
 		0 when C rem 20 == 0 ->
 			actordb_driver:checkpoint(Db,C-20);
 		0 ->
-			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'bbb');"],
+			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'",base64:encode(crypto:rand_bytes(1024*10)),"');"],
 			{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>),
 			ets:update_counter(ops,w,{2,1});
 		_ ->
@@ -168,6 +171,27 @@ checkpoint() ->
 	ok = actordb_driver:wal_rewind(Db,0),
 	?debugFmt("After rewind to 0=~p",[actordb_driver:actor_info("original",0)]),
 	ok.
+
+checkpoint1() ->
+	?INIT,
+	?debugFmt("Checkpoint test",[]),
+	application:ensure_all_started(crypto),
+	{ok,Db} = actordb_driver:open("ckpt_test",1),
+	Sql = "CREATE TABLE tab (id integer primary key, val text);",
+	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
+	checkpoint1(Db,2).
+checkpoint1(Db,C) when C >= 1000 ->
+	ok;
+checkpoint1(Db,C) ->
+	Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'",base64:encode(crypto:rand_bytes(1024*10)),"');"],
+	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>),
+	case C > 5 of
+		true when C rem 3 == 0 ->
+			ok = actordb_driver:checkpoint(Db,C-5);
+		_ ->
+			ok
+	end,
+	checkpoint1(Db,C+1).
 
 copy(Orig,Iter,F,Copy) ->
 	case actordb_driver:iterate_db(Orig,Iter) of

@@ -674,22 +674,22 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	// if (pWal->inProgressTerm == 0)
 	// 	return SQLITE_OK;
 
-	DBG((g_log,"checkpoint actor=%llu, fct=%llu, fcev=%llu\r\n",pWal->index,
+	DBG((g_log,"checkpoint actor=%llu, fct=%llu, fcev=%llu\n",pWal->index,
 		pWal->firstCompleteTerm,pWal->firstCompleteEvnum));
-
-	logKey.mv_data = logKeyBuf;
-	logKey.mv_size = sizeof(logKeyBuf);
-	memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
-	memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
-	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
-	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
-	{
-		DBG((g_log,"Key not found in log for checkpoint\n"));
-		return SQLITE_OK;
-	}
 
 	while (pWal->firstCompleteEvnum < limitEvnum)
 	{
+		logKey.mv_data = logKeyBuf;
+		logKey.mv_size = sizeof(logKeyBuf);
+		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
+		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+		{
+			DBG((g_log,"Key not found in log for checkpoint\n"));
+			return SQLITE_OK;
+		}
+
 		DBG((g_log,"checkpoint evnum=%llu\n",pWal->firstCompleteEvnum));
 		// For every page here
 		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
@@ -701,7 +701,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			u32 pgno;
 			size_t ndupl;
 			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-			MDB_val pgKey, pgVal;
+			MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
+			MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 			u8 haveLeftover = 0;
 
 			logop = MDB_NEXT_DUP;
@@ -725,8 +726,20 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				u8 frag = *((u8*)pgVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
 				memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
-				DBG((g_log,"limit limitevnum %lld, curnum %lld, leftover %d\n",
-					limitEvnum, evnum,(int)haveLeftover));
+				DBG((g_log,"limit limitevnum %lld, curnum %lld, leftover %d, dupl %lld, frag=%d\n",
+					limitEvnum, evnum,(int)haveLeftover, (i64)ndupl,(int)frag));
+				
+				if (pgDelKey.mv_data != NULL)
+				{
+					DBG((g_log,"DELETE\n"));
+					if ((mrc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
+					{
+						DBG((g_log,"Unable to cleanup page from pagedb %d\n",mrc));
+						break;
+					}
+					pgDelKey.mv_data = NULL;
+				}
+
 				if (evnum < limitEvnum)
 				{
 					// One write may have touched entirely different pages than another.
@@ -735,18 +748,23 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					// We can delete all pages only if DB shrank and pgno > max page.
 					if (haveLeftover || pgno > pWal->mxPage)
 					{
-						mdb_cursor_del(thr->cursorPages,0);
+						DBG((g_log,"SET DELETE\n"));
+						// mdb_cursor_del(thr->cursorPages,0);
+						pgDelVal = pgVal;
+						pgDelKey = pgKey;
 						if (frag == 0)
 							pWal->allPages--;
 					}
 					else
 					{
+						pgDelKey.mv_data = NULL;
 						if (frag == 0)
 							haveLeftover = 1;
 					}
 				}
 				else
 				{
+					pgDelKey.mv_data = NULL;
 					if (frag == 0)
 						haveLeftover = 1;
 				}
@@ -756,16 +774,51 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					break;
 				pgop = MDB_PREV_DUP;
 			}
+			if (pgDelKey.mv_data != NULL)
+			{
+				DBG((g_log,"DELETE\n"));
+				if ((mrc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
+				{
+					DBG((g_log,"Unable to cleanup page from pagedb %d\n",mrc));
+					break;
+				}
+				pgDelKey.mv_data = NULL;
+			}
 		}
-		if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
+		// memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
+		// memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
+		// memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
+		// logKey.mv_data = logKeyBuf;
+		// logKey.mv_size = sizeof(logKeyBuf);
+		// if ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS)
+		// {
+		// 	DBG((g_log,"Unable set to key for cleanup %d\n",mrc));
+		// }
+
+		// move forward
+		if ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) != MDB_SUCCESS)
 		{
-			DBG((g_log,"Unable to cleanup key from logdb\n"));
+			DBG((g_log,"Unable to move to next log %d\n",mrc));
+			logKey.mv_data = NULL;
 		}
-		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP) != MDB_SUCCESS)
+
+		// delete prev key
+		logVal.mv_data = logKeyBuf;
+		logVal.mv_size = sizeof(logKeyBuf);
+		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
+		if ((mrc = mdb_del(thr->txn,thr->logdb,&logVal,NULL)) != MDB_SUCCESS)
 		{
-			DBG((g_log,"Unable to move to next log\n"));
+			DBG((g_log,"Unable to cleanup key from logdb %d\n",mrc));
 			break;
 		}
+
+		if (logKey.mv_data == NULL)
+		{
+			break;
+		}
+		// read next key data
 		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
 		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
 		memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
