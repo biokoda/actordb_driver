@@ -728,12 +728,12 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
 				DBG((g_log,"limit limitevnum %lld, curnum %lld, leftover %d, dupl %lld, frag=%d\n",
 					limitEvnum, evnum,(int)haveLeftover, (i64)ndupl,(int)frag));
-				
+
 				if (pgDelKey.mv_data != NULL)
 				{
 					if ((mrc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
 					{
-						DBG((g_log,"Unable to cleanup page from pagedb %d\n",mrc));
+						DBG((g_log,"Unable to cleanup page from pagedb1 %d\n",mrc));
 						break;
 					}
 					pgDelKey.mv_data = NULL;
@@ -748,8 +748,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					if (haveLeftover || pgno > pWal->mxPage)
 					{
 						// mdb_cursor_del(thr->cursorPages,0);
-						pgDelVal = pgVal;
-						pgDelKey = pgKey;
+						mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
 						if (frag == 0)
 							pWal->allPages--;
 					}
@@ -776,7 +775,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			{
 				if ((mrc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
 				{
-					DBG((g_log,"Unable to cleanup page from pagedb %d\n",mrc));
+					DBG((g_log,"Unable to cleanup page from pagedb2 %d\n",mrc));
 					break;
 				}
 				pgDelKey.mv_data = NULL;
@@ -1086,8 +1085,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 						}
 						pgDelKey.mv_data = NULL;
 					}
-					pgDelKey = key;
-					pgDelVal = data;
+					mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
 
 					// if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
 					// {
