@@ -731,7 +731,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				
 				if (pgDelKey.mv_data != NULL)
 				{
-					DBG((g_log,"DELETE\n"));
 					if ((mrc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
 					{
 						DBG((g_log,"Unable to cleanup page from pagedb %d\n",mrc));
@@ -748,7 +747,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					// We can delete all pages only if DB shrank and pgno > max page.
 					if (haveLeftover || pgno > pWal->mxPage)
 					{
-						DBG((g_log,"SET DELETE\n"));
 						// mdb_cursor_del(thr->cursorPages,0);
 						pgDelVal = pgVal;
 						pgDelKey = pgKey;
@@ -776,7 +774,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			}
 			if (pgDelKey.mv_data != NULL)
 			{
-				DBG((g_log,"DELETE\n"));
 				if ((mrc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
 				{
 					DBG((g_log,"Unable to cleanup page from pagedb %d\n",mrc));
