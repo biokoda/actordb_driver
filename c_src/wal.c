@@ -738,9 +738,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 						mdb_cursor_del(thr->cursorPages,0);
 						if (frag == 0)
 							pWal->allPages--;
-						ndupl--;
-						if (!ndupl)
-							break;
 					}
 					else
 					{
@@ -754,6 +751,9 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 						haveLeftover = 1;
 				}
 
+				ndupl--;
+				if (!ndupl)
+					break;
 				pgop = MDB_PREV_DUP;
 			}
 		}
