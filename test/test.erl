@@ -57,11 +57,11 @@ async() ->
 	ets:new(ops,[set,public,named_table,{write_concurrency,true}]),
 	ets:insert(ops,{w,0}),
 	ets:insert(ops,{r,0}),
-	Pids = [element(1,spawn_monitor(fun() -> w(P) end)) || P <- lists:seq(1,1)],
+	Pids = [element(1,spawn_monitor(fun() -> w(P) end)) || P <- lists:seq(1,100)],
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
 			exit(Reason)
-	after 5000 ->
+	after 20000 ->
 		ok
 	end,
 	[exit(P,stop) || P <- Pids],
