@@ -146,6 +146,7 @@ struct db_thread
 	int nResFrames;
 	u8 forceCommit;
 	u8 isopen;
+	u8 isreadonly;
 
 	// All DB paths are relative to this thread path.
 	// This path is absolute and stems from app.config (main_db_folder, extra_db_folders).

@@ -78,7 +78,7 @@ w(Db,C) ->
 		0 when C rem 20 == 0 ->
 			actordb_driver:checkpoint(Db,C-20);
 		0 ->
-			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'",base64:encode(crypto:rand_bytes(1024*10)),"');"],
+			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'",base64:encode(crypto:rand_bytes(1024)),"');"],
 			{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>),
 			ets:update_counter(ops,w,{2,1});
 		_ ->

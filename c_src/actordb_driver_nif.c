@@ -1789,6 +1789,12 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 					column_names = enif_make_tuple_from_array(cmd->env, array, column_count);
 				}
+				if (!sqlite3_stmt_readonly(statement) && thread->isreadonly)
+				{
+					errat = "notreadonly";
+					rc = 1;
+					break;
+				}
 
 				rows = enif_make_list(cmd->env,0);
 				rowcount = 0;
@@ -2293,6 +2299,7 @@ static void *read_thread_func(void *arg)
 
 	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 	data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
+	data->isreadonly = 1;
 
 	while (1)
 	{
