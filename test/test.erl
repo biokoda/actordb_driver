@@ -49,6 +49,10 @@ modes() ->
 	{ok,Blob} = actordb_driver:open("myfile",0,blob),
 	{ok,{[],[]}} = actordb_driver:exec_script({1,2},{<<"page12">>,<<"page">>},Blob),
 	{ok,{[<<"page12">>],[<<"page">>],[]}} = actordb_driver:exec_script({1,2,3},Blob),
+
+	{ok,2,0} = actordb_driver:stmt_info(Db,"insert into tab values (?1,?2,3);"),
+	{ok,1,3} = actordb_driver:stmt_info(Db,"select * from tab where id=?1;"),
+
 	ok.
 
 async() ->

@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1350,6 +1350,59 @@ static ERL_NIF_TERM do_checkpoint(db_command *cmd, db_thread *thread)
 	return atom_ok;
 }
 
+static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
+{
+	int rc;
+	ErlNifBinary bin;
+	// const char *readpoint;
+	int ncols = 0, nparam = 0;
+	// ERL_NIF_TERM *colTypes;
+	ERL_NIF_TERM res;
+	sqlite3_stmt *statement = NULL;
+
+	enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&bin);
+	if (bin.size == 0)
+		return enif_make_int(cmd->env,0);
+
+	rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(bin.data), bin.size, &statement, NULL);
+	if (rc != SQLITE_OK)
+		return atom_false;
+
+	nparam = sqlite3_bind_parameter_count(statement);
+	ncols = sqlite3_column_count(statement);
+
+	// if (ncols <= 50)
+	// 	colTypes = alloca(sizeof(ERL_NIF_TERM)*ncols);
+	// else
+	// 	colTypes = malloc(sizeof(ERL_NIF_TERM)*ncols);
+
+	// for (i = 0; i < ncols; i++)
+	// {
+	// 	int type = sqlite3_column_type(statement, i);
+	// 	switch(type)
+	// 	{
+	// 		case SQLITE_INTEGER:
+	// 			colTypes[i] = enif_make_int(cmd->env,0);
+	// 		case SQLITE_FLOAT:
+	// 			colTypes[i] = enif_make_int(cmd->env,1);
+	// 		case SQLITE_BLOB:
+	// 			colTypes[i] = enif_make_int(cmd->env,2);
+	// 		case SQLITE_NULL:
+	// 			colTypes[i] = enif_make_int(cmd->env,3);
+	// 		case SQLITE_TEXT:
+	// 			colTypes[i] = enif_make_int(cmd->env,4);
+	// 		default:
+	// 			colTypes[i] = enif_make_int(cmd->env,type);
+	// 	}
+	// }
+
+	sqlite3_finalize(statement);
+
+	res = enif_make_tuple3(cmd->env,atom_ok,enif_make_int(cmd->env,nparam),enif_make_int(cmd->env,ncols));
+	// if (ncols > 50)
+	// 	free(colTypes);
+	return res;
+}
 
 static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 {
@@ -2046,6 +2099,8 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 		return do_actor_info(cmd,thread);
 	case cmd_wal_rewind:
 		return do_wal_rewind(cmd,thread);
+	case cmd_stmt_info:
+		return do_stmt_info(cmd,thread);
 	case cmd_interrupt:
 		return do_interrupt(cmd,thread);
 	case cmd_iterate:
@@ -2524,6 +2579,7 @@ static ERL_NIF_TERM get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	return push_command(thread, -1, pd, item);
 }
 
+
 // argv[0] - Ref
 // argv[1] - Pid to respond to
 // argv[2] - Relative path to db
@@ -2906,6 +2962,40 @@ static ERL_NIF_TERM db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 
 	enif_consume_timeslice(env,90);
 	return push_command(res->thread, -1, pd, item);
+}
+
+static ERL_NIF_TERM stmt_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	db_connection *res;
+	ErlNifPid pid;
+	qitem *item;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	DBG((g_log,"stmt_info\r\n"));
+
+	if (argc != 4)
+		return enif_make_badarg(env);
+
+	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		return enif_make_badarg(env);
+	if(!enif_is_ref(env, argv[1]))
+		return make_error_tuple(env, "invalid_ref");
+	if(!enif_get_local_pid(env, argv[2], &pid))
+		return make_error_tuple(env, "invalid_pid");
+	if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
+		return make_error_tuple(env, "sql not an iolist");
+
+	item = command_create(res->thread,res->rthread,pd);
+
+	item->cmd.type = cmd_stmt_info;
+	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
+	item->cmd.pid = pid;
+	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // sql
+	item->cmd.conn = res;
+	enif_keep_resource(res);
+
+	enif_consume_timeslice(env,90);
+	return push_command(res->thread, res->rthread, pd, item);
 }
 
 static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -3575,6 +3665,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"fsync",3,db_sync},
 	{"fsync",0,db_sync},
 	{"replication_done",1,replication_done},
+	{"stmt_info",4,stmt_info},
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

@@ -17,7 +17,7 @@
 		iterate_close/1, fsync_num/1,fsync/1,fsync/0,
 		replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
 		checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,
-		tcp_connect_async/4,tcp_connect_async/5,tcp_reconnect/0]).
+		tcp_connect_async/4,tcp_connect_async/5,tcp_reconnect/0, stmt_info/2]).
 
 % Every path is a write thread.
 % {{Path1,Path2,...},{StaticSql1,StaticSql2,...},MaxDbSize, ReadThreadsPerWriteThread}
@@ -71,6 +71,11 @@ store_prepared_table(Indexes,Sqls) when is_tuple(Indexes), is_tuple(Sqls), tuple
 checkpoint({actordb_driver, _Ref, Connection}, Evnum) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:checkpoint(Connection,Ref,self(),Evnum),
+	receive_answer(Ref).
+
+stmt_info({actordb_driver, _Ref, Connection}, Sql) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:stmt_info(Connection,Ref,self(),Sql),
 	receive_answer(Ref).
 
 parse_helper(Bin) ->

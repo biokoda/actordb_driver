@@ -37,8 +37,12 @@ term_store/4,
 actor_info/4,
 fsync_num/1,
 fsync/3,
-fsync/0
+fsync/0,
+stmt_info/4
 ]).
+
+stmt_info(_,_,_,_) ->
+	exit(nif_library_not_loaded).
 
 actor_info(_,_,_,_) ->
 	exit(nif_library_not_loaded).

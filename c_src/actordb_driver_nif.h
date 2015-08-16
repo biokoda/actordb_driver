@@ -233,7 +233,8 @@ typedef enum
 	cmd_checkpoint = 20,
 	cmd_term_store = 21,
 	cmd_actor_info = 22,
-	cmd_sync = 23
+	cmd_sync = 23,
+	cmd_stmt_info = 24
 } command_type;
 
 typedef struct
