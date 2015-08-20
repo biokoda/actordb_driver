@@ -276,58 +276,58 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 }
 
 
-static ERL_NIF_TERM do_store_prepared_table(db_command *cmd,db_thread *thread)
-{
-	// Delete old table of prepared statements and set new one.
-	const ERL_NIF_TERM *versTuple;
-	const ERL_NIF_TERM *sqlTuple;
-	const ERL_NIF_TERM *versRow;
-	const ERL_NIF_TERM *sqlRow;
-	int tupleSize,rowSize,i,j;
-	ErlNifBinary bin;
+// static ERL_NIF_TERM do_store_prepared_table(db_command *cmd,db_thread *thread)
+// {
+// 	// Delete old table of prepared statements and set new one.
+// 	const ERL_NIF_TERM *versTuple;
+// 	const ERL_NIF_TERM *sqlTuple;
+// 	const ERL_NIF_TERM *versRow;
+// 	const ERL_NIF_TERM *sqlRow;
+// 	int tupleSize,rowSize,i,j;
+// 	ErlNifBinary bin;
 
-	memset(thread->prepVersions,0,sizeof(thread->prepVersions));
-	for (i = 0; i < MAX_PREP_SQLS; i++)
-	{
-		for (j = 0; j < MAX_PREP_SQLS; j++)
-		{
-			free(thread->prepSqls[i][j]);
-			thread->prepSqls[i][j] = NULL;
-		}
-	}
+// 	memset(thread->prepVersions,0,sizeof(thread->prepVersions));
+// 	for (i = 0; i < MAX_PREP_SQLS; i++)
+// 	{
+// 		for (j = 0; j < MAX_PREP_SQLS; j++)
+// 		{
+// 			free(thread->prepSqls[i][j]);
+// 			thread->prepSqls[i][j] = NULL;
+// 		}
+// 	}
 
-	// {{1,2,2,0,0,..},{0,0,0,0,...}}
-	if (!enif_get_tuple(cmd->env, cmd->arg, &tupleSize, &versTuple))
-		return atom_false;
-	// {{"select....","insert into..."},{"select....","update ...."}}
-	if (!enif_get_tuple(cmd->env, cmd->arg1, &tupleSize, &sqlTuple))
-		return atom_false;
+// 	// {{1,2,2,0,0,..},{0,0,0,0,...}}
+// 	if (!enif_get_tuple(cmd->env, cmd->arg, &tupleSize, &versTuple))
+// 		return atom_false;
+// 	// {{"select....","insert into..."},{"select....","update ...."}}
+// 	if (!enif_get_tuple(cmd->env, cmd->arg1, &tupleSize, &sqlTuple))
+// 		return atom_false;
 
-	if (tupleSize > MAX_PREP_SQLS)
-		return atom_false;
+// 	if (tupleSize > MAX_PREP_SQLS)
+// 		return atom_false;
 
-	for (i = 0; i < tupleSize; i++)
-	{
-		if (!enif_get_tuple(cmd->env, versTuple[i], &rowSize, &versRow))
-			break;
-		if (!enif_get_tuple(cmd->env, sqlTuple[i], &rowSize, &sqlRow))
-			break;
+// 	for (i = 0; i < tupleSize; i++)
+// 	{
+// 		if (!enif_get_tuple(cmd->env, versTuple[i], &rowSize, &versRow))
+// 			break;
+// 		if (!enif_get_tuple(cmd->env, sqlTuple[i], &rowSize, &sqlRow))
+// 			break;
 
-		thread->prepSize = rowSize;
-		for (j = 0; j < rowSize; j++)
-		{
-			enif_get_int(cmd->env,versRow[j],&(thread->prepVersions[i][j]));
-			if (enif_is_list(cmd->env,sqlRow[j]) || enif_is_binary(cmd->env,sqlRow[j]))
-			{
-				enif_inspect_iolist_as_binary(cmd->env,sqlRow[j],&bin);
-				thread->prepSqls[i][j] = malloc(bin.size+1);
-				thread->prepSqls[i][j][bin.size] = 0;
-				memcpy(thread->prepSqls[i][j],bin.data,bin.size);
-			}
-		}
-	}
-	return atom_ok;
-}
+// 		thread->prepSize = rowSize;
+// 		for (j = 0; j < rowSize; j++)
+// 		{
+// 			enif_get_int(cmd->env,versRow[j],&(thread->prepVersions[i][j]));
+// 			if (enif_is_list(cmd->env,sqlRow[j]) || enif_is_binary(cmd->env,sqlRow[j]))
+// 			{
+// 				enif_inspect_iolist_as_binary(cmd->env,sqlRow[j],&bin);
+// 				thread->prepSqls[i][j] = malloc(bin.size+1);
+// 				thread->prepSqls[i][j][bin.size] = 0;
+// 				memcpy(thread->prepSqls[i][j],bin.data,bin.size);
+// 			}
+// 		}
+// 	}
+// 	return atom_ok;
+// }
 
 static const char *get_sqlite3_return_code_msg(int r)
 {
@@ -1680,9 +1680,12 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					// statement index
 					rowLen = (readpoint[skip+4] - '0')*10 + (readpoint[skip+5] - '0');
 
-					if (thread->prepSize <= i)
+					enif_mutex_lock(thread->pd->prepMutex);
+
+					if (thread->pd->prepSize <= i)
 					{
 						errat = "prepare";
+						enif_mutex_unlock(thread->pd->prepMutex);
 						break;
 					}
 
@@ -1695,26 +1698,30 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					}
 
 					if (cmd->conn->prepared[rowLen] == NULL || 
-						cmd->conn->prepVersions[rowLen] != thread->prepVersions[i][rowLen])
+						cmd->conn->prepVersions[rowLen] != thread->pd->prepVersions[i][rowLen])
 					{
-						if (thread->prepSqls[i][rowLen] == NULL)
+						if (thread->pd->prepSqls[i][rowLen] == NULL)
 						{
+							DBG((g_log,"Did not find sql in prepared statement\n"));
 							errat = "prepare";
+							enif_mutex_unlock(thread->pd->prepMutex);
 							break;
 						}
 						if (cmd->conn->prepared[rowLen] != NULL)
 							sqlite3_finalize(cmd->conn->prepared[rowLen]);
 
-						rc = sqlite3_prepare_v2(cmd->conn->db, thread->prepSqls[i][rowLen], -1, 
+						rc = sqlite3_prepare_v2(cmd->conn->db, thread->pd->prepSqls[i][rowLen], -1, 
 							&(cmd->conn->prepared[rowLen]), NULL);
 						if(rc != SQLITE_OK)
 						{
 							DBG((g_log,"Prepared statement failed\n"));
 							errat = "prepare";
+							enif_mutex_unlock(thread->pd->prepMutex);
 							break;
 						}
-						cmd->conn->prepVersions[rowLen] = thread->prepVersions[i][rowLen];
+						cmd->conn->prepVersions[rowLen] = thread->pd->prepVersions[i][rowLen];
 					}
+					enif_mutex_unlock(thread->pd->prepMutex);
 					readpoint += 7;
 					statement = cmd->conn->prepared[rowLen];
 				}
@@ -2087,8 +2094,8 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 	}
 	case cmd_exec_script:
 		return do_exec_script(cmd,thread);
-	case cmd_store_prepared:
-		return do_store_prepared_table(cmd,thread);
+	// case cmd_store_prepared:
+	// 	return do_store_prepared_table(cmd,thread);
 	case cmd_checkpoint:
 		return do_checkpoint(cmd,thread);
 	case cmd_sync:
@@ -2244,7 +2251,7 @@ static void thread_ex(db_thread *data, qitem *item)
 
 static void *thread_func(void *arg)
 {
-	int i,j,chkCounter = 0, syncListSize = 0;
+	int chkCounter = 0, syncListSize = 0;
 	db_thread* data = (db_thread*)arg;
 	qitem *syncList = NULL;
 
@@ -2335,21 +2342,13 @@ static void *thread_func(void *arg)
 	if (data->columnSpace)
 		free(data->columnSpace);
 
-	for (i = 0; i < MAX_PREP_SQLS; i++)
-	{
-		for (j = 0; j < MAX_PREP_SQLS; j++)
-		{
-			free(data->prepSqls[i][j]);
-			data->prepSqls[i][j] = NULL;
-		}
-	}
 	return NULL;
 }
 
 static void *read_thread_func(void *arg)
 {
 	db_thread* data = (db_thread*)arg;
-	int i,j,rc;
+	int rc;
 	data->isopen = 1;
 
 	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
@@ -2447,15 +2446,6 @@ static void *read_thread_func(void *arg)
 
 	if (data->columnSpace)
 		free(data->columnSpace);
-
-	for (i = 0; i < MAX_PREP_SQLS; i++)
-	{
-		for (j = 0; j < MAX_PREP_SQLS; j++)
-		{
-			free(data->prepSqls[i][j]);
-			data->prepSqls[i][j] = NULL;
-		}
-	}
 
 	queue_destroy(data->tasks);
 	data->isopen = 0;
@@ -2902,30 +2892,64 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 
 static ERL_NIF_TERM store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-	int i;
-	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
-	int nthreads = pd->nthreads;
+	const ERL_NIF_TERM *versTuple;
+	const ERL_NIF_TERM *sqlTuple;
+	const ERL_NIF_TERM *versRow;
+	const ERL_NIF_TERM *sqlRow;
+	int tupleSize,rowSize,i,j;
+	ErlNifBinary bin;
 
 	DBG((g_log,"store_prepared_table\n"));
 
 	if (argc != 2)
 		return enif_make_badarg(env);
 
-	if (!(enif_is_tuple(env,argv[0]) && enif_is_tuple(env,argv[1])))
-		return enif_make_badarg(env);
+	// {{1,2,2,0,0,..},{0,0,0,0,...}}
+	if (!enif_get_tuple(env, argv[0], &tupleSize, &versTuple))
+		return atom_false;
+	// {{"select....","insert into..."},{"select....","update ...."}}
+	if (!enif_get_tuple(env, argv[1], &tupleSize, &sqlTuple))
+		return atom_false;
 
-	for (i = 0; i < nthreads; i++)
+	if (tupleSize > MAX_PREP_SQLS)
+		return atom_false;
+
+	enif_mutex_lock(pd->prepMutex);
+	// Delete old table of prepared statements and set new one.
+	memset(pd->prepVersions,0,sizeof(pd->prepVersions));
+	for (i = 0; i < MAX_PREP_SQLS; i++)
 	{
-		item = command_create(i,-1,pd);
-
-		item->cmd.type = cmd_store_prepared;
-		item->cmd.arg = enif_make_copy(item->cmd.env, argv[0]);
-		item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[1]);
-
-		enif_consume_timeslice(env,90);
-		push_command(i, -1, pd, item);
+		for (j = 0; j < MAX_PREP_SQLS; j++)
+		{
+			free(pd->prepSqls[i][j]);
+			pd->prepSqls[i][j] = NULL;
+		}
 	}
+
+	for (i = 0; i < tupleSize; i++)
+	{
+		if (!enif_get_tuple(env, versTuple[i], &rowSize, &versRow))
+			break;
+		if (!enif_get_tuple(env, sqlTuple[i], &rowSize, &sqlRow))
+			break;
+
+		pd->prepSize = rowSize;
+		for (j = 0; j < rowSize; j++)
+		{
+			enif_get_int(env,versRow[j],&(pd->prepVersions[i][j]));
+			if (enif_is_list(env,sqlRow[j]) || enif_is_binary(env,sqlRow[j]))
+			{
+				enif_inspect_iolist_as_binary(env,sqlRow[j],&bin);
+				pd->prepSqls[i][j] = malloc(bin.size+1);
+				pd->prepSqls[i][j][bin.size] = 0;
+				memcpy(pd->prepSqls[i][j],bin.data,bin.size);
+			}
+		}
+	}
+	enif_mutex_unlock(pd->prepMutex);
+	enif_consume_timeslice(env,99);
+	DBG((g_log,"store_prepared_table done\n"));
 	return atom_ok;
 }
 
@@ -3486,6 +3510,8 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		return -1;
 	}
 
+	priv->prepMutex = enif_mutex_create("prepmutex");
+
 	DBG((g_log,"Driver starting w=%d, r=%d threads. Dbsize %llu\n",
 		priv->nthreads,priv->nReadThreads,dbsize));
 
@@ -3587,7 +3613,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 static void on_unload(ErlNifEnv* env, void* pd)
 {
-	int i,k;
+	int i,j,k;
 	priv_data *priv = (priv_data*)pd;
 	int nthreads = priv->nthreads;
 
@@ -3620,6 +3646,15 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			}
 		}
 	}
+	for (i = 0; i < MAX_PREP_SQLS; i++)
+	{
+		for (j = 0; j < MAX_PREP_SQLS; j++)
+		{
+			free(priv->prepSqls[i][j]);
+			priv->prepSqls[i][j] = NULL;
+		}
+	}
+	enif_mutex_destroy(priv->prepMutex);
 	free(priv->wtasks);
 	free(priv->rtasks);
 	free(priv->tids);

@@ -53,6 +53,7 @@ struct priv_data
 	u64 *syncNumbers;
 
 	#ifndef _TESTAPP_
+	ErlNifMutex *prepMutex;
 	ErlNifMutex **thrMutexes;
 	ErlNifTid *tids;    // tids for every write thread
 	ErlNifTid *rtids;    // tids for every read thread
@@ -60,6 +61,10 @@ struct priv_data
 	ErlNifResourceType *db_backup_type;
 	ErlNifResourceType *iterate_type;
 	#endif
+
+	int prepSize;
+	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
+	char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
 };
 
 struct Wal {
@@ -156,10 +161,6 @@ struct db_thread
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
 
-	// Prepared statements. 2d array (for every type, list of sqls and versions)
-	int prepSize;
-	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
-	char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
 	priv_data *pd;
 };
 
