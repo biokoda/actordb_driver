@@ -2919,7 +2919,6 @@ static ERL_NIF_TERM store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF
 	{
 		item = command_create(i,-1,pd);
 
-		/* command */
 		item->cmd.type = cmd_store_prepared;
 		item->cmd.arg = enif_make_copy(item->cmd.env, argv[0]);
 		item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[1]);

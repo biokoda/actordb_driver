@@ -510,6 +510,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		{
 			// set mxPage to highest pgno we find.
 			iter->pgnoPos = iter->mxPage = 0;
+			DBG((g_log,"Iterate rsterm=%llu rsevnum=%llu\n",readSafeTerm,readSafeEvnum));
 		}
 		iter->started = 1;
 	}
@@ -603,7 +604,16 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		else
 		{
 			u64 aindex;
-			memcpy(&aindex, logKey.mv_data,              sizeof(u64));
+
+			rc = mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
+			if (rc != MDB_SUCCESS)
+			{
+				*done = 1;
+				return 0;
+			}
+			memcpy(&aindex,       logKey.mv_data,              sizeof(u64));
+			memcpy(&iter->evterm, logKey.mv_data+sizeof(u64),  sizeof(u64));
+			memcpy(&iter->evnum,  logKey.mv_data+sizeof(u64)*2,sizeof(u64));
 			if (aindex != pWal->index)
 			{
 				*done = 1;
