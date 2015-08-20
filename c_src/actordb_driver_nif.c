@@ -1354,9 +1354,7 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
 {
 	int rc;
 	ErlNifBinary bin;
-	// const char *readpoint;
 	int ncols = 0, nparam = 0;
-	// ERL_NIF_TERM *colTypes;
 	ERL_NIF_TERM res;
 	sqlite3_stmt *statement = NULL;
 
@@ -1364,43 +1362,47 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
 	if (bin.size == 0)
 		return enif_make_int(cmd->env,0);
 
-	rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(bin.data), bin.size, &statement, NULL);
+	if (bin.size >= 6 && bin.data[0] == '#' && (bin.data[1] == 'r' || bin.data[1] == 'w'))
+	{
+		int i,rowLen;
+
+		i = (bin.data[2] - '0')*10 + (bin.data[3] - '0');
+		rowLen = (bin.data[4] - '0')*10 + (bin.data[5] - '0');
+
+		enif_mutex_lock(thread->pd->prepMutex);
+
+		if (thread->pd->prepSize <= i)
+		{
+			enif_mutex_unlock(thread->pd->prepMutex);
+			return atom_false;
+		}
+		
+		if (thread->pd->prepSqls[i][rowLen] == NULL)
+		{
+			DBG((g_log,"Did not find sql in prepared statement\n"));
+			enif_mutex_unlock(thread->pd->prepMutex);
+			return atom_false;
+		}
+
+		rc = sqlite3_prepare_v2(cmd->conn->db, thread->pd->prepSqls[i][rowLen], -1, &statement, NULL);
+		
+		enif_mutex_unlock(thread->pd->prepMutex);
+	}
+	else
+	{
+		rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(bin.data), bin.size, &statement, NULL);
+	}
+
 	if (rc != SQLITE_OK)
 		return atom_false;
 
 	nparam = sqlite3_bind_parameter_count(statement);
 	ncols = sqlite3_column_count(statement);
 
-	// if (ncols <= 50)
-	// 	colTypes = alloca(sizeof(ERL_NIF_TERM)*ncols);
-	// else
-	// 	colTypes = malloc(sizeof(ERL_NIF_TERM)*ncols);
-
-	// for (i = 0; i < ncols; i++)
-	// {
-	// 	int type = sqlite3_column_type(statement, i);
-	// 	switch(type)
-	// 	{
-	// 		case SQLITE_INTEGER:
-	// 			colTypes[i] = enif_make_int(cmd->env,0);
-	// 		case SQLITE_FLOAT:
-	// 			colTypes[i] = enif_make_int(cmd->env,1);
-	// 		case SQLITE_BLOB:
-	// 			colTypes[i] = enif_make_int(cmd->env,2);
-	// 		case SQLITE_NULL:
-	// 			colTypes[i] = enif_make_int(cmd->env,3);
-	// 		case SQLITE_TEXT:
-	// 			colTypes[i] = enif_make_int(cmd->env,4);
-	// 		default:
-	// 			colTypes[i] = enif_make_int(cmd->env,type);
-	// 	}
-	// }
-
 	sqlite3_finalize(statement);
 
 	res = enif_make_tuple3(cmd->env,atom_ok,enif_make_int(cmd->env,nparam),enif_make_int(cmd->env,ncols));
-	// if (ncols > 50)
-	// 	free(colTypes);
+	
 	return res;
 }
 
