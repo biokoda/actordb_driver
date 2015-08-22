@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -207,7 +207,7 @@ void fail_send(int i,priv_data *priv)
 {
 	// tell control thread to create new connections for position i
 	qitem *item = command_create(-1,-1,priv);
-	DBG((g_log,"FAIL SEND!\n"));
+	DBG("FAIL SEND!");
 	item->cmd.type = cmd_tcp_connect;
 	item->cmd.arg3 = enif_make_int(item->cmd.env,i);
 	push_command(-1,-1, priv, item);
@@ -460,8 +460,16 @@ static void destruct_connection(ErlNifEnv *env, void *arg)
 {
 	int rc;
 	db_connection *conn = (db_connection*)arg;
-	DBG((g_log,"destruct connection\n"));
-
+#ifdef _TESTDBG_
+	if (conn->wal.lastCompleteEvnum > 0)
+	{
+		DBG("destruct connection actor=%llu",conn->wal.index);
+	}
+	else
+	{
+		DBG("destruct memory connection");
+	}
+#endif
 	if (conn->packetPrefix)
 	{
 		free(conn->packetPrefix);
@@ -474,7 +482,7 @@ static void destruct_connection(ErlNifEnv *env, void *arg)
 		rc = sqlite3_close(conn->db);
 		if(rc != SQLITE_OK)
 		{
-			DBG((g_log,"ERROR! closing %d\n",rc));
+			DBG("ERROR! closing %d",rc);
 		}
 	}
 	enif_mutex_destroy(conn->wal.mtx);
@@ -503,7 +511,7 @@ static void destruct_iterate(ErlNifEnv *env, void *arg)
 	iterate_resource *res = (iterate_resource*)arg;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"destruct iterate.\n"));
+	DBG("destruct iterate.");
 	if (res->closed)
 		return;
 
@@ -591,7 +599,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 		sqlite3WalOpen(NULL, NULL, filename, 0, 0, NULL, thread);
 	}
 
-	DBG((g_log,"opened new thread=%d name=%s mode=%s.\n",thread->index,filename,mode));
+	DBG("opened new thread=%d name=%s mode=%s.",thread->index,filename,mode);
 	result = enif_make_resource(cmd->env, conn);
 
 	readThrIndex++;
@@ -726,8 +734,8 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 			break;
 		}
 
-		DBG((g_log,"Connecting to port %s:%d\n",
-			thread->control->addresses[pos],thread->control->ports[pos]));
+		DBG("Connecting to port %s:%d",
+			thread->control->addresses[pos],thread->control->ports[pos]);
 
 		// memset(&addr,0,sizeof(addr));
 		// addr.sin_family = AF_INET;
@@ -901,7 +909,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 	if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
 	{
 		dorel = 1;
-		DBG((g_log,"Create iterate %d\n",(int)cmd->conn->checkpointLock));
+		DBG("Create iterate %d",(int)cmd->conn->checkpointLock);
 
 		if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evtermFrom))
 			return enif_make_badarg(cmd->env);
@@ -934,7 +942,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 	// 4 pages of buffer size
 	// This might contain many more actual db pages because data is compressed
 	nfilled = wal_iterate(&cmd->conn->wal, iter, buf, PAGE_BUFF_SIZE, hdrbuf, &done);
-	DBG((g_log,"nfilled %d\n",nfilled));
+	DBG("nfilled %d",nfilled);
 
 	if (nfilled > 0)
 	{
@@ -958,7 +966,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 
 	if (nfilled == 0 && done == 1)
 	{
-		DBG((g_log,"RET DONE\n"));
+		DBG("RET DONE");
 		if (mismatch)
 			return enif_make_tuple2(cmd->env, atom_ok, enif_make_uint64(cmd->env,evterm));
 		return atom_done;
@@ -988,7 +996,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&limitEvnum);
 
-	DBG((g_log,"do_wal_rewind\r\n"));
+	DBG("do_wal_rewind");
 
 	// if limitEvnum == 0, this means delete all pages for actor.
 	if (limitEvnum < pWal->firstCompleteEvnum && limitEvnum > 0)
@@ -996,7 +1004,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
 	{
-		DBG((g_log,"undo before rewind, %llu, %llu\n",pWal->inProgressTerm, pWal->inProgressEvnum));
+		DBG("undo before rewind, %llu, %llu",pWal->inProgressTerm, pWal->inProgressEvnum);
 		doundo(&cmd->conn->wal, NULL, NULL, 1);
 	}
 
@@ -1009,8 +1017,8 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS && limitEvnum > 0)
 	{
-		DBG((g_log,"Key not found in log for rewind %llu %llu\n",
-			pWal->lastCompleteTerm,pWal->lastCompleteEvnum));
+		DBG("Key not found in log for rewind %llu %llu",
+			pWal->lastCompleteTerm,pWal->lastCompleteEvnum);
 		return atom_false;
 	}
 
@@ -1031,7 +1039,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 			MDB_val pgKey, pgVal;
 
 			memcpy(&pgno, logVal.mv_data,sizeof(u32));
-			DBG((g_log,"Moving to pgno=%u, evnum=%llu\r\n",pgno,pWal->lastCompleteEvnum));
+			DBG("Moving to pgno=%u, evnum=%llu",pgno,pWal->lastCompleteEvnum);
 
 			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
@@ -1048,7 +1056,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 			{
 				// memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
 				memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
-				DBG((g_log,"Deleting pgno=%u, evnum=%llu\r\n",pgno,evnum));
+				DBG("Deleting pgno=%u, evnum=%llu",pgno,evnum);
 				if (evnum >= limitEvnum)
 				{
 					mdb_cursor_del(thr->cursorPages,0);
@@ -1059,7 +1067,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 				pgop = MDB_PREV_DUP;
 			}
-			DBG((g_log,"Done looping pages %d\n",rc));
+			DBG("Done looping pages %d",rc);
 			// if reached notfound, this means we deleted all versions of page.
 			// If this is last page, we have shrunk DB.
 			if (rc == MDB_NOTFOUND && pgno == pWal->mxPage)
@@ -1067,11 +1075,11 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 		}
 		if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
 		{
-			DBG((g_log,"Rewind Unable to cleanup key from logdb\n"));
+			DBG("Rewind Unable to cleanup key from logdb");
 		}
 		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) != MDB_SUCCESS)
 		{
-			DBG((g_log,"Rewind Unable to move to next log\n"));
+			DBG("Rewind Unable to move to next log");
 			break;
 		}
 		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
@@ -1080,7 +1088,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 		if (aindex != pWal->index)
 		{
-			DBG((g_log,"Rewind Reached another actor=%llu, me=%llu\n",aindex,pWal->index));
+			DBG("Rewind Reached another actor=%llu, me=%llu",aindex,pWal->index);
 			break;
 		}
 		pWal->lastCompleteTerm = evterm;
@@ -1110,7 +1118,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 		pWal->mxPage = 0;
 		pWal->allPages = 0;
 	}
-	DBG((g_log,"evterm = %llu, evnum=%llu\r\n",pWal->lastCompleteTerm, pWal->lastCompleteEvnum));
+	DBG("evterm = %llu, evnum=%llu",pWal->lastCompleteTerm, pWal->lastCompleteEvnum);
 	// no dirty pages, but will write info
 	sqlite3WalFrames(pWal, SQLITE_DEFAULT_PAGE_SIZE, NULL, pWal->mxPage, 1, 0);
 	pWal->changed = 1;
@@ -1199,7 +1207,7 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr)
 			u64 firstCompleteTerm,firstCompleteEvnum,lastCompleteTerm;
 			u64 lastCompleteEvnum,inProgressTerm,inProgressEvnum, currentTerm;
 
-			// DBG((g_log,"Size=%zu, should=%lu\n",data.mv_size, sizeof(u64)*7+2+sizeof(u32)));
+			// DBG("Size=%zu, should=%lu",data.mv_size, sizeof(u64)*7+2+sizeof(u32));
 			if (data.mv_size < sizeof(u64)*7+2+sizeof(u32))
 				return atom_error;
 
@@ -1314,7 +1322,7 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 		}
 		else
 		{
-			DBG((g_log,"Unable to decompress inject page!! %ld\r\n",bin.size));
+			DBG("Unable to decompress inject page!! %ld",bin.size);
 			return make_error_tuple(cmd->env,"cant_decompress");
 		}
 	}
@@ -1323,7 +1331,7 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 	cmd->conn->doReplicate = doreplicate;
 	if (rc != SQLITE_OK)
 	{
-		DBG((g_log,"Unable to write inject page\r\n"));
+		DBG("Unable to write inject page");
 		return make_error_tuple(cmd->env,"cant_inject");
 	}
 	enif_mutex_lock(pWal->mtx);
@@ -1379,7 +1387,7 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
 		
 		if (thread->pd->prepSqls[i][rowLen] == NULL)
 		{
-			DBG((g_log,"Did not find sql in prepared statement\n"));
+			DBG("Did not find sql in prepared statement");
 			enif_mutex_unlock(thread->pd->prepMutex);
 			return atom_false;
 		}
@@ -1434,8 +1442,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 	if ((cmd->conn->wal.inProgressTerm > 0 || cmd->conn->wal.inProgressEvnum > 0) && cmd->arg1)
 	{
-		DBG((g_log,"undo before exec, %llu, %llu\n",
-			cmd->conn->wal.inProgressTerm,cmd->conn->wal.inProgressEvnum));
+		DBG("undo before exec, %llu, %llu",
+			cmd->conn->wal.inProgressTerm,cmd->conn->wal.inProgressEvnum);
 		doundo(&cmd->conn->wal, NULL, NULL, 1);
 		// mdb_txn_abort(thread->wtxn);
 		// open_wtxn(thread);
@@ -1524,6 +1532,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				ERL_NIF_TERM termbin;
 				int actualsize;
 
+				DBG("BLOB STORAGE READ!");
+
 				results = enif_make_list(cmd->env,0);
 				sqlite3WalFindFrame(&cmd->conn->wal, pg.pgno, &foundFrame);
 				if (foundFrame)
@@ -1546,6 +1556,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			{
 				ErlNifBinary pageBody;
 				u32 commit = 0;
+
+				DBG("BLOB STORAGE WRITE!");
 				
 				// this is write
 				if (!enif_inspect_iolist_as_binary(cmd->env,listTop,&pageBody))
@@ -1559,8 +1571,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				if (tupleSize <= tuplePos+1)
 					commit = 1;
 
-				//DBG((g_log,"write blob page pos=%d mxpage=%u, commit=%u, sz=%d\n",
-					//tuplePos,mxPage,commit, pageBody.size));
+				//DBG("write blob page pos=%d mxpage=%u, commit=%u, sz=%d",
+					//tuplePos,mxPage,commit, pageBody.size);
 
 				if (sqlite3WalFrames(&cmd->conn->wal, pageBody.size, &pg, mxPage, commit, 0) != SQLITE_OK)
 					return make_error_tuple(cmd->env,"write_error");
@@ -1578,11 +1590,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	#ifdef _TESTDBG_
 		if (bin.size > 1024*10)
 		{
-			DBG((g_log,"Executing actor=%llu %.*s...\n",cmd->conn->wal.index, 1024*10,bin.data));
+			DBG("Executing actor=%llu %.*s...",cmd->conn->wal.index, 1024*10,bin.data);
 		}
 		else
 		{
-			DBG((g_log,"Executing actor=%llu %.*s\n",cmd->conn->wal.index,(int)bin.size,bin.data));
+			DBG("Executing actor=%llu %.*s",cmd->conn->wal.index,(int)bin.size,bin.data);
 		}
 	#endif
 		end = (char*)bin.data + bin.size;
@@ -1704,7 +1716,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					{
 						if (thread->pd->prepSqls[i][rowLen] == NULL)
 						{
-							DBG((g_log,"Did not find sql in prepared statement\n"));
+							DBG("Did not find sql in prepared statement");
 							errat = "prepare";
 							enif_mutex_unlock(thread->pd->prepMutex);
 							break;
@@ -1716,7 +1728,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 							&(cmd->conn->prepared[rowLen]), NULL);
 						if(rc != SQLITE_OK)
 						{
-							DBG((g_log,"Prepared statement failed\n"));
+							DBG("Prepared statement failed");
 							errat = "prepare";
 							enif_mutex_unlock(thread->pd->prepMutex);
 							break;
@@ -1733,18 +1745,18 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					// #ifdef _TESTDBG_
 					//     if (statementlen > 1024)
 					//     {
-					//         DBG((g_log,"Executing %.*s\n",1024,readpoint));
+					//         DBG("Executing %.*s",1024,readpoint);
 					//     }
 					//     else
 					//     {
-					//         DBG((g_log,"Executing %.*s\n",(int)statementlen,readpoint));
+					//         DBG("Executing %.*s",(int)statementlen,readpoint);
 					//     }
 					// #endif
 					rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, 
 						&statement, &readpoint);
 					if(rc != SQLITE_OK)
 					{
-						DBG((g_log,"Prepare statement failed\n"));
+						DBG("Prepare statement failed");
 						errat = "prepare";
 						sqlite3_finalize(statement);
 						break;
@@ -1880,7 +1892,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					rowcount++;
 				}
 			}
-			DBG((g_log,"exec rc=%d, rowcount=%d, column_count=%d, skip=%d\n", rc, rowcount, column_count,(int)skip));
+			DBG("exec rc=%d, rowcount=%d, column_count=%d, skip=%d", rc, rowcount, column_count,(int)skip);
 			if (rc > 0 && rc < 100)
 			{
 				errat = "step";
@@ -1918,7 +1930,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			tupleResult[tuplePos] = results;
 		}
 		tuplePos++;
-		DBG((g_log,"Tuple pos=%d, size=%d\n",tuplePos, tupleSize));
+		DBG("Tuple pos=%d, size=%d",tuplePos, tupleSize);
 	} while (tuplePos < tupleSize);
 
 	if (tupleResult && !(rc > 0 && rc < 100))
@@ -2064,7 +2076,7 @@ static ERL_NIF_TERM do_checkpoint_lock(db_command *cmd,db_thread *thread)
 	int lock;
 	enif_get_int(cmd->env,cmd->arg,&lock);
 
-	DBG((g_log,"Checkpoint lock now %d, lockin=%d.\n",cmd->conn->checkpointLock,lock));
+	DBG("Checkpoint lock now %d, lockin=%d.",cmd->conn->checkpointLock,lock);
 
 	if (lock > 0)
 		cmd->conn->checkpointLock++;
@@ -2221,7 +2233,7 @@ static MDB_txn* open_txn(db_thread *data, int flags)
 
 static void thread_ex(db_thread *data, qitem *item)
 {
-	DBG((g_log,"thread=%d command=%d.\n",data->index,item->cmd.type));
+	DBG("thread=%d command=%d.",data->index,item->cmd.type);
 
 	if (item->cmd.ref == 0)
 	{
@@ -2231,7 +2243,7 @@ static void thread_ex(db_thread *data, qitem *item)
 	else
 	{
 		ERL_NIF_TERM answer = make_answer(&item->cmd, evaluate_command(&item->cmd,data));
-		DBG((g_log,"thread=%d command done 1. pagesChanged=%d\n",data->index,data->pagesChanged));
+		DBG("thread=%d command done 1. pagesChanged=%d",data->index,data->pagesChanged);
 		// if (data->pagesChanged != pagesChanged)
 		if (data->forceCommit)
 		{
@@ -2248,7 +2260,7 @@ static void thread_ex(db_thread *data, qitem *item)
 		enif_release_resource(item->cmd.conn);
 	}
 
-	DBG((g_log,"thread=%d command done 2.\n",data->index));
+	DBG("thread=%d command done 2.",data->index);
 }
 
 static void *thread_func(void *arg)
@@ -2303,7 +2315,6 @@ static void *thread_func(void *arg)
 				break;
 		}
 
-		// printf("Queue size %d\r\n",queue_size(data->tasks));
 		thread_ex(data, item);
 
 		// Execute list of syncs if:
@@ -2333,7 +2344,7 @@ static void *thread_func(void *arg)
 	queue_destroy(data->tasks);
 	data->isopen = 0;
 
-	DBG((g_log,"thread=%d stopping.\n",data->index));
+	DBG("thread=%d stopping.",data->index);
 
 	if (data->control)
 	{
@@ -2360,7 +2371,7 @@ static void *read_thread_func(void *arg)
 	while (1)
 	{
 		qitem *item = queue_pop(data->tasks);
-		DBG((g_log,"rthread=%d command=%d.\n",data->index,item->cmd.type));
+		DBG("rthread=%d command=%d.",data->index,item->cmd.type);
 
 		if (item->cmd.type == cmd_stop)
 		{
@@ -2381,11 +2392,11 @@ static void *read_thread_func(void *arg)
 			}
 			if (!data->txn)
 			{
-				DBG((g_log,"Open read transaction\n"));
+				DBG("Open read transaction");
 				if (open_txn(data,MDB_RDONLY) == NULL)
 				{
 					ERL_NIF_TERM errterm;
-					DBG((g_log,"Can not open read transaction\n"));
+					DBG("Can not open read transaction");
 
 					errterm = make_error_tuple(item->cmd.env, "lmdb_unreadable_1");
 					enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, errterm));
@@ -2399,7 +2410,7 @@ static void *read_thread_func(void *arg)
 					break;
 				if ((rc = mdb_cursor_renew(data->txn, data->cursorLog)) != MDB_SUCCESS)
 				{
-					DBG((g_log,"Unable to renew cursor, reopening read txn\n"));
+					DBG("Unable to renew cursor, reopening read txn");
 					mdb_cursor_close(data->cursorLog);
 					mdb_cursor_close(data->cursorPages);
 					mdb_cursor_close(data->cursorInfo);
@@ -2407,7 +2418,7 @@ static void *read_thread_func(void *arg)
 					if (open_txn(data,MDB_RDONLY) == NULL)
 					{
 						ERL_NIF_TERM errterm;
-						DBG((g_log,"Unable to open read transaction\n"));
+						DBG("Unable to open read transaction");
 						data = NULL;
 
 						errterm = make_error_tuple(item->cmd.env, "lmdb_unreadable_2");
@@ -2440,11 +2451,11 @@ static void *read_thread_func(void *arg)
 			}
 			mdb_txn_reset(data->txn);
 
-			DBG((g_log,"rthread=%d command done 2.\n",data->index));
+			DBG("rthread=%d command done 2.",data->index);
 			queue_recycle(data->tasks,item);
 		}
 	}
-	DBG((g_log,"rthread=%d stopping.\n",data->index));
+	DBG("rthread=%d stopping.",data->index);
 
 	if (data->columnSpace)
 		free(data->columnSpace);
@@ -2503,7 +2514,7 @@ static ERL_NIF_TERM term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	db_connection *res = NULL;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"term_store\n"));
+	DBG("term_store");
 
 	if (argc != 3 && argc != 4)
 		return enif_make_badarg(env);
@@ -2548,7 +2559,7 @@ static ERL_NIF_TERM get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	u32 thread;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"get_actor_info\n"));
+	DBG("get_actor_info");
 
 	if (argc != 4)
 		return enif_make_badarg(env);
@@ -2584,7 +2595,7 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	u32 thread;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"db_open\n"));
+	DBG("db_open");
 
 	if(!(argc == 5 || argc == 6))
 		return enif_make_badarg(env);
@@ -2618,7 +2629,7 @@ static ERL_NIF_TERM sync_num(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	db_connection *res;
 
-	DBG((g_log,"sync_num\n"));
+	DBG("sync_num");
 
 	if (argc != 1)
 		return enif_make_badarg(env);
@@ -2654,7 +2665,7 @@ static ERL_NIF_TERM replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	ErlNifBinary bin;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"replicate_opts\n"));
+	DBG("replicate_opts");
 
 	if (!(argc == 3))
 		return enif_make_badarg(env);
@@ -2663,7 +2674,7 @@ static ERL_NIF_TERM replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	if (!enif_inspect_iolist_as_binary(env, argv[1], &bin))
 		return make_error_tuple(env, "not_iolist");
 
-	DBG((g_log,"do_replicate_opts %zu\n", bin.size));
+	DBG("do_replicate_opts %zu", bin.size);
 	if (res->packetPrefixSize < bin.size)
 	{
 		free(res->packetPrefix);
@@ -2716,7 +2727,7 @@ static ERL_NIF_TERM tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log, "tcp_connect\n"));
+	DBG( "tcp_connect");
 
 	if (!(argc == 6 || argc == 7))
 		return enif_make_badarg(env);
@@ -2769,7 +2780,7 @@ static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log, "interrupt\n"));
+	DBG( "interrupt");
 
 	if(argc != 1)
 		return enif_make_badarg(env);
@@ -2795,7 +2806,7 @@ static ERL_NIF_TERM lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM ar
 	int size;
 	ERL_NIF_TERM termbin;
 
-	// DBG((g_log, "lz4_compress\n"));
+	// DBG( "lz4_compress");
 
 	if (argc != 1)
 		return enif_make_badarg(env);
@@ -2821,7 +2832,7 @@ static ERL_NIF_TERM lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	int sizeReadNum;
 	int rt;
 
-	// DBG((g_log, "lz4_decompress\n"));
+	// DBG( "lz4_decompress");
 
 	if (argc != 2 && argc != 3)
 		return enif_make_badarg(env);
@@ -2864,7 +2875,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	int nthreads = pd->nthreads;
 
-	DBG((g_log, "all_tunnel_call\n"));
+	DBG( "all_tunnel_call");
 
 	if (argc != 3)
 		return enif_make_badarg(env);
@@ -2902,7 +2913,7 @@ static ERL_NIF_TERM store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF
 	int tupleSize,rowSize,i,j;
 	ErlNifBinary bin;
 
-	DBG((g_log,"store_prepared_table\n"));
+	DBG("store_prepared_table");
 
 	if (argc != 2)
 		return enif_make_badarg(env);
@@ -2951,7 +2962,7 @@ static ERL_NIF_TERM store_prepared_table(ErlNifEnv *env, int argc, const ERL_NIF
 	}
 	enif_mutex_unlock(pd->prepMutex);
 	enif_consume_timeslice(env,99);
-	DBG((g_log,"store_prepared_table done\n"));
+	DBG("store_prepared_table done");
 	return atom_ok;
 }
 
@@ -2962,7 +2973,7 @@ static ERL_NIF_TERM db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"Checkpoint\r\n"));
+	DBG("Checkpoint");
 
 	if (argc != 4)
 		return enif_make_badarg(env);
@@ -2996,7 +3007,7 @@ static ERL_NIF_TERM stmt_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"stmt_info\r\n"));
+	DBG("stmt_info");
 
 	if (argc != 4)
 		return enif_make_badarg(env);
@@ -3030,7 +3041,7 @@ static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"exec_read %d\n",argc));
+	DBG("exec_read %d",argc);
 
 	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
@@ -3067,7 +3078,7 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"exec_script %d\n",argc));
+	DBG("exec_script %d",argc);
 
 	if(argc != 7 && argc != 8)
 		return enif_make_badarg(env);
@@ -3117,7 +3128,7 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	u8 doit = 1;
 
-	DBG((g_log,"db_sync\n"));
+	DBG("db_sync");
 
 	if(argc != 3 && argc != 0)
 		return enif_make_badarg(env);
@@ -3178,7 +3189,7 @@ static ERL_NIF_TERM checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"checkpoint_lock\n"));
+	DBG("checkpoint_lock");
 
 	if(argc != 4)
 		return enif_make_badarg(env);
@@ -3216,7 +3227,7 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"iterate_db %d\n",argc));
+	DBG("iterate_db %d",argc);
 
 	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
@@ -3248,7 +3259,7 @@ static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"iterate_close %d\n",argc));
+	DBG("iterate_close %d",argc);
 
 	if(argc != 1)
 		return enif_make_badarg(env);
@@ -3275,7 +3286,7 @@ static ERL_NIF_TERM inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"inject_page\n"))
+	DBG("inject_page");
 
 	if(argc != 5)
 		return enif_make_badarg(env);
@@ -3313,7 +3324,7 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 
-	DBG((g_log,"wal_rewind\n"));
+	DBG("wal_rewind");
 
 	if(argc != 4)
 		return enif_make_badarg(env);
@@ -3436,7 +3447,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	// {{Path1,Path2,Path3,...},{StaticSql1,StaticSql2,StaticSql3,...}}
 	if (!enif_get_tuple(env,info,&i,&param))
 	{
-		DBG((g_log,"Param not tuple\n"));
+		DBG("Param not tuple");
 		return -1;
 	}
 
@@ -3508,14 +3519,13 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	if(enif_thread_create("db_connection", &(priv->tids[priv->nthreads]), 
 		thread_func, controlThread, NULL) != 0)
 	{
-		printf("Unable to create esqlite3 thread\r\n");
 		return -1;
 	}
 
 	priv->prepMutex = enif_mutex_create("prepmutex");
 
-	DBG((g_log,"Driver starting w=%d, r=%d threads. Dbsize %llu\n",
-		priv->nthreads,priv->nReadThreads,dbsize));
+	DBG("Driver starting w=%d, r=%d threads. Dbsize %llu",
+		priv->nthreads,priv->nReadThreads,dbsize);
 
 	for (i = 0; i < priv->nthreads; i++)
 	{
@@ -3594,7 +3604,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			{
 				if (enif_thread_create("wthr", &(priv->tids[i]), thread_func, curThread, NULL) != 0)
 				{
-					printf("Unable to create thread\r\n");
 					return -1;
 				}
 			}
@@ -3603,7 +3612,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 				if (enif_thread_create("rthr", &(priv->rtids[i*priv->nReadThreads+k]), 
 					read_thread_func, curThread, NULL) != 0)
 				{
-					printf("Unable to create thread\r\n");
 					return -1;
 				}
 			}
@@ -3636,7 +3644,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			}
 			else if (i >= 0)
 			{
-				DBG((g_log,"stop read\n"));
+				DBG("stop read");
 				// read thread
 				enif_thread_join((ErlNifTid)priv->rtids[i*priv->nReadThreads+k],NULL);
 			}
