@@ -2242,15 +2242,38 @@ static void thread_ex(db_thread *data, qitem *item)
 	}
 	else
 	{
-		ERL_NIF_TERM answer = make_answer(&item->cmd, evaluate_command(&item->cmd,data));
-		DBG("thread=%d command done 1. pagesChanged=%d",data->index,data->pagesChanged);
-		// if (data->pagesChanged != pagesChanged)
+		ERL_NIF_TERM res;
+		ERL_NIF_TERM answer;
+
+		// Only checkpoint command loops. This is because we must commit transaction
+		// after every log entry.
+		while (1)
+		{
+			res = evaluate_command(&item->cmd,data);
+
+			DBG("thread=%d command done 1. pagesChanged=%d",data->index,data->pagesChanged);
+
+			if (item->cmd.type == cmd_checkpoint && data->forceCommit)
+			{
+				mdb_txn_commit(data->txn);
+				data->forceCommit = 0;
+				data->txn = NULL;
+				if (open_txn(data,0) == NULL)
+					break;
+				continue;
+			}
+
+			break;
+		}
+
 		if (data->forceCommit)
 		{
 			data->forceCommit = 0;
 			mdb_txn_commit(data->txn);
 			data->txn = NULL;
 		}
+
+		answer = make_answer(&item->cmd, res);
 		enif_send(NULL, &item->cmd.pid, item->cmd.env, answer);
 		enif_clear_env(item->cmd.env);
 	}

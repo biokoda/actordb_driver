@@ -831,6 +831,11 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		pWal->firstCompleteTerm = evterm;
 		pWal->firstCompleteEvnum = evnum;
 		DBG("Checkpint fce now=%lld",(u64)evnum);
+
+		// Do not move over more than 1 log entry at once.
+		// LMDB does not like doing more than one. If we were to do multiple and they had the same 
+		// pgno. It would try to delete something it has already deleted.
+		break;
 	}
 
 	// no dirty pages, but will write info
