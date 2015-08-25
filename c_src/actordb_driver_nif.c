@@ -1011,90 +1011,6 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	logKey.mv_data = logKeyBuf;
 	logKey.mv_size = sizeof(logKeyBuf);
 
-	memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
-	memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
-	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
-
-	if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS && limitEvnum > 0)
-	{
-		DBG("Key not found in log for rewind %llu %llu",
-			pWal->lastCompleteTerm,pWal->lastCompleteEvnum);
-		return atom_false;
-	}
-
-	while (rc == MDB_SUCCESS && pWal->lastCompleteEvnum >= limitEvnum)
-	{
-		// size_t ndupl;
-
-		// mdb_cursor_count(thr->cursorLog,&ndupl);
-		// For every page here
-		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
-		// Delete from
-		// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
-		logop = MDB_LAST_DUP;
-		while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
-		{
-			u32 pgno;
-			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-			MDB_val pgKey, pgVal;
-
-			memcpy(&pgno, logVal.mv_data,sizeof(u32));
-			DBG("Moving to pgno=%u, evnum=%llu",pgno,pWal->lastCompleteEvnum);
-
-			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
-			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
-			pgKey.mv_data = pagesKeyBuf;
-			pgKey.mv_size = sizeof(pagesKeyBuf);
-
-			pgop = MDB_LAST_DUP;
-			logop = MDB_PREV_DUP;
-			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
-			{
-				continue;
-			}
-			while ((rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop)) == MDB_SUCCESS)
-			{
-				// memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
-				memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
-				DBG("Deleting pgno=%u, evnum=%llu",pgno,evnum);
-				if (evnum >= limitEvnum)
-				{
-					mdb_cursor_del(thr->cursorPages,0);
-					pWal->allPages--;
-				}
-				else
-					break;
-
-				pgop = MDB_PREV_DUP;
-			}
-			DBG("Done looping pages %d",rc);
-			// if reached notfound, this means we deleted all versions of page.
-			// If this is last page, we have shrunk DB.
-			if (rc == MDB_NOTFOUND && pgno == pWal->mxPage)
-				pWal->mxPage--;
-		}
-		if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
-		{
-			DBG("Rewind Unable to cleanup key from logdb");
-		}
-		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) != MDB_SUCCESS)
-		{
-			DBG("Rewind Unable to move to next log");
-			break;
-		}
-		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
-		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
-		memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
-
-		if (aindex != pWal->index)
-		{
-			DBG("Rewind Reached another actor=%llu, me=%llu",aindex,pWal->index);
-			break;
-		}
-		pWal->lastCompleteTerm = evterm;
-		pWal->lastCompleteEvnum = evnum;
-		rc = MDB_SUCCESS;
-	}
 	if (limitEvnum == 0)
 	{
 		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
@@ -1117,6 +1033,112 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 		}
 		pWal->mxPage = 0;
 		pWal->allPages = 0;
+
+		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
+		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) == MDB_SUCCESS)
+		{
+			u64 aindex;
+
+			mdb_cursor_del(thr->cursorLog, MDB_NODUPDATA);
+			while ((mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) == MDB_SUCCESS)
+			{
+				memcpy(&aindex, logKey.mv_data, sizeof(u64));
+				if (pWal->index != aindex)
+					break;
+				mdb_cursor_del(thr->cursorPages, MDB_NODUPDATA);
+			}
+			pWal->firstCompleteTerm = pWal->firstCompleteTerm = pWal->lastCompleteTerm = 
+			pWal->lastCompleteEvnum = 0;
+		}
+	}
+	else
+	{
+		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
+
+		if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS && limitEvnum > 0)
+		{
+			DBG("Key not found in log for rewind %llu %llu",
+				pWal->lastCompleteTerm,pWal->lastCompleteEvnum);
+			return atom_false;
+		}
+
+		while (rc == MDB_SUCCESS && pWal->lastCompleteEvnum >= limitEvnum)
+		{
+			// size_t ndupl;
+
+			// mdb_cursor_count(thr->cursorLog,&ndupl);
+			// For every page here
+			// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
+			// Delete from
+			// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
+			logop = MDB_LAST_DUP;
+			while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+			{
+				u32 pgno;
+				u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+				MDB_val pgKey, pgVal;
+
+				memcpy(&pgno, logVal.mv_data,sizeof(u32));
+				DBG("Moving to pgno=%u, evnum=%llu",pgno,pWal->lastCompleteEvnum);
+
+				memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
+				memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
+				pgKey.mv_data = pagesKeyBuf;
+				pgKey.mv_size = sizeof(pagesKeyBuf);
+
+				pgop = MDB_LAST_DUP;
+				logop = MDB_PREV_DUP;
+				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+				{
+					continue;
+				}
+				while ((rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop)) == MDB_SUCCESS)
+				{
+					// memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
+					memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
+					DBG("Deleting pgno=%u, evnum=%llu",pgno,evnum);
+					if (evnum >= limitEvnum)
+					{
+						mdb_cursor_del(thr->cursorPages,0);
+						pWal->allPages--;
+					}
+					else
+						break;
+
+					pgop = MDB_PREV_DUP;
+				}
+				DBG("Done looping pages %d",rc);
+				// if reached notfound, this means we deleted all versions of page.
+				// If this is last page, we have shrunk DB.
+				if (rc == MDB_NOTFOUND && pgno == pWal->mxPage)
+					pWal->mxPage--;
+			}
+			if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
+			{
+				DBG("Rewind Unable to cleanup key from logdb");
+			}
+			if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) != MDB_SUCCESS)
+			{
+				DBG("Rewind Unable to move to next log");
+				break;
+			}
+			memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
+			memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
+			memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
+
+			if (aindex != pWal->index)
+			{
+				DBG("Rewind Reached another actor=%llu, me=%llu",aindex,pWal->index);
+				break;
+			}
+			pWal->lastCompleteTerm = evterm;
+			pWal->lastCompleteEvnum = evnum;
+			rc = MDB_SUCCESS;
+		}
 	}
 	DBG("evterm = %llu, evnum=%llu",pWal->lastCompleteTerm, pWal->lastCompleteEvnum);
 	// no dirty pages, but will write info
@@ -1353,9 +1375,10 @@ static ERL_NIF_TERM do_checkpoint(db_command *cmd, db_thread *thread)
 	if (con->wal.firstCompleteEvnum >= evnum || con->checkpointLock)
 		return atom_ok;
 
-	checkpoint(&con->wal, evnum);
-
-	return atom_ok;
+	if (checkpoint(&con->wal, evnum) == SQLITE_OK)
+		return atom_ok;
+	else
+		return atom_false;
 }
 
 static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
@@ -2253,9 +2276,19 @@ static void thread_ex(db_thread *data, qitem *item)
 
 			DBG("thread=%d command done 1. pagesChanged=%d",data->index,data->pagesChanged);
 
-			if (item->cmd.type == cmd_checkpoint && data->forceCommit)
+			if (data->forceCommit == 2)
 			{
-				mdb_txn_commit(data->txn);
+				mdb_txn_abort(data->txn);
+				data->txn = NULL;
+				// if (open_txn(data,0) == NULL)
+				// 	break;
+				data->forceCommit = 0;
+			}
+
+			if (item->cmd.type == cmd_checkpoint && data->forceCommit && res == atom_ok)
+			{
+				if (mdb_txn_commit(data->txn) != MDB_SUCCESS)
+					mdb_txn_abort(data->txn);
 				data->forceCommit = 0;
 				data->txn = NULL;
 				if (open_txn(data,0) == NULL)
@@ -2269,7 +2302,8 @@ static void thread_ex(db_thread *data, qitem *item)
 		if (data->forceCommit)
 		{
 			data->forceCommit = 0;
-			mdb_txn_commit(data->txn);
+			if (mdb_txn_commit(data->txn) != MDB_SUCCESS)
+				mdb_txn_abort(data->txn);
 			data->txn = NULL;
 		}
 
@@ -2297,6 +2331,7 @@ static void *thread_func(void *arg)
 	if (data->env)
 	{
 		data->maxvalsize = mdb_env_get_maxkeysize(data->env);
+		DBG("Maxvalsize=%d",data->maxvalsize);
 		data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
 	}
 
