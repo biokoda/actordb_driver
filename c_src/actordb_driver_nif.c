@@ -990,7 +990,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	// DB may get shrunk in the process.
 	MDB_val logKey, logVal;
 	u8 logKeyBuf[sizeof(u64)*3];
-	int logop, pgop, rc;
+	int logop, rc;
 	u64 evnum,evterm,aindex,limitEvnum;
 	Wal *pWal = &cmd->conn->wal;
 
@@ -998,9 +998,15 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	DBG("do_wal_rewind");
 
-	// if limitEvnum == 0, this means delete all pages for actor.
+	// We can not rewind that far back
 	if (limitEvnum < pWal->firstCompleteEvnum && limitEvnum > 0)
 		return atom_false;
+	// We have nothing to do. Actor already empty.
+	if (pWal->lastCompleteEvnum == 0 && limitEvnum == 0)
+		return atom_ok;
+	// We have nothing to do, this limit is higher than what is saved.
+	if (limitEvnum > pWal->lastCompleteEvnum)
+		return atom_ok;
 
 	if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
 	{
@@ -1011,6 +1017,9 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	logKey.mv_data = logKeyBuf;
 	logKey.mv_size = sizeof(logKeyBuf);
 
+	// if limitEvnum == 0, this means delete all pages for actor.
+	// Delete entries in logdb and pagesdb. Keep actordb and infodb. Infodb is important
+	// for replication consistency.
 	if (limitEvnum == 0)
 	{
 		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
@@ -1055,6 +1064,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	}
 	else
 	{
+		u8 somethingDeleted = 0;
 		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
@@ -1066,10 +1076,8 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 			return atom_false;
 		}
 
-		while (rc == MDB_SUCCESS && pWal->lastCompleteEvnum >= limitEvnum)
+		while (rc == MDB_SUCCESS && pWal->lastCompleteEvnum >= limitEvnum && somethingDeleted == 0)
 		{
-			// size_t ndupl;
-
 			// mdb_cursor_count(thr->cursorLog,&ndupl);
 			// For every page here
 			// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
@@ -1079,8 +1087,11 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 			while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 			{
 				u32 pgno;
+				u8 rewrite = 0;
 				u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 				MDB_val pgKey, pgVal;
+				size_t ndupl, nduplorig;
+				size_t rewritePos = 0;
 
 				memcpy(&pgno, logVal.mv_data,sizeof(u32));
 				DBG("Moving to pgno=%u, evnum=%llu",pgno,pWal->lastCompleteEvnum);
@@ -1090,26 +1101,84 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 				pgKey.mv_data = pagesKeyBuf;
 				pgKey.mv_size = sizeof(pagesKeyBuf);
 
-				pgop = MDB_LAST_DUP;
+				// pgop = MDB_LAST_DUP;
 				logop = MDB_PREV_DUP;
 				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 				{
 					continue;
 				}
-				while ((rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop)) == MDB_SUCCESS)
+				mdb_cursor_count(thr->cursorPages,&ndupl);
+				if (ndupl == 0)
+					continue;
+				nduplorig = ndupl;
+				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP) != MDB_SUCCESS)
+					continue;
+				do
 				{
-					// memcpy(&evterm, pgVal.mv_data,            sizeof(u64));
-					memcpy(&evnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
+					u8 frag;
+					MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
+
+					mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
+					frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
+					memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
 					DBG("Deleting pgno=%u, evnum=%llu",pgno,evnum);
 					if (evnum >= limitEvnum)
 					{
-						mdb_cursor_del(thr->cursorPages,0);
-						pWal->allPages--;
-					}
-					else
-						break;
+						// We copied over everything from beginning to point
+						// of rewind. We must not go further.
+						if (rewrite)
+						{
+							break;
+						}
+						// Like checkpoint, we can not trust this will succeed.
+						rc = mdb_cursor_del(thr->cursorPages,0);
+						if (rc != MDB_SUCCESS)
+						{
+							thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
+							memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
+							thr->ckpWorkaround->pgno = pgno;
+							thr->ckpWorkaround->actor = pWal->index;
+							thr->ckpWorkaround->bufSize = nduplorig*(thr->maxvalsize+25); // +2 would be sufficient...
+							thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
+							memset(thr->ckpWorkaround->buf,0,thr->ckpWorkaround->bufSize);
+							rewrite = 1;
+							// Back to beginning
+							mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP);
+						}
+						else
+						{
+							DBG("Rewind page deleted!");
+							somethingDeleted = 1;
+						}
 
-					pgop = MDB_PREV_DUP;
+						if (frag == 0)
+							pWal->allPages--;
+					}
+					else if (rewrite)
+					{
+						short pgSz = pgDelVal.mv_size;
+						u8 *buf = thr->ckpWorkaround->buf;
+
+						if (rewritePos+sizeof(short)+pgSz > thr->ckpWorkaround->bufSize)
+						{
+							// I dont see any possibility of hitting this.
+							DBG("Calculated buffer size wrong???");
+							exit(EXIT_FAILURE);
+						}
+
+						memcpy(buf+rewritePos, &pgSz, sizeof(short));
+						memcpy(buf+rewritePos+sizeof(short), pgDelVal.mv_data, pgSz);
+						rewritePos += sizeof(short)+pgSz;
+					}
+
+					ndupl--;
+					if (!ndupl)
+						break;
+				} while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP) == MDB_SUCCESS);
+				if (rewrite)
+				{
+					thr->forceCommit = 2;
+					return atom_ok;
 				}
 				DBG("Done looping pages %d",rc);
 				// if reached notfound, this means we deleted all versions of page.
@@ -2263,6 +2332,80 @@ static MDB_txn* open_txn(db_thread *data, int flags)
 	return data->txn;
 }
 
+// Lmdb bug or bad use of lmdb. Sometimes checkpoint fails and the only thing we can do
+// is delete a pagesdb entry and recreate it.
+static int do_workaround(db_thread *data)
+{
+	size_t pos = 0;
+	u8 *buf = data->ckpWorkaround->buf;
+	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+	MDB_val key, val;
+	int rc;
+
+	if (data->txn == NULL)
+	{
+		if (open_txn(data,0) == NULL)
+		{
+			rc = MDB_PANIC;
+			goto workaround_done;
+		}
+	}
+
+	memcpy(pagesKeyBuf,               &data->ckpWorkaround->actor,sizeof(u64));
+	memcpy(pagesKeyBuf + sizeof(u64), &data->ckpWorkaround->pgno, sizeof(u32));
+	key.mv_size = sizeof(pagesKeyBuf);
+	key.mv_data = pagesKeyBuf;
+
+	rc = mdb_cursor_get(data->cursorPages,&key,&val,MDB_SET);
+	if (rc != MDB_SUCCESS)
+	{
+		DBG("Unable to position to right page for workaround, err=%d, pgno=%u, actor=%llu, bufsize=%zu",
+			rc, data->ckpWorkaround->pgno, data->ckpWorkaround->actor, data->ckpWorkaround->bufSize);
+		goto workaround_done;
+	}
+		
+	rc = mdb_cursor_del(data->cursorPages,MDB_NODUPDATA);
+	if (rc != MDB_SUCCESS)
+	{
+		DBG("Unable to delete all pages for workaround");
+		goto workaround_done;
+	}
+
+	while (pos < data->ckpWorkaround->bufSize)
+	{
+		short pgSz;
+
+		memcpy(&pgSz, buf+pos, sizeof(short));
+		if (pgSz == 0)
+			break;
+
+		val.mv_size = pgSz;
+		val.mv_data = buf+pos+sizeof(short);
+
+		if ((rc = mdb_cursor_put(data->cursorPages,&key,&val,0)) != MDB_SUCCESS)
+		{
+			DBG("Unable to insert page for workaround");
+			break;
+		}
+
+		pos += pgSz+sizeof(short);
+	}
+	rc = mdb_txn_commit(data->txn);
+	if (rc != MDB_SUCCESS)
+	{
+		mdb_txn_abort(data->txn);
+		data->txn = NULL;
+		goto workaround_done;
+	}
+	data->txn = NULL;
+	rc = MDB_SUCCESS;
+
+workaround_done:
+	free(buf);
+	free(data->ckpWorkaround);
+	data->ckpWorkaround = NULL;
+	return rc;
+}
 
 static void thread_ex(db_thread *data, qitem *item)
 {
@@ -2278,8 +2421,8 @@ static void thread_ex(db_thread *data, qitem *item)
 		ERL_NIF_TERM res;
 		ERL_NIF_TERM answer;
 
-		// Only checkpoint command loops. This is because we must commit transaction
-		// after every log entry.
+		// Checkpoint and rewind loop. This is because we must commit transaction
+		// after every log entry has been processed.
 		while (1)
 		{
 			res = evaluate_command(&item->cmd,data);
@@ -2296,7 +2439,7 @@ static void thread_ex(db_thread *data, qitem *item)
 				data->forceCommit = 0;
 			}
 
-			if (item->cmd.type == cmd_checkpoint)
+			if (item->cmd.type == cmd_checkpoint || item->cmd.type == cmd_wal_rewind)
 			{
 				if (data->forceCommit && res == atom_ok)
 				{
@@ -2310,80 +2453,10 @@ static void thread_ex(db_thread *data, qitem *item)
 				}
 				if (data->ckpWorkaround)
 				{
-					size_t pos = 0;
-					u8 *buf = data->ckpWorkaround->buf;
-					u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-					MDB_val key, val;
-					int rc;
-
-					// Lmdb bug or bad use of lmdb. Sometimes checkpoint fails and the only thing we can do
-					// is delete a pagesdb entry and recreate it.
-					if (data->txn == NULL)
+					if (do_workaround(data) == MDB_SUCCESS)
 					{
 						if (open_txn(data,0) == NULL)
-						{
-							rc = MDB_PANIC;
-							goto workaround_done;
-						}
-					}
-
-					memcpy(pagesKeyBuf,               &data->ckpWorkaround->actor,sizeof(u64));
-					memcpy(pagesKeyBuf + sizeof(u64), &data->ckpWorkaround->pgno, sizeof(u32));
-					key.mv_size = sizeof(pagesKeyBuf);
-					key.mv_data = pagesKeyBuf;
-
-					rc = mdb_cursor_get(data->cursorPages,&key,&val,MDB_SET);
-					if (rc != MDB_SUCCESS)
-					{
-						DBG("Unable to position to right page for workaround, err=%d, pgno=%u, actor=%llu, bufsize=%zu",
-							rc, data->ckpWorkaround->pgno, data->ckpWorkaround->actor, data->ckpWorkaround->bufSize);
-						goto workaround_done;
-					}
-						
-					rc = mdb_cursor_del(data->cursorPages,MDB_NODUPDATA);
-					if (rc != MDB_SUCCESS)
-					{
-						DBG("Unable to delete all pages for workaround");
-						goto workaround_done;
-					}
-
-					while (pos < data->ckpWorkaround->bufSize)
-					{
-						short pgSz;
-
-						memcpy(&pgSz, buf+pos, sizeof(short));
-						if (pgSz == 0)
 							break;
-
-						val.mv_size = pgSz;
-						val.mv_data = buf+pos+sizeof(short);
-
-						if ((rc = mdb_cursor_put(data->cursorPages,&key,&val,0)) != MDB_SUCCESS)
-						{
-							DBG("Unable to insert page for workaround");
-							break;
-						}
-
-						pos += pgSz+sizeof(short);
-					}
-					rc = mdb_txn_commit(data->txn);
-					if (rc != MDB_SUCCESS)
-					{
-						mdb_txn_abort(data->txn);
-						goto workaround_done;
-					}
-					rc = MDB_SUCCESS;
-
-workaround_done:
-					free(buf);
-					free(data->ckpWorkaround);
-					data->ckpWorkaround = NULL;
-					if (rc != MDB_SUCCESS)
-						break;
-					else
-					{
-						if (open_txn(data,0) == NULL)
-							return;
 						continue;
 					}
 				}

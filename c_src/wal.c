@@ -716,7 +716,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			size_t ndupl;
 			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 			MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
-			MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 			u64 pgnoLimitEvnum;
 			u8 rewrite = 0;
 			size_t rewritePos = 0;
@@ -749,9 +748,12 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 
 			do
 			{
-				u8 frag = *((u8*)pgVal.mv_data+sizeof(u64)*2);
+				u8 frag;
+				MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 				
 				mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
+				
+				frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgDelVal.mv_data,            sizeof(u64));
 				memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
 				DBG("limit limitevnum %lld, curnum %lld, dupl %lld, frag=%d",
@@ -824,7 +826,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			DBG("Unable to move to next log %d",mrc);
 			break;
 		}
-		
+
 		// read next key data
 		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
 		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
