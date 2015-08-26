@@ -681,6 +681,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	int logop, mrc = MDB_SUCCESS;
 	u64 evnum,evterm,aindex;
 	u8 somethingDeleted = 0;
+	int allPagesDiff = 0;
 
 	// if (pWal->inProgressTerm == 0)
 	// 	return SQLITE_OK;
@@ -762,7 +763,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				if (evnum < pgnoLimitEvnum)
 				{
 					mrc = mdb_cursor_del(thr->cursorPages,0);
-					if (mrc != MDB_SUCCESS)
+					if (mrc != MDB_SUCCESS && !rewrite)
 					{
 						DBG("Unable to delete page on cursor! %d. Will perform workaround.",mrc);
 						mrc = MDB_SUCCESS;
@@ -775,14 +776,14 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 						memset(thr->ckpWorkaround->buf,0,thr->ckpWorkaround->bufSize);
 						rewrite = 1;
 					}
-					else
+					else if (!rewrite)
 					{
 						DBG("Deleted page!");
 						somethingDeleted = 1;
 					}
 
 					if (frag == 0)
-						pWal->allPages--;
+						allPagesDiff++;
 				}
 				else if (rewrite)
 				{
@@ -809,6 +810,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			{
 				// We hit an error. Stop and thread_ex will execute workaround.
 				thr->forceCommit = 2;
+				thr->ckpWorkaround->allPagesDiff = allPagesDiff;
 				return SQLITE_OK;
 			}
 		}
@@ -839,6 +841,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		}
 		pWal->firstCompleteTerm = evterm;
 		pWal->firstCompleteEvnum = evnum;
+		pWal->allPages -= allPagesDiff;
 		DBG("Checkpint fce now=%lld",(u64)evnum);
 	}
 

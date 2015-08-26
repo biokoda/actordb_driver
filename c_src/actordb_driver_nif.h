@@ -117,6 +117,7 @@ struct ckp_workaround
 	u64 actor;
 	u8 *buf;
 	size_t bufSize;
+	int allPagesDiff;
 };
 
 struct db_thread

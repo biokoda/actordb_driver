@@ -1004,7 +1004,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	// We have nothing to do. Actor already empty.
 	if (pWal->lastCompleteEvnum == 0 && limitEvnum == 0)
 		return atom_ok;
-	// We have nothing to do, this limit is higher than what is saved.
+	// We have nothing to do. This limit is higher than what is saved.
 	if (limitEvnum > pWal->lastCompleteEvnum)
 		return atom_ok;
 
@@ -1019,7 +1019,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	// if limitEvnum == 0, this means delete all pages for actor.
 	// Delete entries in logdb and pagesdb. Keep actordb and infodb. Infodb is important
-	// for replication consistency.
+	// for replication consistency. After deleting actor may get recreated later.
 	if (limitEvnum == 0)
 	{
 		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
@@ -1064,19 +1064,20 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	}
 	else
 	{
+		int allPagesDiff = 0;
 		u8 somethingDeleted = 0;
 		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
 
-		if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS && limitEvnum > 0)
+		if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS)
 		{
 			DBG("Key not found in log for rewind %llu %llu",
 				pWal->lastCompleteTerm,pWal->lastCompleteEvnum);
 			return atom_false;
 		}
 
-		while (rc == MDB_SUCCESS && pWal->lastCompleteEvnum >= limitEvnum && somethingDeleted == 0)
+		while (pWal->lastCompleteEvnum >= limitEvnum && somethingDeleted == 0)
 		{
 			// mdb_cursor_count(thr->cursorLog,&ndupl);
 			// For every page here
@@ -1092,6 +1093,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 				MDB_val pgKey, pgVal;
 				size_t ndupl, nduplorig;
 				size_t rewritePos = 0;
+				int pgop;
 
 				memcpy(&pgno, logVal.mv_data,sizeof(u32));
 				DBG("Moving to pgno=%u, evnum=%llu",pgno,pWal->lastCompleteEvnum);
@@ -1101,7 +1103,6 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 				pgKey.mv_data = pagesKeyBuf;
 				pgKey.mv_size = sizeof(pagesKeyBuf);
 
-				// pgop = MDB_LAST_DUP;
 				logop = MDB_PREV_DUP;
 				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 				{
@@ -1111,51 +1112,79 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 				if (ndupl == 0)
 					continue;
 				nduplorig = ndupl;
-				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP) != MDB_SUCCESS)
+				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) != MDB_SUCCESS)
 					continue;
+				pgop = MDB_PREV_DUP;
 				do
 				{
 					u8 frag;
 					MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 
-					mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
+					if (mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT) != MDB_SUCCESS)
+						break;
 					frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
 					memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
 					DBG("Deleting pgno=%u, evnum=%llu",pgno,evnum);
 					if (evnum >= limitEvnum)
 					{
-						// We copied over everything from beginning to point
-						// of rewind. We must not go further.
-						if (rewrite)
+						if (rewrite && pgop == MDB_PREV_DUP)
 						{
-							break;
+							// Step 2 of workaround.
+							// We are still going back from end to count pages.
+							if (frag == 0)
+								allPagesDiff++;
 						}
-						// Like checkpoint, we can not trust this will succeed.
-						rc = mdb_cursor_del(thr->cursorPages,0);
-						if (rc != MDB_SUCCESS)
+						else if (rewrite && pgop == MDB_NEXT_DUP)
 						{
-							thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
-							memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
-							thr->ckpWorkaround->pgno = pgno;
-							thr->ckpWorkaround->actor = pWal->index;
-							thr->ckpWorkaround->bufSize = nduplorig*(thr->maxvalsize+25); // +2 would be sufficient...
-							thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
-							memset(thr->ckpWorkaround->buf,0,thr->ckpWorkaround->bufSize);
-							rewrite = 1;
-							// Back to beginning
-							mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP);
+							// Step 5 of workaround
+							// We copied over everything from beginning to point
+							// of rewind. We must not go further.
+							break;
 						}
 						else
 						{
-							DBG("Rewind page deleted!");
-							somethingDeleted = 1;
+							// Like checkpoint, we can not trust this will succeed.
+							rc = mdb_cursor_del(thr->cursorPages,0);
+							if (rc != MDB_SUCCESS)
+							{
+								// Step 1 of workaround.
+								// Create operation, reserve space. Continue moving back
+								// to count how many pages we will cut away.
+								thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
+								memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
+								thr->ckpWorkaround->pgno = pgno;
+								thr->ckpWorkaround->actor = pWal->index;
+								thr->ckpWorkaround->bufSize = nduplorig*(thr->maxvalsize+25); // +2 would be sufficient...
+								thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
+								memset(thr->ckpWorkaround->buf,0,thr->ckpWorkaround->bufSize);
+								rewrite = 1;
+							}
+							else
+							{
+								// This is normal operation. Delete page and set flag
+								// that something is deleted.
+								DBG("Rewind page deleted!");
+								somethingDeleted = 1;
+							}
+							if (frag == 0)
+								allPagesDiff++;
 						}
-
-						if (frag == 0)
-							pWal->allPages--;
+					}
+					else if (rewrite && pgop == MDB_PREV_DUP)
+					{
+						// Step 3 of workaround.
+						// Time to stop moving back and reset.
+						// Go to beginning, start moving from oldest page to newest.
+						mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP);
+						pgop = MDB_NEXT_DUP;
+						ndupl = nduplorig;
+						thr->ckpWorkaround->allPagesDiff = allPagesDiff;
+						continue;
 					}
 					else if (rewrite)
 					{
+						// Step 4 of workaround.
+						// Copy pages that we will keep to buffer.
 						short pgSz = pgDelVal.mv_size;
 						u8 *buf = thr->ckpWorkaround->buf;
 
@@ -1170,20 +1199,30 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 						memcpy(buf+rewritePos+sizeof(short), pgDelVal.mv_data, pgSz);
 						rewritePos += sizeof(short)+pgSz;
 					}
+					else
+					{
+						// No ugliness happened. Either there is nothing to delete or
+						// we deleted a few pages off the top and we are done.
+						break;
+					}
+						
 
 					ndupl--;
 					if (!ndupl)
 						break;
-				} while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP) == MDB_SUCCESS);
+				} while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS);
 				if (rewrite)
 				{
+					// If last page and we have not written anything to buffer, we have shrunk DB.
+					if (!rewritePos && pgno == pWal->mxPage)
+						pWal->mxPage--;
 					thr->forceCommit = 2;
 					return atom_ok;
 				}
 				DBG("Done looping pages %d",rc);
-				// if reached notfound, this means we deleted all versions of page.
-				// If this is last page, we have shrunk DB.
-				if (rc == MDB_NOTFOUND && pgno == pWal->mxPage)
+				// If we moved through all pages and rewrite did not happen
+				// and this is last page, we have shrunk DB.
+				if (!ndupl && pgno == pWal->mxPage)
 					pWal->mxPage--;
 			}
 			if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
@@ -1206,7 +1245,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 			}
 			pWal->lastCompleteTerm = evterm;
 			pWal->lastCompleteEvnum = evnum;
-			rc = MDB_SUCCESS;
+			pWal->allPages -= allPagesDiff;
 		}
 	}
 	DBG("evterm = %llu, evnum=%llu",pWal->lastCompleteTerm, pWal->lastCompleteEvnum);
@@ -2332,7 +2371,7 @@ static MDB_txn* open_txn(db_thread *data, int flags)
 	return data->txn;
 }
 
-// Lmdb bug or bad use of lmdb. Sometimes checkpoint fails and the only thing we can do
+// Lmdb bug or bad use of lmdb. Sometimes checkpoint/rewind fails and the only thing we can do
 // is delete a pagesdb entry and recreate it.
 static int do_workaround(db_thread *data)
 {
@@ -2399,6 +2438,7 @@ static int do_workaround(db_thread *data)
 	}
 	data->txn = NULL;
 	rc = MDB_SUCCESS;
+	data->curConn->wal.allPages -= data->ckpWorkaround->allPagesDiff;
 
 workaround_done:
 	free(buf);
