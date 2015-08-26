@@ -1369,14 +1369,24 @@ static ERL_NIF_TERM do_checkpoint(db_command *cmd, db_thread *thread)
 {
 	ErlNifUInt64 evnum;
 	db_connection *con = cmd->conn;
+	int rc;
 
 	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&(evnum));
 
 	if (con->wal.firstCompleteEvnum >= evnum || con->checkpointLock)
+	{
+		cmd->type = cmd_unknown;
 		return atom_ok;
+	}
 
-	if (checkpoint(&con->wal, evnum) == SQLITE_OK)
+	rc = checkpoint(&con->wal, evnum);
+	if (rc == SQLITE_OK)
 		return atom_ok;
+	else if (rc == SQLITE_DONE)
+	{
+		cmd->type = cmd_unknown;
+		return atom_ok;
+	}
 	else
 		return atom_false;
 }
@@ -2278,6 +2288,7 @@ static void thread_ex(db_thread *data, qitem *item)
 
 			if (data->forceCommit == 2)
 			{
+				DBG("Aborting transaction due to error!");
 				mdb_txn_abort(data->txn);
 				data->txn = NULL;
 				// if (open_txn(data,0) == NULL)
@@ -2285,15 +2296,97 @@ static void thread_ex(db_thread *data, qitem *item)
 				data->forceCommit = 0;
 			}
 
-			if (item->cmd.type == cmd_checkpoint && data->forceCommit && res == atom_ok)
+			if (item->cmd.type == cmd_checkpoint)
 			{
-				if (mdb_txn_commit(data->txn) != MDB_SUCCESS)
-					mdb_txn_abort(data->txn);
-				data->forceCommit = 0;
-				data->txn = NULL;
-				if (open_txn(data,0) == NULL)
-					break;
-				continue;
+				if (data->forceCommit && res == atom_ok)
+				{
+					if (mdb_txn_commit(data->txn) != MDB_SUCCESS)
+						mdb_txn_abort(data->txn);
+					data->forceCommit = 0;
+					data->txn = NULL;
+					if (open_txn(data,0) == NULL)
+						break;
+					continue;
+				}
+				if (data->ckpWorkaround)
+				{
+					size_t pos = 0;
+					u8 *buf = data->ckpWorkaround->buf;
+					u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+					MDB_val key, val;
+					int rc;
+
+					// Lmdb bug or bad use of lmdb. Sometimes checkpoint fails and the only thing we can do
+					// is delete a pagesdb entry and recreate it.
+					if (data->txn == NULL)
+					{
+						if (open_txn(data,0) == NULL)
+						{
+							rc = MDB_PANIC;
+							goto workaround_done;
+						}
+					}
+
+					memcpy(pagesKeyBuf,               &data->ckpWorkaround->actor,sizeof(u64));
+					memcpy(pagesKeyBuf + sizeof(u64), &data->ckpWorkaround->pgno, sizeof(u32));
+					key.mv_size = sizeof(pagesKeyBuf);
+					key.mv_data = pagesKeyBuf;
+
+					rc = mdb_cursor_get(data->cursorPages,&key,&val,MDB_SET);
+					if (rc != MDB_SUCCESS)
+					{
+						DBG("Unable to position to right page for workaround, err=%d, pgno=%u, actor=%llu, bufsize=%zu",
+							rc, data->ckpWorkaround->pgno, data->ckpWorkaround->actor, data->ckpWorkaround->bufSize);
+						goto workaround_done;
+					}
+						
+					rc = mdb_cursor_del(data->cursorPages,MDB_NODUPDATA);
+					if (rc != MDB_SUCCESS)
+					{
+						DBG("Unable to delete all pages for workaround");
+						goto workaround_done;
+					}
+
+					while (pos < data->ckpWorkaround->bufSize)
+					{
+						short pgSz;
+
+						memcpy(&pgSz, buf+pos, sizeof(short));
+						if (pgSz == 0)
+							break;
+
+						val.mv_size = pgSz;
+						val.mv_data = buf+pos+sizeof(short);
+
+						if ((rc = mdb_cursor_put(data->cursorPages,&key,&val,0)) != MDB_SUCCESS)
+						{
+							DBG("Unable to insert page for workaround");
+							break;
+						}
+
+						pos += pgSz+sizeof(short);
+					}
+					rc = mdb_txn_commit(data->txn);
+					if (rc != MDB_SUCCESS)
+					{
+						mdb_txn_abort(data->txn);
+						goto workaround_done;
+					}
+					rc = MDB_SUCCESS;
+
+workaround_done:
+					free(buf);
+					free(data->ckpWorkaround);
+					data->ckpWorkaround = NULL;
+					if (rc != MDB_SUCCESS)
+						break;
+					else
+					{
+						if (open_txn(data,0) == NULL)
+							return;
+						continue;
+					}
+				}
 			}
 
 			break;

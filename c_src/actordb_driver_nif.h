@@ -39,6 +39,7 @@ typedef struct iterate_resource iterate_resource;
 typedef struct queue_t queue;
 typedef struct qitem_t qitem;
 typedef struct priv_data priv_data;
+typedef struct ckp_workaround ckp_workaround;
 
 typedef u16 ht_slot;
 
@@ -110,6 +111,14 @@ struct control_data
 	#endif
 };
 
+struct ckp_workaround
+{
+	u32 pgno;
+	u64 actor;
+	u8 *buf;
+	size_t bufSize;
+};
+
 struct db_thread
 {
 	MDB_val *resFrames;
@@ -161,6 +170,7 @@ struct db_thread
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
 
+	ckp_workaround *ckpWorkaround;
 	priv_data *pd;
 };
 

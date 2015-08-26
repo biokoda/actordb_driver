@@ -680,6 +680,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	db_thread *thr = pWal->thread;
 	int logop, mrc = MDB_SUCCESS;
 	u64 evnum,evterm,aindex;
+	u8 somethingDeleted = 0;
 
 	// if (pWal->inProgressTerm == 0)
 	// 	return SQLITE_OK;
@@ -687,7 +688,10 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	DBG("checkpoint actor=%llu, fct=%llu, fcev=%llu, limitEvnum=%llu",pWal->index,
 		pWal->firstCompleteTerm,pWal->firstCompleteEvnum,limitEvnum);
 
-	while (pWal->firstCompleteEvnum < limitEvnum)
+	// If we will delete any page during this run, we must stop when we delete log and return back to thread_ex.
+	// Transaction will be commited and executed again to continue.
+	// We must never run mdb_cursor_del on a page more than once.
+	while (pWal->firstCompleteEvnum < limitEvnum && somethingDeleted == 0)
 	{
 		logKey.mv_data = logKeyBuf;
 		logKey.mv_size = sizeof(logKeyBuf);
@@ -714,6 +718,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
 			MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 			u64 pgnoLimitEvnum;
+			u8 rewrite = 0;
+			size_t rewritePos = 0;
 
 			logop = MDB_NEXT_DUP;
 			memcpy(&pgno, logVal.mv_data,sizeof(u32));
@@ -756,30 +762,53 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					mrc = mdb_cursor_del(thr->cursorPages,0);
 					if (mrc != MDB_SUCCESS)
 					{
-						DBG("Unable to delete page on cursor! %d",mrc);
-						// mrc = MDB_SUCCESS;
-						break;
+						DBG("Unable to delete page on cursor! %d. Will perform workaround.",mrc);
+						mrc = MDB_SUCCESS;
+						thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
+						memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
+						thr->ckpWorkaround->pgno = pgno;
+						thr->ckpWorkaround->actor = pWal->index;
+						thr->ckpWorkaround->bufSize = ndupl*(thr->maxvalsize+25); // +2 would be sufficient...
+						thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
+						memset(thr->ckpWorkaround->buf,0,thr->ckpWorkaround->bufSize);
+						rewrite = 1;
 					}
 					else
 					{
 						DBG("Deleted page!");
+						somethingDeleted = 1;
 					}
 
 					if (frag == 0)
 						pWal->allPages--;
+				}
+				else if (rewrite)
+				{
+					short pgSz = pgDelVal.mv_size;
+					u8 *buf = thr->ckpWorkaround->buf;
+
+					if (rewritePos+sizeof(short)+pgSz > thr->ckpWorkaround->bufSize)
+					{
+						// I dont see any possibility of hitting this.
+						DBG("Calculated buffer size wrong???");
+						exit(EXIT_FAILURE);
+					}
+
+					memcpy(buf+rewritePos, &pgSz, sizeof(short));
+					memcpy(buf+rewritePos+sizeof(short), pgDelVal.mv_data, pgSz);
+					rewritePos += sizeof(short)+pgSz;
 				}
 
 				ndupl--;
 				if (!ndupl)
 					break;
 			} while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP) == MDB_SUCCESS);
-			if (mrc != MDB_SUCCESS)
-				break;
-		}
-		if (mrc != MDB_SUCCESS)
-		{
-			thr->forceCommit = 2;
-			break;
+			if (rewrite)
+			{
+				// We hit an error. Stop and thread_ex will execute workaround.
+				thr->forceCommit = 2;
+				return SQLITE_OK;
+			}
 		}
 
 		mrc = mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA);
@@ -795,29 +824,11 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			DBG("Unable to move to next log %d",mrc);
 			break;
 		}
-		// else
-		// {
+		
 		// read next key data
 		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
 		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
 		memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
-		// }
-
-		// // delete prev key
-		// logVal.mv_data = logKeyBuf;
-		// logVal.mv_size = sizeof(logKeyBuf);
-		// memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
-		// memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
-		// memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
-		// if ((mrc = mdb_del(thr->txn,thr->logdb,&logVal,NULL)) != MDB_SUCCESS)
-		// {
-		// 	DBG("Unable to cleanup key from logdb %d",mrc);
-		// 	break;
-		// }
-		// if (logKey.mv_data == NULL)
-		// {
-		// 	break;
-		// }
 
 		if (aindex != pWal->index)
 		{
@@ -827,11 +838,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		pWal->firstCompleteTerm = evterm;
 		pWal->firstCompleteEvnum = evnum;
 		DBG("Checkpint fce now=%lld",(u64)evnum);
-
-		// Do not move over more than 1 log entry at once.
-		// LMDB does not like doing more than one. If we were to do multiple and they had the same 
-		// pgno. It would try to delete something it has already deleted.
-		break;
 	}
 
 	// no dirty pages, but will write info
