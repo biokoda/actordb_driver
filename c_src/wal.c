@@ -50,6 +50,7 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor);
 static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delPages);
 static u64 get8byte(u8* buf);
 static void put8byte(u8* buf, u64 num);
+static MDB_txn* open_txn(db_thread *data, int flags);
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
@@ -714,7 +715,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		while ((mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
 			u32 pgno;
-			size_t ndupl;
+			size_t ndupl, nduplorig;
 			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 			MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
 			u64 pgnoLimitEvnum;
@@ -736,6 +737,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				continue;
 			}
 			mdb_cursor_count(thr->cursorPages,&ndupl);
+			nduplorig = ndupl;
 
 			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) == MDB_SUCCESS)
 				memcpy(&pgnoLimitEvnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
@@ -757,26 +759,36 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgDelVal.mv_data,            sizeof(u64));
 				memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
-				DBG("limit limitevnum %lld, curnum %lld, dupl %lld, frag=%d",
-					limitEvnum, evnum, (i64)ndupl,(int)frag);
+				DBG("limit limitevnum %lld, curnum %lld, dupl %zu, frag=%d",
+					limitEvnum, evnum, ndupl,(int)frag);
 
-				if (evnum < pgnoLimitEvnum)
+				if (evnum < pgnoLimitEvnum && !rewrite)
 				{
 					mrc = mdb_cursor_del(thr->cursorPages,0);
-					if (mrc != MDB_SUCCESS && !rewrite)
+					if (mrc != MDB_SUCCESS)
 					{
 						DBG("Unable to delete page on cursor! %d. Will perform workaround.",mrc);
-						mrc = MDB_SUCCESS;
+						// Step 1 of workaround
+						// Create workaround op. Reset transaction and move to beginning of dupsort.
+						// Everything we did in this checkpoint run will be aborted.
 						thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
 						memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
 						thr->ckpWorkaround->pgno = pgno;
 						thr->ckpWorkaround->actor = pWal->index;
-						thr->ckpWorkaround->bufSize = ndupl*(thr->maxvalsize+25); // +2 would be sufficient...
+						thr->ckpWorkaround->bufSize = 5*(thr->maxvalsize+25);
 						thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
-						memset(thr->ckpWorkaround->buf,0,thr->ckpWorkaround->bufSize);
+						memset(thr->ckpWorkaround->buf,0,2);
 						rewrite = 1;
+						ndupl = nduplorig;
+						allPagesDiff = 0;
+						mdb_txn_abort(thr->txn);
+						open_txn(thr,0);
+						mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET);
+						mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP);
+						mrc = MDB_SUCCESS;
+						continue;
 					}
-					else if (!rewrite)
+					else
 					{
 						DBG("Deleted page!");
 						somethingDeleted = 1;
@@ -785,29 +797,50 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					if (frag == 0)
 						allPagesDiff++;
 				}
-				else if (rewrite)
+				else if (evnum >= pgnoLimitEvnum && rewrite)
 				{
+					DBG("Workaround step 3");
+					// Step 3 of workaround
+					// These pages are kept. Copy them to buffer.
 					short pgSz = pgDelVal.mv_size;
 					u8 *buf = thr->ckpWorkaround->buf;
 
-					if (rewritePos+sizeof(short)+pgSz > thr->ckpWorkaround->bufSize)
+					while (rewritePos+sizeof(short)*2+pgSz > thr->ckpWorkaround->bufSize)
 					{
-						// I dont see any possibility of hitting this.
-						DBG("Calculated buffer size wrong???");
-						exit(EXIT_FAILURE);
+						thr->ckpWorkaround->bufSize *= 1.5;
+						thr->ckpWorkaround->buf = buf = realloc(buf, thr->ckpWorkaround->bufSize);
+
+						if (buf == NULL)
+						{
+							exit(EXIT_FAILURE);
+						}
 					}
 
 					memcpy(buf+rewritePos, &pgSz, sizeof(short));
 					memcpy(buf+rewritePos+sizeof(short), pgDelVal.mv_data, pgSz);
+					// mark end 
+					buf[rewritePos+sizeof(short)+pgSz] = 0;
+					buf[rewritePos+sizeof(short)+pgSz+1] = 0;
 					rewritePos += sizeof(short)+pgSz;
+				}
+				else if (rewrite)
+				{
+					DBG("Workaround step 2");
+					// Step 2 of workaround
+					// Move over pages we are discarding. Count how many we discard.
+					if (frag == 0)
+						allPagesDiff++;
 				}
 
 				ndupl--;
 				if (!ndupl)
 					break;
-			} while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP) == MDB_SUCCESS);
+				
+				mrc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP);
+			} while (mrc == MDB_SUCCESS);
 			if (rewrite)
 			{
+				DBG("Rewrite exit %d, nudpl=%zu, diff=%d",mrc, ndupl,allPagesDiff);
 				// We hit an error. Stop and thread_ex will execute workaround.
 				thr->forceCommit = 2;
 				thr->ckpWorkaround->allPagesDiff = allPagesDiff;
@@ -1441,4 +1474,22 @@ static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
 	return diff;
 }
 
+static MDB_txn* open_txn(db_thread *data, int flags)
+{
+	if (mdb_txn_begin(data->env, NULL, flags, &data->txn) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_set_compare(data->txn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_set_dupsort(data->txn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_cursor_open(data->txn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_cursor_open(data->txn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_cursor_open(data->txn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
+		return NULL;
 
+	return data->txn;
+}

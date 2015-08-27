@@ -1129,6 +1129,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 					{
 						if (rewrite && pgop == MDB_PREV_DUP)
 						{
+							DBG("Workaround step 2");
 							// Step 2 of workaround.
 							// We are still going back from end to count pages.
 							if (frag == 0)
@@ -1136,6 +1137,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 						}
 						else if (rewrite && pgop == MDB_NEXT_DUP)
 						{
+							DBG("Workaround step 5");
 							// Step 5 of workaround
 							// We copied over everything from beginning to point
 							// of rewind. We must not go further.
@@ -1147,17 +1149,27 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 							rc = mdb_cursor_del(thr->cursorPages,0);
 							if (rc != MDB_SUCCESS)
 							{
+								DBG("Unable to delete rewind page, doing workaround, ndupl=%zu",ndupl);
 								// Step 1 of workaround.
-								// Create operation, reserve space. Continue moving back
-								// to count how many pages we will cut away.
+								// Create operation, reserve space. 
+								// Move back to original position at the end.
+								// Count how many pages we will cut away.
 								thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
 								memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
 								thr->ckpWorkaround->pgno = pgno;
 								thr->ckpWorkaround->actor = pWal->index;
-								thr->ckpWorkaround->bufSize = nduplorig*(thr->maxvalsize+25); // +2 would be sufficient...
+								thr->ckpWorkaround->bufSize = 5*(thr->maxvalsize+25);
 								thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
-								memset(thr->ckpWorkaround->buf,0,thr->ckpWorkaround->bufSize);
+								memset(thr->ckpWorkaround->buf,0,2);
 								rewrite = 1;
+								ndupl = nduplorig;
+								allPagesDiff = 0;
+								mdb_txn_abort(thr->txn);
+								open_txn(thr,0);
+								mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET);
+								mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP);
+								rc = MDB_SUCCESS;
+								continue;
 							}
 							else
 							{
@@ -1172,6 +1184,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 					}
 					else if (rewrite && pgop == MDB_PREV_DUP)
 					{
+						DBG("Workaround step 3");
 						// Step 3 of workaround.
 						// Time to stop moving back and reset.
 						// Go to beginning, start moving from oldest page to newest.
@@ -1183,20 +1196,27 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 					}
 					else if (rewrite)
 					{
+						DBG("Workaround step 4");
 						// Step 4 of workaround.
 						// Copy pages that we will keep to buffer.
 						short pgSz = pgDelVal.mv_size;
 						u8 *buf = thr->ckpWorkaround->buf;
 
-						if (rewritePos+sizeof(short)+pgSz > thr->ckpWorkaround->bufSize)
+						while (rewritePos+sizeof(short)*2+pgSz > thr->ckpWorkaround->bufSize)
 						{
-							// I dont see any possibility of hitting this.
-							DBG("Calculated buffer size wrong???");
-							exit(EXIT_FAILURE);
+							thr->ckpWorkaround->bufSize *= 1.5;
+							thr->ckpWorkaround->buf = buf = realloc(buf, thr->ckpWorkaround->bufSize);
+
+							if (buf == NULL)
+							{
+								exit(EXIT_FAILURE);
+							}
 						}
 
 						memcpy(buf+rewritePos, &pgSz, sizeof(short));
 						memcpy(buf+rewritePos+sizeof(short), pgDelVal.mv_data, pgSz);
+						buf[rewritePos+sizeof(short)+pgSz] = 0;
+						buf[rewritePos+sizeof(short)+pgSz+1] = 0;
 						rewritePos += sizeof(short)+pgSz;
 					}
 					else
@@ -1205,14 +1225,16 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 						// we deleted a few pages off the top and we are done.
 						break;
 					}
-						
 
 					ndupl--;
 					if (!ndupl)
 						break;
-				} while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS);
+
+					rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop);
+				} while (rc == MDB_SUCCESS);
 				if (rewrite)
 				{
+					DBG("Workaround exit %d, ndupl=%zu, pagediff=%d",rc, ndupl,thr->ckpWorkaround->allPagesDiff);
 					// If last page and we have not written anything to buffer, we have shrunk DB.
 					if (!rewritePos && pgno == pWal->mxPage)
 						pWal->mxPage--;
@@ -2351,26 +2373,6 @@ static ERL_NIF_TERM make_answer(db_command *cmd, ERL_NIF_TERM answer)
 }
 
 
-static MDB_txn* open_txn(db_thread *data, int flags)
-{
-	if (mdb_txn_begin(data->env, NULL, flags, &data->txn) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_set_compare(data->txn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_set_dupsort(data->txn, data->pagesdb, pagesdb_val_cmp) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_cursor_open(data->txn, data->logdb, &data->cursorLog) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_cursor_open(data->txn, data->pagesdb, &data->cursorPages) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_cursor_open(data->txn, data->infodb, &data->cursorInfo) != MDB_SUCCESS)
-		return NULL;
-
-	return data->txn;
-}
-
 // Lmdb bug or bad use of lmdb. Sometimes checkpoint/rewind fails and the only thing we can do
 // is delete a pagesdb entry and recreate it.
 static int do_workaround(db_thread *data)
@@ -2380,6 +2382,8 @@ static int do_workaround(db_thread *data)
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 	MDB_val key, val;
 	int rc;
+
+	DBG("do_workaround, bufsize=%zu",data->ckpWorkaround->bufSize);
 
 	if (data->txn == NULL)
 	{
@@ -2420,6 +2424,7 @@ static int do_workaround(db_thread *data)
 
 		val.mv_size = pgSz;
 		val.mv_data = buf+pos+sizeof(short);
+		DBG("Workaround insert page");
 
 		if ((rc = mdb_cursor_put(data->cursorPages,&key,&val,0)) != MDB_SUCCESS)
 		{

@@ -16,7 +16,9 @@ run_test_() ->
 	fun checkpoint1/0,
 	fun bigtrans/0,
 	fun bigtrans_check/0,
-	{timeout,25,fun async/0}
+	{timeout,25,fun async/0},
+	fun problem_checkpoint/0,
+	fun problem_rewind/0
 	].
 
 
@@ -91,6 +93,55 @@ w(Db,C) ->
 	end,
 	w(Db,C+1).
 
+problem_checkpoint() ->
+	case file:read_file_info("../problemlmdb") of
+		{ok,_} ->
+			garbage_collect(),
+			code:delete(actordb_driver_nif),
+			code:purge(actordb_driver_nif),
+			false = code:is_loaded(actordb_driver_nif),
+			case file:read_file_info("lmdb") of
+				{ok,_} ->
+					ok = file:rename("lmdb","lmdb_prev"),
+					ok = file:delete("lmdb-lock");
+				_ ->
+					ok
+			end,
+			{ok,_} = file:copy("../problemlmdb","lmdb"),
+			?INIT,
+			{ok,Db} = actordb_driver:open("actors/irenatest2%40onyx.biocoded.com.user"),
+			% ok = actordb_driver:wal_rewind(Db,5400),
+			ok = actordb_driver:checkpoint(Db,5700),
+			?debugFmt("Problem checkpoint success",[]),
+			ok;
+		_ ->
+			?debugFmt("Skipping problem checkpoint test, you do not have the file",[]),
+			ok
+	end.
+problem_rewind() ->
+	case file:read_file_info("../problemlmdb") of
+		{ok,_} ->
+			garbage_collect(),
+			code:delete(actordb_driver_nif),
+			code:purge(actordb_driver_nif),
+			false = code:is_loaded(actordb_driver_nif),
+			case file:read_file_info("lmdb") of
+				{ok,_} ->
+					ok = file:delete("lmdb"),
+					ok = file:delete("lmdb-lock");
+				_ ->
+					ok
+			end,
+			{ok,_} = file:copy("../problemlmdb","lmdb"),
+			?INIT,
+			{ok,Db} = actordb_driver:open("actors/irenatest2%40onyx.biocoded.com.user"),
+			ok = actordb_driver:wal_rewind(Db,5400),
+			?debugFmt("Problem rewind success",[]),
+			ok;
+		_ ->
+			?debugFmt("Skipping problem rewind test, you do not have the file",[]),
+			ok
+	end.
 
 dbcopy() ->
 	?INIT,
