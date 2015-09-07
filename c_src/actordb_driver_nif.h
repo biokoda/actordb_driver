@@ -16,6 +16,7 @@
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
 
+// #define TRACK_TIME 1
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
@@ -122,6 +123,11 @@ struct ckp_workaround
 
 struct db_thread
 {
+	#ifdef TRACK_TIME
+	u8 timeBuf[1024*1024];
+	int timeBufPos;
+	u8 timeTrack;
+	#endif
 	MDB_val *resFrames;
 	MDB_dbi infodb;
 	MDB_dbi logdb;

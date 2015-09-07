@@ -40,6 +40,31 @@
 
 #include "actordb_driver_nif.h"
 
+#ifdef TRACK_TIME
+#include <mach/mach_time.h>
+
+void track_time(u8 id, db_thread *thr);
+void track_flag(db_thread *thr, u8 flag);
+
+void track_flag(db_thread *thr, u8 flag)
+{
+	thr->timeTrack = flag;
+}
+void track_time(u8 id, db_thread *thr)
+{
+	if (thr->timeTrack && thr->timeBufPos+sizeof(u64) < sizeof(thr->timeBuf))
+	{
+		u64 t = mach_absolute_time();
+		thr->timeBuf[thr->timeBufPos] = id;
+		memcpy(thr->timeBuf+thr->timeBufPos+1, &t, sizeof(u64));
+		thr->timeBufPos += sizeof(u64) + 1;
+	}
+}
+#else
+#define track_time(X,Y)
+#define track_flag(X,Y)
+#endif
+
 static void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
@@ -1653,6 +1678,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		const ERL_NIF_TERM *insertRow;
 		int rowLen = 0;
 
+		track_flag(thread,1);
+		track_time(0,thread);
+
 		results = enif_make_list(cmd->env,0);
 
 		if (inputTuple)
@@ -2035,6 +2063,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 				rows = enif_make_list(cmd->env,0);
 				rowcount = 0;
+				track_time(1,thread);
 				while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
 				{
 					ERL_NIF_TERM *array = NULL;
@@ -2054,6 +2083,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 						array, column_count), rows);
 					rowcount++;
 				}
+				track_time(6,thread);
+				track_flag(thread,0);
 			}
 			DBG("exec rc=%d, rowcount=%d, column_count=%d, skip=%d", rc, rowcount, column_count,(int)skip);
 			if (rc > 0 && rc < 100)
@@ -2625,6 +2656,26 @@ static void *thread_func(void *arg)
 
 	if (data->columnSpace)
 		free(data->columnSpace);
+
+#ifdef TRACK_TIME
+	{
+		mach_timebase_info_data_t info;
+		if (mach_timebase_info (&info) == KERN_SUCCESS)
+		{
+			u64 n;
+			FILE *tm = fopen("time.bin","wb");
+			
+			n = info.numer;
+			fwrite(&n,sizeof(n),1,tm);
+			n = info.denom;
+			fwrite(&n,sizeof(n),1,tm);
+			fwrite(data->timeBuf,data->timeBufPos, 1, tm);
+			fclose(tm);
+		}
+	}
+#endif
+
+	free(data);
 
 	return NULL;
 }

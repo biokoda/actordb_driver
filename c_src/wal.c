@@ -1071,7 +1071,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 		u8 pagesBuf[PAGE_BUFF_SIZE];
 		int full_size = 0;
+		track_time(2,thr);
 		int page_size = LZ4_compress_default((char*)p->pData,(char*)pagesBuf+sizeof(u64)*2+1,szPage,sizeof(pagesBuf));
+		track_time(3,thr);
 		char fragment_index = 0;
 		int skipped = 0;
 
@@ -1099,6 +1101,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		memcpy(pagesKeyBuf + sizeof(u64), &p->pgno,    sizeof(u32));
 		key.mv_size = sizeof(pagesKeyBuf);
 		key.mv_data = pagesKeyBuf;
+		
 
 		// Check if there are pages with the same or higher evnum/evterm. If there are, delete them.
 		// This can happen if sqlite flushed some page to disk before commiting, because there were
@@ -1170,6 +1173,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			key.mv_size = sizeof(pagesKeyBuf);
 			key.mv_data = pagesKeyBuf;
 		}
+		track_time(4,thr);
 
 		memcpy(pagesBuf,               &pWal->inProgressTerm,  sizeof(u64));
 		memcpy(pagesBuf + sizeof(u64), &pWal->inProgressEvnum, sizeof(u64));
@@ -1300,6 +1304,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		rc = storeinfo(pWal,0,0,NULL);
 		if (rc != SQLITE_OK)
 			return rc;
+
+		track_time(5,thr);
 	}
 
 	return SQLITE_OK;

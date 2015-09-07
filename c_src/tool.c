@@ -316,55 +316,55 @@ bckp_done:
 	return 0;
 }
 
-static int do_checkpoint(const char *pth)
-{
-	lmdb rd;
-	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-	MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
-	u64 evnum,evterm,aindex = 126;
-	u32 pgno = 65;
-	int mrc;
+// static int do_checkpoint(const char *pth)
+// {
+// 	lmdb rd;
+// 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+// 	MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
+// 	u64 evnum,evterm,aindex = 126;
+// 	u32 pgno = 65;
+// 	int mrc;
 
-	memcpy(pagesKeyBuf,               &aindex,sizeof(u64));
-	memcpy(pagesKeyBuf + sizeof(u64), &pgno,  sizeof(u32));
-	pgKey.mv_data = pagesKeyBuf;
-	pgKey.mv_size = sizeof(pagesKeyBuf);
+// 	memcpy(pagesKeyBuf,               &aindex,sizeof(u64));
+// 	memcpy(pagesKeyBuf + sizeof(u64), &pgno,  sizeof(u32));
+// 	pgKey.mv_data = pagesKeyBuf;
+// 	pgKey.mv_size = sizeof(pagesKeyBuf);
 
-	if (open_env(&rd, pth, 0) == -1)
-	{
-		fprintf(stderr,"Unable to open source environment\n");
-		return -1;
-	}
+// 	if (open_env(&rd, pth, 0) == -1)
+// 	{
+// 		fprintf(stderr,"Unable to open source environment\n");
+// 		return -1;
+// 	}
 
-	if (mdb_cursor_get(rd.cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
-	{
-		return 0;
-	}
-	if (mdb_cursor_get(rd.cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP) != MDB_SUCCESS)
-		return 0;
+// 	if (mdb_cursor_get(rd.cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+// 	{
+// 		return 0;
+// 	}
+// 	if (mdb_cursor_get(rd.cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP) != MDB_SUCCESS)
+// 		return 0;
 
-	do{
-		MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
-		mdb_cursor_get(rd.cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
-		memcpy(&evterm, pgDelVal.mv_data,                 sizeof(u64));
-		memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
-		DBG("next %llu",evnum);
-		// if (evnum < 5538) //5654 
-		if (evnum == 5538)
-		{
-			mrc = mdb_cursor_del(rd.cursorPages,0);
-			if (mrc != MDB_SUCCESS)
-			{
-				DBG("Unable to delete page on cursor! err=%d, evnum=%llu",mrc,evnum);
-				return 1;
-			}
-			DBG("Deleted");
-		}
+// 	do{
+// 		MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
+// 		mdb_cursor_get(rd.cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
+// 		memcpy(&evterm, pgDelVal.mv_data,                 sizeof(u64));
+// 		memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
+// 		DBG("next %llu",evnum);
+// 		// if (evnum < 5538) //5654 
+// 		if (evnum == 5538)
+// 		{
+// 			mrc = mdb_cursor_del(rd.cursorPages,0);
+// 			if (mrc != MDB_SUCCESS)
+// 			{
+// 				DBG("Unable to delete page on cursor! err=%d, evnum=%llu",mrc,evnum);
+// 				return 1;
+// 			}
+// 			DBG("Deleted");
+// 		}
 		
-	}while (mdb_cursor_get(rd.cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP) == MDB_SUCCESS);
-	mdb_txn_commit(rd.txn);
-	return 0;
-}
+// 	}while (mdb_cursor_get(rd.cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP) == MDB_SUCCESS);
+// 	mdb_txn_commit(rd.txn);
+// 	return 0;
+// }
 
 static int do_extract(const char *pth, const char *actor, const char *type, const char *dst)
 {
@@ -525,10 +525,10 @@ int main(int argc, const char* argv[])
 		else
 			do_extract(argv[2],argv[3],argv[4], argv[5]);
 	}
-	else if (argc == 3 && strcmp(argv[1],"checkpoint") == 0)
-	{
-		do_checkpoint(argv[2]);
-	}
+	// else if (argc == 3 && strcmp(argv[1],"checkpoint") == 0)
+	// {
+	// 	do_checkpoint(argv[2]);
+	// }
 	else
 	{
 		printf("Backup:\n");

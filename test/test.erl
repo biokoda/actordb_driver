@@ -2,23 +2,23 @@
 -include_lib("eunit/include/eunit.hrl").
 -define(READTHREADS,1).
 -define(DBSIZE,4096*1024*128).
--define(INIT,actordb_driver:init({{"."},{},?DBSIZE,?READTHREADS})).
+-define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS})).
 -define(READ,actordb_driver:exec_read).
 
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
 	[
-	fun lz4/0,
-	fun modes/0,
-	fun dbcopy/0,
-	fun checkpoint/0,
-	fun checkpoint1/0,
-	fun bigtrans/0,
-	fun bigtrans_check/0,
-	{timeout,25,fun async/0},
-	fun problem_checkpoint/0,
-	fun problem_rewind/0
+	% fun lz4/0,
+	% fun modes/0,
+	% fun dbcopy/0,
+	% fun checkpoint/0,
+	% fun checkpoint1/0,
+	% fun bigtrans/0,
+	% fun bigtrans_check/0,
+	{timeout,25,fun async/0}
+	% fun problem_checkpoint/0,
+	% fun problem_rewind/0
 	].
 
 
@@ -59,6 +59,7 @@ modes() ->
 
 async() ->
 	?debugFmt("Running many async reads/writes for 20s",[]),
+	?INIT,
 	application:ensure_all_started(crypto),
 	ets:new(ops,[set,public,named_table,{write_concurrency,true}]),
 	ets:insert(ops,{w,0}),
@@ -73,7 +74,10 @@ async() ->
 	end,
 	[exit(P,stop) || P <- Pids],
 	timer:sleep(3000),
-	?debugFmt("Reads: ~p, Writes: ~p",[ets:lookup(ops,r),ets:lookup(ops,w)]).
+	?debugFmt("Reads: ~p, Writes: ~p",[ets:lookup(ops,r),ets:lookup(ops,w)]),
+	garbage_collect(),
+	code:delete(actordb_driver_nif),
+	code:purge(actordb_driver_nif).
 
 w(N,RandList) ->
 	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
@@ -85,7 +89,9 @@ w(Db,C,[Rand|T],L) ->
 		0 when C rem 20 == 0 ->
 			actordb_driver:checkpoint(Db,C-20);
 		0 ->
-			Sql = <<"INSERT INTO tab VALUES (?1,'?2');">>,
+			% Using static sql with parameterized queries cuts down on sql parsing
+			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
+			Sql = <<"#s00;">>,
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
 			ets:update_counter(ops,w,{2,1});
 		_ ->
