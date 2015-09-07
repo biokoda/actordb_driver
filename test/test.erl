@@ -63,7 +63,8 @@ async() ->
 	ets:new(ops,[set,public,named_table,{write_concurrency,true}]),
 	ets:insert(ops,{w,0}),
 	ets:insert(ops,{r,0}),
-	Pids = [element(1,spawn_monitor(fun() -> w(P) end)) || P <- lists:seq(1,100)],
+	RandBytes = [base64:encode(crypto:rand_bytes(1024)) || _ <- lists:seq(1,1000)],
+	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,100)],
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
 			exit(Reason)
@@ -74,24 +75,26 @@ async() ->
 	timer:sleep(3000),
 	?debugFmt("Reads: ~p, Writes: ~p",[ets:lookup(ops,r),ets:lookup(ops,w)]).
 
-w(N) ->
+w(N,RandList) ->
 	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
 	Sql = "CREATE TABLE tab (id integer primary key, val text);",
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
-	w(Db,1).
-w(Db,C) ->
+	w(Db,1,RandList,[]).
+w(Db,C,[Rand|T],L) ->
 	case C rem 5 of
 		0 when C rem 20 == 0 ->
 			actordb_driver:checkpoint(Db,C-20);
 		0 ->
-			Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'",base64:encode(crypto:rand_bytes(1024)),"');"],
-			{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>),
+			Sql = <<"INSERT INTO tab VALUES (?1,'?2');">>,
+			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
 			ets:update_counter(ops,w,{2,1});
 		_ ->
 			{ok,_} = ?READ("select * from tab limit 5",Db),
 			ets:update_counter(ops,r,{2,1})
 	end,
-	w(Db,C+1).
+	w(Db,C+1,T,[Rand|L]);
+w(Db,C,[],L) ->
+	w(Db,C,L,[]).
 
 problem_checkpoint() ->
 	case file:read_file_info("../problemlmdb") of
