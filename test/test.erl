@@ -9,16 +9,16 @@ run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
 	[
-	% fun lz4/0,
-	% fun modes/0,
-	% fun dbcopy/0,
-	% fun checkpoint/0,
-	% fun checkpoint1/0,
-	% fun bigtrans/0,
-	% fun bigtrans_check/0,
-	{timeout,25,fun async/0}
-	% fun problem_checkpoint/0,
-	% fun problem_rewind/0
+	fun lz4/0,
+	fun modes/0,
+	fun dbcopy/0,
+	fun checkpoint/0,
+	fun checkpoint1/0,
+	fun bigtrans/0,
+	fun bigtrans_check/0,
+	{timeout,25,fun async/0},
+	fun problem_checkpoint/0,
+	fun problem_rewind/0
 	].
 
 
@@ -81,6 +81,7 @@ async() ->
 
 w(N,RandList) ->
 	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
+	% {ok,Db} = actordb_driver:open(":memory:",N),
 	Sql = "CREATE TABLE tab (id integer primary key, val text);",
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
 	w(Db,1,RandList,[]).
