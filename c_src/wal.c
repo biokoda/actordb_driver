@@ -551,7 +551,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		memcpy(logKeyBuf + sizeof(u64)*2, &iter->evnum, sizeof(u64));
 		logKey.mv_data = logKeyBuf;
 		logKey.mv_size = sizeof(logKeyBuf);
-		DBG("iterate looking for, term=%llu evnum=%llu",iter->evterm,iter->evnum);
+		DBG("iterate looking for, matchterm=%llu matchevnum=%llu",iter->evterm,iter->evnum);
 		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
 			// Evterm/evnum combination not found. Check if evnum is there.
@@ -601,7 +601,8 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 
 		// We start iterate from next evnum not current. Input evterm/evnum is match_index and match_term.
 		// It needs next.
-		if ((rc = mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_NEXT_NODUP)) != MDB_SUCCESS)
+		if (iter->started == 1 &&
+			(rc = mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_NEXT_NODUP)) != MDB_SUCCESS)
 		{
 			*done = 1;
 			return 0;
@@ -624,6 +625,8 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 				*done = 1;
 				return 0;
 			}
+			// To keep from moving iter->evterm/iter->evnum forward more than once.
+			iter->started = 2;
 		}
 
 		logop = MDB_FIRST_DUP;
@@ -638,7 +641,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 			mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
 			memcpy(&pgno,logVal.mv_data,sizeof(u32));
 
-			DBG("iterate at pgno=%u",pgno);
+			DBG("iterate at pgno=%u, pgnopos=%u",pgno,iter->pgnoPos);
 
 			if (pgno <= iter->pgnoPos)
 				continue;

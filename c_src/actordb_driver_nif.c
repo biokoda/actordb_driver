@@ -210,6 +210,7 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 			}
 			else
 			{
+				// DBG("Sent to con=%d",i);
 				// rt = recv(thread->sockets[i],confirm,6,0);
 				// if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
 				// {
