@@ -551,7 +551,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		memcpy(logKeyBuf + sizeof(u64)*2, &iter->evnum, sizeof(u64));
 		logKey.mv_data = logKeyBuf;
 		logKey.mv_size = sizeof(logKeyBuf);
-// DBG("D %llu %llu",iter->evterm,iter->evnum);
+		DBG("iterate looking for, term=%llu evnum=%llu",iter->evterm,iter->evnum);
 		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
 			// Evterm/evnum combination not found. Check if evnum is there.
@@ -573,12 +573,16 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 					*done = 1;
 					return 0;
 				}
-				while (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV) == MDB_SUCCESS)
+				while (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) == MDB_SUCCESS)
 				{
 					u64 aindex, term, evnum;
+
+					mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
 					memcpy(&aindex, logKey.mv_data,              sizeof(u64));
 					memcpy(&term,   (u8*)logKey.mv_data+sizeof(u64),  sizeof(u64));
 					memcpy(&evnum,  (u8*)logKey.mv_data+sizeof(u64)*2,sizeof(u64));
+
+					DBG("Iterate on term=%llu, evnum=%llu, looking for=%llu",term,evnum,iter->evnum);
 
 					if (aindex != pWal->index)
 						break;
@@ -630,6 +634,8 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 			u32 iRead;
 
 			logop = MDB_NEXT_DUP;
+
+			mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
 			memcpy(&pgno,logVal.mv_data,sizeof(u32));
 
 			DBG("iterate at pgno=%u",pgno);
@@ -1239,6 +1245,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		{
 			u8 logKeyBuf[sizeof(u64)*3];
 
+			DBG("Inserting to log");
+
 			memcpy(logKeyBuf,                 &pWal->index,           sizeof(u64));
 			memcpy(logKeyBuf + sizeof(u64),   &pWal->inProgressTerm,  sizeof(u64));
 			memcpy(logKeyBuf + sizeof(u64)*2, &pWal->inProgressEvnum, sizeof(u64));
@@ -1260,6 +1268,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	}
 	else
 	{
+		DBG("Skipping log");
 		for(p=pList; p; p=p->pDirty)
 			pWal->allPages++;
 	}
