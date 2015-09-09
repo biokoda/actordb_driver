@@ -40,31 +40,6 @@
 
 #include "actordb_driver_nif.h"
 
-#ifdef TRACK_TIME
-#include <mach/mach_time.h>
-
-void track_time(u8 id, db_thread *thr);
-void track_flag(db_thread *thr, u8 flag);
-
-void track_flag(db_thread *thr, u8 flag)
-{
-	thr->timeTrack = flag;
-}
-void track_time(u8 id, db_thread *thr)
-{
-	if (thr->timeTrack && thr->timeBufPos+sizeof(u64) < sizeof(thr->timeBuf))
-	{
-		u64 t = mach_absolute_time();
-		thr->timeBuf[thr->timeBufPos] = id;
-		memcpy(thr->timeBuf+thr->timeBufPos+1, &t, sizeof(u64));
-		thr->timeBufPos += sizeof(u64) + 1;
-	}
-}
-#else
-#define track_time(X,Y)
-#define track_flag(X,Y)
-#endif
-
 static void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
