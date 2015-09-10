@@ -617,9 +617,9 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 				*done = 1;
 				return 0;
 			}
-			memcpy(&aindex,       logKey.mv_data,              sizeof(u64));
-			memcpy(&iter->evterm, logKey.mv_data+sizeof(u64),  sizeof(u64));
-			memcpy(&iter->evnum,  logKey.mv_data+sizeof(u64)*2,sizeof(u64));
+			memcpy(&aindex,       (u8*)logKey.mv_data,              sizeof(u64));
+			memcpy(&iter->evterm, (u8*)logKey.mv_data+sizeof(u64),  sizeof(u64));
+			memcpy(&iter->evnum,  (u8*)logKey.mv_data+sizeof(u64)*2,sizeof(u64));
 			if (aindex != pWal->index)
 			{
 				*done = 1;
@@ -808,11 +808,11 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				}
 				else if (evnum >= pgnoLimitEvnum && rewrite)
 				{
-					DBG("Workaround step 3");
 					// Step 3 of workaround
 					// These pages are kept. Copy them to buffer.
 					short pgSz = pgDelVal.mv_size;
 					u8 *buf = thr->ckpWorkaround->buf;
+					DBG("Workaround step 3");
 
 					while (rewritePos+sizeof(short)*2+pgSz > thr->ckpWorkaround->bufSize)
 					{
@@ -1074,17 +1074,17 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		(pWal->inProgressEvnum > 0 && pWal->inProgressEvnum < pWal->lastCompleteEvnum))
 		return SQLITE_ERROR;
 
+	track_time(2,thr);
 	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Fragment,CompressedPage/binary>>}
 	for(p=pList; p; p=p->pDirty)
 	{
 		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 		u8 pagesBuf[PAGE_BUFF_SIZE];
 		int full_size = 0;
-		track_time(2,thr);
 		int page_size = LZ4_compress_default((char*)p->pData,(char*)pagesBuf+sizeof(u64)*2+1,szPage,sizeof(pagesBuf));
-		track_time(3,thr);
 		char fragment_index = 0;
 		int skipped = 0;
+		track_time(3,thr);
 
 		DBG("Insert frame, actor=%lld, pgno=%u, "
 			"term=%lld, evnum=%lld, commit=%d, truncate=%d, compressedsize=%d",

@@ -1197,11 +1197,11 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 					}
 					else if (rewrite)
 					{
-						DBG("Workaround step 4");
 						// Step 4 of workaround.
 						// Copy pages that we will keep to buffer.
 						short pgSz = pgDelVal.mv_size;
 						u8 *buf = thr->ckpWorkaround->buf;
+						DBG("Workaround step 4");
 
 						while (rewritePos+sizeof(short)*2+pgSz > thr->ckpWorkaround->bufSize)
 						{
