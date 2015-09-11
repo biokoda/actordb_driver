@@ -377,23 +377,35 @@ static const char *get_sqlite3_error_msg(int error_code, sqlite3 *db)
 static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code, 
 	int pos, sqlite3 *db)
 {
-	const char *error_code_msg = get_sqlite3_return_code_msg(error_code);
-	const char *msg = get_sqlite3_error_msg(error_code, db);
+	if (db)
+	{
+		const char *error_code_msg = get_sqlite3_return_code_msg(error_code);
+		const char *msg = get_sqlite3_error_msg(error_code, db);
 
-	if (calledfrom == NULL)
-		return enif_make_tuple2(env, atom_error,
-			enif_make_tuple4(env,
-				enif_make_int(env,pos),
-				enif_make_string(env,"",ERL_NIF_LATIN1),
-				make_atom(env, error_code_msg),
-				enif_make_string(env, msg, ERL_NIF_LATIN1)));
+		if (error_code > 0)
+			return enif_make_tuple2(env, atom_error,
+				enif_make_tuple4(env,
+					enif_make_int(env,pos),
+					enif_make_string(env,"",ERL_NIF_LATIN1),
+					make_atom(env, error_code_msg),
+					enif_make_string(env, msg, ERL_NIF_LATIN1)));
+		else
+			return enif_make_tuple2(env, atom_error,
+				enif_make_tuple4(env,
+					enif_make_int(env,pos),
+					enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
+					atom_error,
+					enif_make_string(env, "", ERL_NIF_LATIN1)));
+	}
 	else
+	{
 		return enif_make_tuple2(env, atom_error,
 			enif_make_tuple4(env,
 				enif_make_int(env,pos),
 				enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
-				make_atom(env, error_code_msg),
-				enif_make_string(env, msg, ERL_NIF_LATIN1)));
+				atom_error,
+				enif_make_string(env, "", ERL_NIF_LATIN1)));
+	}
 }
 
 // static void
@@ -1585,7 +1597,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	u64 newTerm,newEvnum;
 	ERL_NIF_TERM *stackArray = NULL;
 	sqlite3_stmt *statement = NULL;
-	char *errat = NULL;
+	char *errat = "";
 	ERL_NIF_TERM results;
 	const ERL_NIF_TERM *inputTuple = NULL;
 	const ERL_NIF_TERM *tupleRecs = NULL;
@@ -1678,7 +1690,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		if (cmd->conn->db)
 		{
 			if (!enif_inspect_iolist_as_binary(cmd->env, headTop, &bin))
-				return make_error_tuple(cmd->env, "not_iolist");
+				// return make_error_tuple(cmd->env, "not_iolist");
+				return make_sqlite3_error_tuple(cmd->env, "not_iolist", 0, tuplePos, cmd->conn->db);
 		}
 		else
 		{
@@ -1688,7 +1701,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			memset(&pg,0,sizeof(PgHdr));
 			
 			if (!enif_get_uint(cmd->env,headTop, &pg.pgno))
-				return make_error_tuple(cmd->env,"not_pgno");
+				// return make_error_tuple(cmd->env,"not_pgno");
+				return make_sqlite3_error_tuple(cmd->env, "not_pgno", 0, tuplePos, cmd->conn->db);
 
 			// Blob storage
 			if (listTop == 0)
