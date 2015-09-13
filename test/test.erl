@@ -64,7 +64,7 @@ async() ->
 	ets:new(ops,[set,public,named_table,{write_concurrency,true}]),
 	ets:insert(ops,{w,0}),
 	ets:insert(ops,{r,0}),
-	RandBytes = [base64:encode(crypto:rand_bytes(1024)) || _ <- lists:seq(1,1000)],
+	RandBytes = [base64:encode(crypto:rand_bytes(128)) || _ <- lists:seq(1,1000)],
 	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,100)],
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
@@ -89,15 +89,16 @@ w(Db,C,[Rand|T],L) ->
 	case C rem 5 of
 		0 when C rem 20 == 0 ->
 			actordb_driver:checkpoint(Db,C-20);
-		0 ->
+		% 0 ->
+		_ ->
 			% Using static sql with parameterized queries cuts down on sql parsing
 			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
 			Sql = <<"#s00;">>,
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
-			ets:update_counter(ops,w,{2,1});
-		_ ->
-			{ok,_} = ?READ("select * from tab limit 5",Db),
-			ets:update_counter(ops,r,{2,1})
+			ets:update_counter(ops,w,{2,1})
+		% _ ->
+		% 	{ok,_RR} = ?READ("select * from tab limit 5",Db),
+		% 	ets:update_counter(ops,r,{2,1})
 	end,
 	w(Db,C+1,T,[Rand|L]);
 w(Db,C,[],L) ->

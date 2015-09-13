@@ -25,31 +25,6 @@ FILE *g_log = 0;
 # define DBG(X, ...)
 #endif
 
-#ifdef TRACK_TIME
-#include <mach/mach_time.h>
-
-void track_time(u8 id, db_thread *thr);
-void track_flag(db_thread *thr, u8 flag);
-
-void track_flag(db_thread *thr, u8 flag)
-{
-	thr->timeTrack = flag;
-}
-void track_time(u8 id, db_thread *thr)
-{
-	if (thr->timeTrack && thr->timeBufPos+sizeof(u64) < sizeof(thr->timeBuf))
-	{
-		u64 t = mach_absolute_time();
-		thr->timeBuf[thr->timeBufPos] = id;
-		memcpy(thr->timeBuf+thr->timeBufPos+1, &t, sizeof(u64));
-		thr->timeBufPos += sizeof(u64) + 1;
-	}
-}
-#else
-#define track_time(X,Y)
-#define track_flag(X,Y)
-#endif
-
 
 typedef struct db_connection db_connection;
 typedef struct db_backup db_backup;
@@ -306,6 +281,30 @@ struct qitem_t
 };
 
 
+#ifdef TRACK_TIME
+#include <mach/mach_time.h>
+
+void track_time(u8 id, db_thread *thr);
+void track_flag(db_thread *thr, u8 flag);
+
+void track_flag(db_thread *thr, u8 flag)
+{
+	thr->timeTrack = flag;
+}
+void track_time(u8 id, db_thread *thr)
+{
+	if (thr->timeTrack && thr->timeBufPos+sizeof(u64) < sizeof(thr->timeBuf))
+	{
+		u64 t = mach_absolute_time();
+		thr->timeBuf[thr->timeBufPos] = id;
+		memcpy(thr->timeBuf+thr->timeBufPos+1, &t, sizeof(u64));
+		thr->timeBufPos += sizeof(u64) + 1;
+	}
+}
+#else
+#define track_time(X,Y)
+#define track_flag(X,Y)
+#endif
 
 #ifndef _TESTAPP_
 ERL_NIF_TERM atom_ok;

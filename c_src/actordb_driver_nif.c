@@ -1667,7 +1667,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		int rowLen = 0;
 
 		track_flag(thread,1);
-		track_time(0,thread);
+		track_time(8,thread);
 
 		results = enif_make_list(cmd->env,0);
 
@@ -2074,7 +2074,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					rowcount++;
 				}
 				track_time(6,thread);
-				track_flag(thread,0);
+				// track_flag(thread,0);
 			}
 			DBG("exec rc=%d, rowcount=%d, column_count=%d, skip=%d", rc, rowcount, column_count,(int)skip);
 			if (rc > 0 && rc < 100)
@@ -2116,7 +2116,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		tuplePos++;
 		DBG("Tuple pos=%d, size=%d",tuplePos, tupleSize);
 	} while (tuplePos < tupleSize);
-
+	track_time(12,thread);
 	if (tupleResult && !(rc > 0 && rc < 100))
 	{
 		results = enif_make_tuple_from_array(cmd->env, tupleResult, tupleSize);
@@ -2147,6 +2147,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			priv_data *pd = thread->pd;
 			cmd->conn->syncNum = pd->syncNumbers[thread->index];
 		}
+		track_time(13,thread);
 		return make_ok_tuple(cmd->env,results);
 	}
 }
@@ -2530,7 +2531,7 @@ static void thread_ex(db_thread *data, qitem *item)
 
 			break;
 		}
-
+		track_time(14,data);
 		if (data->forceCommit)
 		{
 			data->forceCommit = 0;
@@ -2538,10 +2539,12 @@ static void thread_ex(db_thread *data, qitem *item)
 				mdb_txn_abort(data->txn);
 			data->txn = NULL;
 		}
-
+		track_time(11,data);
 		answer = make_answer(&item->cmd, res);
 		enif_send(NULL, &item->cmd.pid, item->cmd.env, answer);
+		// track_time(12,data);
 		enif_clear_env(item->cmd.env);
+		// track_time(13,data);
 	}
 
 	if (item->cmd.conn != NULL)
@@ -2570,7 +2573,9 @@ static void *thread_func(void *arg)
 	while(1)
 	{
 		qitem *item = queue_pop(data->tasks);
-
+		track_flag(data,1);
+		track_time(0,data);
+		track_time(100+queue_size(data->tasks),data);
 		if (item->cmd.type == cmd_stop)
 		{
 			queue_recycle(data->tasks,item);
@@ -2606,6 +2611,8 @@ static void *thread_func(void *arg)
 		}
 
 		thread_ex(data, item);
+		track_time(10,data);
+		track_flag(data,0);
 
 		// Execute list of syncs if:
 		// - we just did a sync

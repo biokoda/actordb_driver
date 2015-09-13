@@ -263,6 +263,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 	size_t ndupl = 0;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 
+	track_time(7,thr);
 	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu",
 		pgno,pWal->index,limitTerm,limitEvnum);
 
@@ -1207,6 +1208,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		data.mv_size = fragment_index == 0 ? full_size : thr->maxvalsize;
 		data.mv_data = pagesBuf;
 
+		// fragment_index == 0 ? MDB_APPENDDUP : 0
 		if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 		{
 			// printf("Cursor put failed to pages %d",rc);
