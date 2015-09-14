@@ -2383,7 +2383,6 @@ static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_dat
 	{
 		return make_error_tuple(item->cmd.env, "command_push_failed");
 	}
-
 	return atom_ok;
 }
 
@@ -2570,6 +2569,7 @@ static void *thread_func(void *arg)
 
 	while(1)
 	{
+		DBG("THread start wait %d",(int)data->nThread);
 		qitem *item = queue_pop(data->tasks);
 		track_flag(data,1);
 		track_time(0,data);
@@ -2924,6 +2924,7 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_pid");
 
 	thread = ((thread % pd->nEnvs) * pd->nWriteThreads) + (thread % pd->nWriteThreads);
+	DBG("db_open open=%u",thread);
 	item = command_create(thread,-1,pd);
 
 	item->cmd.type = cmd_open;

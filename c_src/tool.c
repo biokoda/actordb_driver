@@ -158,7 +158,7 @@ static int do_print(const char *pth, int what)
 		{
 			u64 index;
 			memcpy(&index, data.mv_data, sizeof(u64));
-			printf("Actor=%.*s, id=%llu\n",(int)key.mv_size, key.mv_data, index);
+			printf("Actor=%.*s, id=%llu\n",(int)key.mv_size, (char*)key.mv_data, index);
 			rc = mdb_cursor_get(lm.cursorActors,&key,&data,MDB_NEXT);
 		}
 	}
