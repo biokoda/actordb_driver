@@ -87,19 +87,19 @@ w(N,RandList) ->
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
 	w(Db,1,RandList,[]).
 w(Db,C,[Rand|T],L) ->
-	case C rem 5 of
+	case C rem 2 of
 		0 when C rem 20 == 0 ->
 			actordb_driver:checkpoint(Db,C-20);
-		% 0 ->
-		_ ->
+		0 ->
+		% _ ->
 			% Using static sql with parameterized queries cuts down on sql parsing
 			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
 			Sql = <<"#s00;">>,
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
-			ets:update_counter(ops,w,{2,1})
-		% _ ->
-		% 	{ok,_RR} = ?READ("select * from tab limit 5",Db),
-		% 	ets:update_counter(ops,r,{2,1})
+			ets:update_counter(ops,w,{2,1});
+		_ ->
+			{ok,_RR} = ?READ("select * from tab limit 5",Db),
+			ets:update_counter(ops,r,{2,1})
 	end,
 	w(Db,C+1,T,[Rand|L]);
 w(Db,C,[],L) ->

@@ -142,7 +142,8 @@ lz4_decompress(_,_,_) ->
 % backup_pages(_) ->
 %     exit(nif_library_not_loaded).
 
-init(Threads) when tuple_size(Threads) == 2 orelse tuple_size(Threads) == 3 orelse tuple_size(Threads) == 4 ->
+init(Threads) when tuple_size(Threads) == 2 orelse tuple_size(Threads) == 3 orelse 
+		tuple_size(Threads) == 4 orelse tuple_size(Threads) == 5 ->
 	NifName = "actordb_driver_nif",
 	NifFileName = case code:priv_dir(actordb_driver) of
 		{error, bad_name} -> filename:join("priv", NifName);

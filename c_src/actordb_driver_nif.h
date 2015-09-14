@@ -163,8 +163,8 @@ struct db_thread
 
 	int columnSpaceSize;
 	u32 pagesChanged;
-	u8 nThread; // Index of this thread
-	u8 nEnv;    // Environment index of this thread
+	int nThread; // Index of this thread
+	int nEnv;    // Environment index of this thread
 	int maxvalsize;
 	int nResFrames;
 	u8 forceCommit;
