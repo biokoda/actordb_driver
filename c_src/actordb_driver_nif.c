@@ -3849,7 +3849,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->thrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
 	memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nEnvs));
 
-	if(enif_thread_create("db_connection", &(priv->tids[priv->nEnvs]), 
+	if(enif_thread_create("db_connection", &(priv->tids[priv->nEnvs*priv->nWriteThreads]),
 		thread_func, controlThread, NULL) != 0)
 	{
 		return -1;
