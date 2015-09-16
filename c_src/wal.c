@@ -943,12 +943,12 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 			pgKey.mv_data = pagesKeyBuf;
 			pgKey.mv_size = sizeof(pagesKeyBuf);
 
-			// DBG("UNDO pgno=%d",pgno));
+			DBG("UNDO pgno=%d",pgno);
 
 			pgop = MDB_FIRST_DUP;
 			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 			{
-				// DBG("Key not found in log for undo"));
+				DBG("Key not found in log for undo");
 				continue;
 			}
 			mdb_cursor_count(thr->cursorPages,&ndupl);
@@ -957,11 +957,16 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 				u8 frag = *((u8*)pgVal.mv_data+sizeof(u64)*2);
 				memcpy(&term, pgVal.mv_data,                 sizeof(u64));
 				memcpy(&evnum,(u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
-				// DBG("progress term %lld, progress evnum %lld, curterm %lld, curnum %lld",
-				//   pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum));
+				DBG("progress term %lld, progress evnum %lld, curterm %lld, curnum %lld",
+				  pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum);
 				if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
 				{
-					mdb_cursor_del(thr->cursorPages,0);
+					if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
+					{
+						DBG("Can not delete undo");
+						rc = SQLITE_ERROR;
+						break;
+					}
 					if (frag == 0)
 						pWal->allPages--;
 					ndupl--;
@@ -985,7 +990,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	// 	DBG("Unable to cleanup key from logdb"));
 	// }
 
-	// DBG("Undo done!"));
+	DBG("Undo done!");
 	pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 
   return rc;

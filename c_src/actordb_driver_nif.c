@@ -420,7 +420,7 @@ static qitem* command_create(int threadnum, int readThreadNum, priv_data *p)
 	queue *thrCmds = NULL;
 	qitem *item;
 	ErlNifEnv *env;
-	if (threadnum == -1)
+	if (threadnum == -1 && readThreadNum == -1)
 		thrCmds = p->wtasks[p->nthreads];
 	else if (readThreadNum == -1)
 		thrCmds = p->wtasks[threadnum];
@@ -1009,7 +1009,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 
 	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&limitEvnum);
 
-	DBG("do_wal_rewind");
+	DBG("do_wal_rewind, actor=%llu, limit=%llu",pWal->index, limitEvnum);
 
 	// We can not rewind that far back
 	if (limitEvnum < pWal->firstCompleteEvnum && limitEvnum > 0)
@@ -3374,7 +3374,7 @@ static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3]) || enif_is_tuple(env,argv[3])))
 		return make_error_tuple(env,"sql");
 
-	item = command_create(res->thread,-1,pd);
+	item = command_create(res->thread,res->rthread,pd);
 
 	item->cmd.type = cmd_exec_script;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
