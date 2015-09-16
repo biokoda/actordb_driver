@@ -47,17 +47,18 @@ typedef u16 ht_slot;
 
 struct priv_data
 {
-	queue **wtasks;      // array of queues for every thread + control thread
-	queue **rtasks;     // every write thread, has nReadThreads
-	int nthreads;       // number of work threads
+	queue **wtasks;      // array of queues for every write thread + control thread
+	queue **rtasks;      // every environment has nReadThreads
+	int nEnvs;           // number of environments
 	int nReadThreads;
+	int nWriteThreads;
 
 	u64 *syncNumbers;
 
 	#ifndef _TESTAPP_
 	ErlNifMutex *prepMutex;
 	ErlNifMutex **thrMutexes;
-	ErlNifTid *tids;    // tids for every write thread
+	ErlNifTid *tids;    // tids for every write thread + control
 	ErlNifTid *rtids;    // tids for every read thread
 	ErlNifResourceType *db_connection_type;
 	ErlNifResourceType *db_backup_type;
@@ -162,7 +163,8 @@ struct db_thread
 
 	int columnSpaceSize;
 	u32 pagesChanged;
-	int index;        // Index in table of threads.
+	int nThread; // Index of this thread
+	int nEnv;    // Environment index of this thread
 	int maxvalsize;
 	int nResFrames;
 	u8 forceCommit;
@@ -209,7 +211,7 @@ struct db_connection
 	// Set bit for every failed attempt to write to socket of connection
 	u8 failFlags;
 	// Write thread index
-	u8 thread;
+	u8 wthread;
 	// Read thread index
 	u8 rthread;
 };

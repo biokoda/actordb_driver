@@ -130,10 +130,15 @@ fsync_num({actordb_driver, _Ref, Connection}) ->
 	actordb_driver_nif:fsync_num(Connection).
 fsync() ->
 	ok = actordb_driver_nif:fsync().
-fsync({actordb_driver, _Ref, Connection}) ->
+fsync({actordb_driver, _Ref, Connection} = C) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:fsync(Connection, Ref, self()),
-	receive_answer(Ref).
+	case actordb_driver_nif:fsync(Connection, Ref, self()) of
+		again ->
+			timer:sleep(10),
+			fsync(C);
+		ok ->
+			receive_answer(Ref)
+	end.
 
 iterate_close({iter,Iter}) ->
 	ok = actordb_driver_nif:iterate_close(Iter).
