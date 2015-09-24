@@ -2570,7 +2570,6 @@ static void *thread_func(void *arg)
 
 	while(1)
 	{
-		DBG("THread start wait %d",(int)data->nThread);
 		qitem *item = queue_pop(data->tasks);
 		track_flag(data,1);
 		track_time(0,data);
@@ -3962,8 +3961,6 @@ static void on_unload(ErlNifEnv* env, void* pd)
 {
 	int i,j,k;
 	priv_data *priv = (priv_data*)pd;
-
-	DBG("unload");
 
 	qitem *item = command_create(-1,-1,priv);
 	item->cmd.type = cmd_stop;
