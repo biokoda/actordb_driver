@@ -1068,7 +1068,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 				memcpy(&aindex, logKey.mv_data, sizeof(u64));
 				if (pWal->index != aindex)
 					break;
-				mdb_cursor_del(thr->cursorPages, MDB_NODUPDATA);
+				mdb_cursor_del(thr->cursorLog, MDB_NODUPDATA);
 			}
 			pWal->firstCompleteTerm = pWal->firstCompleteTerm = pWal->lastCompleteTerm = 
 			pWal->lastCompleteEvnum = 0;

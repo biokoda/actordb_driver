@@ -75,6 +75,7 @@ static int open_env(lmdb *lm, const char *pth, int flags)
 	// 	// 1TB def size on linux
 	// 	u64 dbsize = 4096*1024*1024*128*2LL;
 	// #endif
+	int rc;
 
 	if (mdb_env_create(&lm->menv) != MDB_SUCCESS)
 		return -1;
@@ -84,6 +85,7 @@ static int open_env(lmdb *lm, const char *pth, int flags)
 	// 	return -1;
 	if (mdb_env_open(lm->menv, pth, MDB_NOSUBDIR | flags, 0664) != MDB_SUCCESS)
 		return -1;
+
 	if (mdb_txn_begin(lm->menv, NULL, flags, &lm->txn) != MDB_SUCCESS)
 		return -1;
 
@@ -255,22 +257,24 @@ static int do_print(const char *pth, int what)
 	return 0;
 }
 
-static void sighandle(int sig)
-{
-}
+// static void sighandle(int sig)
+// {
+// }
 
 static int do_backup(const char *src, const char *dst)
 {
+	MDB_val key, data;
 	lmdb rd, wr;
+	int rc;
 
-#ifdef SIGPIPE
-	signal(SIGPIPE, sighandle);
-#endif
-#ifdef SIGHUP
-	signal(SIGHUP, sighandle);
-#endif
-	signal(SIGINT, sighandle);
-	signal(SIGTERM, sighandle);
+// #ifdef SIGPIPE
+// 	signal(SIGPIPE, sighandle);
+// #endif
+// #ifdef SIGHUP
+// 	signal(SIGHUP, sighandle);
+// #endif
+// 	signal(SIGINT, sighandle);
+// 	signal(SIGTERM, sighandle);
 
 	memset(&rd,0,sizeof(rd));
 	memset(&wr,0,sizeof(wr));
@@ -291,19 +295,98 @@ static int do_backup(const char *src, const char *dst)
 			rc = mdb_env_copy2(rd.menv, dst, 0);
 		if (rc != 0)
 			fprintf(stderr,"Backup failed %s\n",strerror(rc));
-		goto bckp_done;
+		// goto bckp_done;
 	}
+	mdb_txn_commit(rd.txn);
+	close_env(&rd);
 
 	// if (open_env(&rd, src, MDB_RDONLY) == -1)
 	// {
 	// 	printf("Unable to open source environment\n");
 	// 	return -1;
 	// }
-	// if (open_env(&wr, dst, 0) == -1)
-	// {
-	// 	printf("Unable to open destination environment\n");
-	// 	return -1;
-	// }
+	if (open_env(&wr, dst, 0) == -1)
+	{
+		printf("Unable to open destination environment\n");
+		return -1;
+	}
+
+	// Environment has been copied over, now delete state.
+	// This means cluster configuration (nodes, schema, etc.).
+	// This way this lmdb file can be used in an entirely different setup.
+
+	rc = mdb_cursor_get(wr.cursorActors,&key,&data,MDB_FIRST);
+	if (rc != MDB_SUCCESS)
+		goto bckp_done;
+	do 
+	{
+		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+		MDB_val pgKey, pgVal, logKey, logVal;
+		u32 pgno = 1;
+		int pgop = MDB_SET;
+		char *nm = (char*)key.mv_data;
+		u64 index,firstCompleteTerm,firstCompleteEvnum;
+		u8 logKeyBuf[sizeof(u64)*3];
+
+		// skip actor data
+		if (nm[0] == '?')
+			continue;
+		else if (key.mv_size > 7 && strncmp(nm, "actors/",7) == 0)
+			continue;
+		else if (key.mv_size > 7 && strncmp(nm, "shards/",7) == 0)
+			continue;
+
+		memcpy(&index, data.mv_data, sizeof(u64));
+		// printf("Check key %llu\n",index);
+		key.mv_size = sizeof(index);
+		key.mv_data = &index;
+		rc = mdb_get(wr.txn,wr.infodb,&key,&data);
+		if (rc != MDB_SUCCESS)
+		{
+			printf("No info?\n");
+			continue;
+		}
+		memcpy(&firstCompleteTerm, ((u8*)data.mv_data)+1, sizeof(u64));
+		memcpy(&firstCompleteEvnum,((u8*)data.mv_data)+1+sizeof(u64), sizeof(u64));
+
+		memcpy(pagesKeyBuf,               &index,sizeof(u64));
+		memcpy(pagesKeyBuf + sizeof(u64), &pgno, sizeof(u32));
+		pgKey.mv_data = pagesKeyBuf;
+		pgKey.mv_size = sizeof(pagesKeyBuf);
+		while (mdb_cursor_get(wr.cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
+		{
+			u64 aindex;
+			memcpy(&aindex,pgKey.mv_data,sizeof(u64));
+			if (aindex != index)
+				break;
+			mdb_cursor_del(wr.cursorPages, MDB_NODUPDATA);
+			pgop = MDB_NEXT_NODUP;
+		}
+
+		memcpy(logKeyBuf,                 &index,          sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64),   &firstCompleteTerm, sizeof(u64));
+		memcpy(logKeyBuf + sizeof(u64)*2, &firstCompleteEvnum,sizeof(u64));
+		logKey.mv_data = logKeyBuf;
+		logKey.mv_size = sizeof(logKeyBuf);
+		if (mdb_cursor_get(wr.cursorLog,&logKey,&logVal,MDB_SET) == MDB_SUCCESS)
+		{
+			u64 aindex;
+
+			mdb_cursor_del(wr.cursorLog, MDB_NODUPDATA);
+			while ((mdb_cursor_get(wr.cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) == MDB_SUCCESS)
+			{
+				memcpy(&aindex, logKey.mv_data, sizeof(u64));
+				if (index != aindex)
+					break;
+				mdb_cursor_del(wr.cursorLog, MDB_NODUPDATA);
+			}
+		}
+
+		// delete state (ranges,catchup,state/..)
+		mdb_cursor_del(wr.cursorActors,0);
+	}while ((rc = mdb_cursor_get(wr.cursorActors,&key,&data,MDB_NEXT)) == MDB_SUCCESS);
+	mdb_txn_commit(wr.txn);
+
 
 	// 
 	// Should we support incremental backup from here? It may actually be slower since it involves checking
@@ -311,7 +394,6 @@ static int do_backup(const char *src, const char *dst)
 	// 
 
 bckp_done:
-	close_env(&rd);
 	close_env(&wr);
 	return 0;
 }
