@@ -167,6 +167,7 @@ struct db_thread
 	int nEnv;    // Environment index of this thread
 	int maxvalsize;
 	int nResFrames;
+	int fd;
 	u8 forceCommit;
 	u8 isopen;
 	u8 isreadonly;
@@ -254,7 +255,8 @@ typedef enum
 	cmd_term_store = 21,
 	cmd_actor_info = 22,
 	cmd_sync = 23,
-	cmd_stmt_info = 24
+	cmd_stmt_info = 24,
+	cmd_file_write = 25
 } command_type;
 
 typedef struct

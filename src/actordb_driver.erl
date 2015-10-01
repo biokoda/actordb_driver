@@ -12,7 +12,7 @@
 		store_prepared_table/2,
 		close/1,inject_page/3,
 		parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0,
-		replication_done/1,
+		replication_done/1,file_write/3,
 		lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
 		iterate_close/1, fsync_num/1,fsync/1,fsync/0,
 		replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,checkpoint_lock/2,
@@ -23,6 +23,9 @@
 % {{Path1,Path2,...},{StaticSql1,StaticSql2,...},MaxDbSize, ReadThreadsPerWriteThread}
 init(Threads) ->
 	actordb_driver_nif:init(Threads).
+
+file_write(Offset,Items,L) ->
+	actordb_driver_nif:file_write(Offset,Items,L).
 
 open(Filename) ->
 	open(Filename,0,wal).

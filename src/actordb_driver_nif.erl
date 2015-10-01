@@ -38,7 +38,8 @@ actor_info/4,
 fsync_num/1,
 fsync/3,
 fsync/0,
-stmt_info/4
+stmt_info/4,
+file_write/3
 ]).
 
 stmt_info(_,_,_,_) ->
@@ -128,6 +129,9 @@ lz4_decompress(_,_) ->
 	exit(nif_library_not_loaded).
 
 lz4_decompress(_,_,_) ->
+	exit(nif_library_not_loaded).
+
+file_write(_,_,_) ->
 	exit(nif_library_not_loaded).
 
 % backup_init(_,_,_,_) ->

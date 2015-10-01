@@ -1416,6 +1416,39 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr)
 		return atom_error;
 }
 
+static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread)
+{
+	int n = 0, i;
+	u32 offset;
+	struct iovec *iov;
+	ERL_NIF_TERM list, head;
+
+	if (!thread->fd)
+	{
+		thread->fd = open("q",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP);
+	}
+
+	enif_get_uint(cmd->env,cmd->arg,&offset);
+	enif_get_int(cmd->env,cmd->arg1,&n);
+
+	list = cmd->arg2;
+
+	iov = alloca(sizeof(struct iovec) * n);
+	for (i = 0; i < n; i++)
+	{
+		ErlNifBinary bin;
+		enif_get_list_cell(cmd->env,list,&head,&list);
+		enif_inspect_binary(cmd->env,head,&bin);
+		iov[i].iov_base = bin.data;
+		iov[i].iov_len = bin.size;
+	}
+	// pwritev(thread->fd, iov, n, offset);
+	lseek(thread->fd, offset, SEEK_SET);
+	writev(thread->fd, iov, n);
+
+	return atom_ok;
+}
+
 static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread)
 {
 	priv_data *pd = thread->pd;
@@ -2306,6 +2339,8 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 		return do_wal_rewind(cmd,thread);
 	case cmd_stmt_info:
 		return do_stmt_info(cmd,thread);
+	case cmd_file_write:
+		return do_file_write(cmd,thread);
 	case cmd_interrupt:
 		return do_interrupt(cmd,thread);
 	case cmd_iterate:
@@ -2642,6 +2677,9 @@ static void *thread_func(void *arg)
 	data->isopen = 0;
 
 	DBG("thread=%d stopping.",data->nThread);
+
+	if (data->fd)
+		close(data->fd);
 
 	if (data->control)
 	{
@@ -3676,6 +3714,31 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	return push_command(res->wthread, -1, pd, item);
 }
 
+static ERL_NIF_TERM file_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	qitem *item;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	if(argc != 3)
+		return enif_make_badarg(env);
+
+	if (!enif_is_number(env,argv[0]))
+		return make_error_tuple(env,"offset_not_num");
+	if (!enif_is_number(env,argv[1]))
+		return make_error_tuple(env,"len_not_size");
+	if (!enif_is_list(env,argv[2]))
+		return make_error_tuple(env,"not_list");
+
+	item = command_create(0,-1,pd);
+	item->cmd.type = cmd_file_write;
+	item->cmd.arg = enif_make_copy(item->cmd.env,argv[0]);
+	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[1]);
+	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[2]);
+
+	enif_consume_timeslice(env,90);
+	return push_command(0, -1, pd, item);
+}
+
 static ERL_NIF_TERM noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	db_connection *res;
@@ -4045,6 +4108,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"fsync",0,db_sync},
 	{"replication_done",1,replication_done},
 	{"stmt_info",4,stmt_info},
+	{"file_write",3,file_write}
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);
