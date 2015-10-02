@@ -134,13 +134,13 @@ struct db_thread
 	MDB_dbi logdb;
 	MDB_dbi pagesdb;
 	MDB_dbi actorsdb;
-	// MDB_dbi testdb;
 	MDB_env *env;
 	MDB_txn *txn;
 	MDB_cursor *cursorLog;
 	MDB_cursor *cursorPages;
 	MDB_cursor *cursorInfo;
-	// MDB_cursor *cursorTest;
+	u8 *wBuffer;
+	int bufSize;
 	// so currently executing connection data is accessible from wal callback
 	db_connection *curConn;
 	// For read threads. Before executing sql on a connection, copy over term/evnum upper limit.

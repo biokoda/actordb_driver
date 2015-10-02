@@ -185,15 +185,6 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 			}
 			else
 			{
-				// DBG("Sent to con=%d",i);
-				// rt = recv(thread->sockets[i],confirm,6,0);
-				// if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
-				// {
-				//     conn->failFlags |= (1 << i);
-				//     close(thread->sockets[i]);
-				//     thread->sockets[i] = 0;
-				//     fail_send(i);
-				// }
 				conn->nSent++;
 			}
 		}
@@ -255,20 +246,12 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 			if (WSASend(thread->sockets[i],iov,2, &rt, 0, NULL, NULL) != 0)
 				rt = 0;
 #endif
-			if (rt == -1)
+			if (rt != bin.size+4)
 			{
 				close(thread->sockets[i]);
 				thread->sockets[i] = 0;
 				fail_send(i,thread->pd);
 			}
-			// rt = recv(thread->sockets[i],confirm,6,0);
-			// if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
-			// {
-			//     close(thread->sockets[i]);
-			//     thread->sockets[i] = 0;
-
-			//     fail_send(i);
-			// }
 			nsent++;
 		}
 	}
@@ -704,7 +687,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 	char portstr[10];
 	u8 packetLen[4];
-	int *sockets;
+	int sockets[pd->nEnvs*pd->nWriteThreads];
 	char confirm[7] = {0,0,0,0,0,0,0};
 	int flag = 1, rt = 0, error = 0, opts;
 	socklen_t errlen = sizeof error;
@@ -727,10 +710,9 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 	iov[1].len = thread->control->prefixes[pos].size;
 #endif
 
-	sockets = enif_alloc(sizeof(int)*pd->nEnvs);
-	memset(sockets,0,sizeof(int)*pd->nEnvs);
+	memset(sockets,0,sizeof(int)*pd->nEnvs*pd->nWriteThreads);
 
-	for (i = 0; i < pd->nEnvs; i++)
+	for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
 	{
 		fd = socket(AF_INET,SOCK_STREAM,0);
 
@@ -876,7 +858,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 	{
 		thread->control->isopen[pos] = 1;
 
-		for (i = 0; i < pd->nWriteThreads; i++)
+		for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
 		{
 			qitem *item = command_create(i,-1,thread->pd);
 			item->cmd.type = cmd_set_socket;
@@ -3226,10 +3208,9 @@ static ERL_NIF_TERM lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	ErlNifPid pid;
-	int i;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
-	int nthreads = pd->nEnvs*pd->nWriteThreads;
+	// int nthreads = pd->nEnvs;
 
 	DBG( "all_tunnel_call");
 
@@ -3243,18 +3224,16 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	if (!(enif_is_binary(env,argv[2]) || enif_is_list(env,argv[2])))
 		return make_error_tuple(env, "invalid bin");
 
-	for (i = 0; i < nthreads; i++)
-	{
-		item = command_create(i,-1,pd);
-		item->cmd.type = cmd_alltunnel_call;
-		item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
-		item->cmd.pid = pid;
-		item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
+	item = command_create(0,-1,pd);
+	item->cmd.type = cmd_alltunnel_call;
+	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
+	item->cmd.pid = pid;
+	item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
 
-		enif_consume_timeslice(env,90);
+	enif_consume_timeslice(env,90);
 
-		push_command(i, -1, pd, item);
-	}
+	push_command(0, -1, pd, item);
+
 	return atom_ok;
 }
 
