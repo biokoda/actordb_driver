@@ -878,7 +878,6 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 				close(sockets[i]);
 		}
 	}
-	enif_free(sockets);
 
 	return result;
 }
