@@ -209,48 +209,74 @@ void fail_send(int i,priv_data *priv)
 static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 {
 #ifndef  _WIN32
-	struct iovec iov*;
+	struct iovec iov[PACKET_ITEMS];
 #else
-	WSABUF iov*;
+	WSABUF iov[PACKET_ITEMS];
 #endif
 	u8 packetLen[4];
-	u8 lenBin[2];
-	ErlNifBinary bin;
-	int nsent = 0, i = 0, rt = 0, len = 0;
-	ERL_NIF_TERM list, head;
+	u8 bodyLen[4];
+	ErlNifBinary head, body;
+	u8 *bodyCompressed = NULL;
+	int nsent = 0, i = 0, rt = 0, nelements = 2, compressedSize = 0;
+	unsigned mxSz;
 
-	if (enif_is_list(cmd->env,cmd->arg))
+	memset(&head,0,sizeof(ErlNifBinary));
+	memset(&body,0,sizeof(ErlNifBinary));
+
+	enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(head));
+
+	if (cmd->arg1)
 	{
-		enif_get_list_length(cmd->env,cmd->arg, (unsigned)&len);
+		enif_inspect_binary(cmd->env,cmd->arg1,&body);
+		mxSz = LZ4_COMPRESSBOUND(body.size);
+		if (mxSz < 64*1024)
+			bodyCompressed = alloca(mxSz);
+		if (!bodyCompressed)
+		{
+			if (thread->bufSize < mxSz)
+			{
+				bodyCompressed = realloc(thread->wBuffer,mxSz);
+				if (!bodyCompressed)
+					return atom_false;
+				thread->bufSize = mxSz;
+				thread->wBuffer = bodyCompressed;
+			}
+			else
+			{
+				bodyCompressed = thread->wBuffer;
+			}
+		}
+		compressedSize = LZ4_compress_default((const char*)body.data, (char*)bodyCompressed, body.size, mxSz);
+		nelements = 4;
 	}
 
-	// enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(bin));
-
-	// list = cmd->arg2;
-
-	// iov = alloca(sizeof(struct iovec) * n);
-	// for (i = 0; i < n; i++)
-	// {
-	// 	ErlNifBinary bin;
-	// 	enif_get_list_cell(cmd->env,list,&head,&list);
-	// 	enif_inspect_binary(cmd->env,head,&bin);
-	// 	iov[i].iov_base = bin.data;
-	// 	iov[i].iov_len = bin.size;
-	// }
-
-	put4byte(packetLen,bin.size);
-	put2byte(lenBin,bin.size);
+	put4byte(packetLen,head.size + compressedSize);
+	put4byte(bodyLen,compressedSize);
 
 #ifndef  _WIN32
 	iov[0].iov_base = packetLen;
 	iov[0].iov_len = 4;
-	iov[1].iov_len = bin.size;
-	iov[1].iov_base = bin.data;
+	iov[1].iov_len = head.size;
+	iov[1].iov_base = head.data;
+	if (cmd->arg1)
+	{
+		iov[2].iov_len = 4;
+		iov[2].iov_base = bodyLen;
+		iov[3].iov_len = compressedSize;
+		iov[3].iov_base = bodyCompressed;
+	}
 #else
 	iov[0].buf = packetLen;
 	iov[0].len = 4;
-	iov[1].len = bin.size;
-	iov[1].buf = bin.data;
+	iov[1].len = head.size;
+	iov[1].buf = head.data;
+	if (cmd->arg1)
+	{
+		iov[2].buf = bodyLen;
+		iov[2].len = 4;
+		iov[3].buf = bodyCompressed;
+		iov[3].len = compressedSize;
+	}
 #endif
 
 	for (i = 0; i < MAX_CONNECTIONS; i++)
@@ -258,12 +284,12 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 		if (thread->sockets[i] > 3 && thread->socket_types[i] == 1)
 		{
 #ifndef _WIN32
-			rt = writev(thread->sockets[i],iov,2);
+			rt = writev(thread->sockets[i],iov, nelements);
 #else
-			if (WSASend(thread->sockets[i],iov,2, &rt, 0, NULL, NULL) != 0)
+			if (WSASend(thread->sockets[i],iov,nelements, &rt, 0, NULL, NULL) != 0)
 				rt = 0;
 #endif
-			if (rt != bin.size+4)
+			if (rt != head.size+compressedSize+4 + (cmd->arg1 ? 4 : 0))
 			{
 				close(thread->sockets[i]);
 				thread->sockets[i] = 0;
@@ -3239,7 +3265,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 		return make_error_tuple(env, "invalid_pid");
 	if (!(enif_is_binary(env,argv[2]) || enif_is_list(env,argv[2])))
 		return make_error_tuple(env, "invalid_bin");
-	if (argc == 4 && !(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
+	if (argc == 4 && !(enif_is_binary(env,argv[3])))
 		return make_error_tuple(env, "invalid_bin2");
 
 	item = command_create(0,-1,pd);
