@@ -209,17 +209,34 @@ void fail_send(int i,priv_data *priv)
 static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 {
 #ifndef  _WIN32
-	struct iovec iov[PACKET_ITEMS];
+	struct iovec iov*;
 #else
-	WSABUF iov[PACKET_ITEMS];
+	WSABUF iov*;
 #endif
 	u8 packetLen[4];
 	u8 lenBin[2];
 	ErlNifBinary bin;
-	int nsent = 0, i = 0, rt = 0;
-	// char confirm[7] = {0,0,0,0,0,0,0};
+	int nsent = 0, i = 0, rt = 0, len = 0;
+	ERL_NIF_TERM list, head;
 
-	enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(bin));
+	if (enif_is_list(cmd->env,cmd->arg))
+	{
+		enif_get_list_length(cmd->env,cmd->arg, (unsigned)&len);
+	}
+
+	// enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(bin));
+
+	// list = cmd->arg2;
+
+	// iov = alloca(sizeof(struct iovec) * n);
+	// for (i = 0; i < n; i++)
+	// {
+	// 	ErlNifBinary bin;
+	// 	enif_get_list_cell(cmd->env,list,&head,&list);
+	// 	enif_inspect_binary(cmd->env,head,&bin);
+	// 	iov[i].iov_base = bin.data;
+	// 	iov[i].iov_len = bin.size;
+	// }
 
 	put4byte(packetLen,bin.size);
 	put2byte(lenBin,bin.size);
@@ -3214,7 +3231,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 
 	DBG( "all_tunnel_call");
 
-	if (argc != 3)
+	if (argc != 3 && argc != 4)
 		return enif_make_badarg(env);
 
 	if(!enif_is_ref(env, argv[0]))
@@ -3222,13 +3239,17 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	if(!enif_get_local_pid(env, argv[1], &pid))
 		return make_error_tuple(env, "invalid_pid");
 	if (!(enif_is_binary(env,argv[2]) || enif_is_list(env,argv[2])))
-		return make_error_tuple(env, "invalid bin");
+		return make_error_tuple(env, "invalid_bin");
+	if (argc == 4 && !(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
+		return make_error_tuple(env, "invalid_bin2");
 
 	item = command_create(0,-1,pd);
 	item->cmd.type = cmd_alltunnel_call;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
 	item->cmd.pid = pid;
 	item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
+	if (argc == 4)
+		item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[3]);
 
 	enif_consume_timeslice(env,90);
 
@@ -4071,6 +4092,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"tcp_connect",7,tcp_connect},
 	{"tcp_reconnect",0,tcp_reconnect},
 	{"all_tunnel_call",3,all_tunnel_call},
+	{"all_tunnel_call",4,all_tunnel_call},
 	{"store_prepared_table",2,store_prepared_table},
 	{"checkpoint_lock",4,checkpoint_lock},
 	{"iterate_db",4,iterate_db},

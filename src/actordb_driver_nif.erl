@@ -28,6 +28,7 @@ iterate_db/4,
 iterate_db/5,
 iterate_close/1,
 all_tunnel_call/3,
+all_tunnel_call/4,
 checkpoint_lock/4,
 inject_page/5,
 wal_rewind/4,
@@ -99,6 +100,9 @@ store_prepared_table(_,_) ->
 	exit(nif_library_not_loaded).
 
 all_tunnel_call(_,_,_) ->
+	exit(nif_library_not_loaded).
+
+all_tunnel_call(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 noop(_,_,_) ->

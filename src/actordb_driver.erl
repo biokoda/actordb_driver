@@ -114,6 +114,11 @@ all_tunnel_call(Bin) ->
 	ok = actordb_driver_nif:all_tunnel_call(Ref,self(),Bin),
 	receive_answer(Ref).
 
+all_tunnel_call(Head,Body) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:all_tunnel_call(Ref,self(),Head,Body),
+	receive_answer(Ref).
+
 lz4_compress(B) ->
 	actordb_driver_nif:lz4_compress(B).
 lz4_decompress(B,SizeOrig) ->
