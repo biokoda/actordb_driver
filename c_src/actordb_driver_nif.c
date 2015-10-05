@@ -730,7 +730,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 	char portstr[10];
 	u8 packetLen[4];
-	int sockets[pd->nEnvs*pd->nWriteThreads];
+	int *sockets;
 	char confirm[7] = {0,0,0,0,0,0,0};
 	int flag = 1, rt = 0, error = 0, opts;
 	socklen_t errlen = sizeof error;
@@ -739,6 +739,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 	struct addrinfo *addrlist;
 	struct addrinfo *adrp;
 
+	sockets = alloca(pd->nEnvs*pd->nWriteThreads);
 
 	put4byte(packetLen,thread->control->prefixes[pos].size);
 #ifndef _WIN32
@@ -1442,6 +1443,7 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr)
 
 static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread)
 {
+	#ifndef _WIN32
 	int n = 0, i;
 	u32 offset;
 	struct iovec *iov;
@@ -1469,7 +1471,7 @@ static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread)
 	// pwritev(thread->fd, iov, n, offset);
 	lseek(thread->fd, offset, SEEK_SET);
 	writev(thread->fd, iov, n);
-
+#endif
 	return atom_ok;
 }
 
