@@ -421,7 +421,7 @@ static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfr
 					enif_make_int(env,pos),
 					enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
 					atom_error,
-					enif_make_string(env, "", ERL_NIF_LATIN1)));
+					enif_make_string(env, calledfrom, ERL_NIF_LATIN1)));
 	}
 	else
 	{
@@ -430,7 +430,7 @@ static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfr
 				enif_make_int(env,pos),
 				enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
 				atom_error,
-				enif_make_string(env, "", ERL_NIF_LATIN1)));
+				enif_make_string(env, calledfrom, ERL_NIF_LATIN1)));
 	}
 }
 
