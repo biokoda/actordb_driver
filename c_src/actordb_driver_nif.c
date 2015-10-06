@@ -219,16 +219,23 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 	u8 *bodyCompressed = NULL;
 	int nsent = 0, i = 0, rt = 0, nelements = 2, compressedSize = 0;
 	unsigned mxSz;
+	int sockets[MAX_CONNECTIONS];
 
+	memset(sockets,0,sizeof(int)*MAX_CONNECTIONS);
 	memset(&head,0,sizeof(ErlNifBinary));
 	memset(&body,0,sizeof(ErlNifBinary));
 
-	enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(head));
+	if (memcmp(sockets,thread->sockets,sizeof(int)*MAX_CONNECTIONS) == 0)
+		return enif_make_int(cmd->env,0);
+
+	if (!enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(head)))
+		return atom_false;
 
 	if (cmd->arg1)
 	{
-		enif_inspect_binary(cmd->env,cmd->arg1,&body);
-		mxSz = LZ4_COMPRESSBOUND(body.size);
+		if (!enif_inspect_iolist_as_binary(cmd->env,cmd->arg1,&body))
+			return atom_false;
+		mxSz = LZ4_COMPRESSBOUND(body.size)+4;
 		if (mxSz < 64*1024)
 			bodyCompressed = alloca(mxSz);
 		if (!bodyCompressed)
@@ -246,12 +253,18 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 				bodyCompressed = thread->wBuffer;
 			}
 		}
-		compressedSize = LZ4_compress_default((const char*)body.data, (char*)bodyCompressed, body.size, mxSz);
+		compressedSize = 4 + LZ4_compress_default((const char*)body.data, (char*)bodyCompressed+4, body.size, mxSz-4);
 		nelements = 4;
 	}
 
-	put4byte(packetLen,head.size + compressedSize);
-	put4byte(bodyLen,compressedSize);
+	if (bodyCompressed)
+	{
+		put4byte(packetLen,head.size + compressedSize + 4);
+		put4byte(bodyLen,compressedSize);
+		put4byte(bodyCompressed,body.size);
+	}
+	else
+		put4byte(packetLen,head.size);
 
 #ifndef  _WIN32
 	iov[0].iov_base = packetLen;
@@ -3214,21 +3227,21 @@ static ERL_NIF_TERM lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	int sizeReadNum;
 	int rt;
 
-	// DBG( "lz4_decompress");
+	DBG( "lz4_decompress %d",argc);
 
 	if (argc != 2 && argc != 3)
-		return enif_make_badarg(env);
+		return make_error_tuple(env, "argc");
 
 	if (!enif_inspect_iolist_as_binary(env, argv[0], &binIn))
-		return enif_make_badarg(env);
+		return make_error_tuple(env, "not_iolist");
 
 	if (!enif_get_int(env,argv[1],&sizeOriginal))
-		return enif_make_badarg(env);
+		return make_error_tuple(env, "size_not_int");
 
 	if (argc == 3)
 	{
 		if (!enif_get_int(env,argv[2],&sizeReadNum))
-			return enif_make_badarg(env);
+			return make_error_tuple(env, "readnum_not_int");;
 	}
 	else
 		sizeReadNum = binIn.size;
@@ -3238,12 +3251,14 @@ static ERL_NIF_TERM lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	enif_consume_timeslice(env,90);
 	if (rt > 0)
 	{
+		DBG("DECOMPRESSED!");
 		ERL_NIF_TERM termout = enif_make_binary(env,&binOut);
 		enif_release_binary(&binOut);
 		return termout;
 	}
 	else
 	{
+		DBG("CANT DECOMPRESSED! szorig=%d, readnum=%d",sizeOriginal,sizeReadNum);
 		enif_release_binary(&binOut);
 		return atom_error;
 	}
@@ -3267,7 +3282,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 		return make_error_tuple(env, "invalid_pid");
 	if (!(enif_is_binary(env,argv[2]) || enif_is_list(env,argv[2])))
 		return make_error_tuple(env, "invalid_bin");
-	if (argc == 4 && !(enif_is_binary(env,argv[3])))
+	if (argc == 4 && !(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
 		return make_error_tuple(env, "invalid_bin2");
 
 	item = command_create(0,-1,pd);
