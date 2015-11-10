@@ -3261,14 +3261,12 @@ static ERL_NIF_TERM lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	enif_consume_timeslice(env,90);
 	if (rt > 0)
 	{
-		DBG("DECOMPRESSED!");
 		ERL_NIF_TERM termout = enif_make_binary(env,&binOut);
 		enif_release_binary(&binOut);
 		return termout;
 	}
 	else
 	{
-		DBG("CANT DECOMPRESSED! szorig=%d, readnum=%d",sizeOriginal,sizeReadNum);
 		enif_release_binary(&binOut);
 		return atom_error;
 	}
