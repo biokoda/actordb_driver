@@ -1676,6 +1676,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	int tupleSize = 0, tuplePos = 0, tupleRecsSize = 0;
 	int skip = 0;
 	u32 mxPage = cmd->conn->wal.mxPage;
+	char dofinalize = 1;
 
 	if (!cmd->conn->wal_configured && cmd->conn->db)
 		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
@@ -1733,9 +1734,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		ERL_NIF_TERM listTop = 0, headTop = 0, headBot = 0;
 		int statementlen = 0;
 		ERL_NIF_TERM rows;
-		char dofinalize = 1;
 		const ERL_NIF_TERM *insertRow;
 		int rowLen = 0;
+		dofinalize = 1;
 
 		track_flag(thread,1);
 		track_time(8,thread);
@@ -1872,6 +1873,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				{
 					errat = "_prepare";
 					sqlite3_finalize(statement);
+					statement = NULL;
 					break;
 				}
 				rc = SQLITE_DONE;
@@ -1880,6 +1882,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				{
 					rc = SQLITE_INTERRUPT;
 					sqlite3_finalize(statement);
+					statement = NULL;
 					break;
 				}
 
@@ -1899,6 +1902,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 						{
 							errat = "cant_bind";
 							sqlite3_finalize(statement);
+							statement = NULL;
 							break;
 						}
 					}
@@ -1997,11 +2001,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					// #ifdef _TESTDBG_
 					//     if (statementlen > 1024)
 					//     {
-					//         DBG("Executing %.*s",1024,readpoint);
+					//         DBG("Executing %.*s",1024,readpoint+skip);
 					//     }
 					//     else
 					//     {
-					//         DBG("Executing %.*s",(int)statementlen,readpoint);
+					//         DBG("Executing %.*s",(int)statementlen,readpoint+skip);
 					//     }
 					// #endif
 					rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, 
@@ -2011,6 +2015,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 						DBG("Prepare statement failed");
 						errat = "prepare";
 						sqlite3_finalize(statement);
+						statement = NULL;
 						break;
 					}
 				}
@@ -2152,6 +2157,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			{
 				errat = "step";
 				dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
+				statement = NULL;
 				break;
 			}
 			if (skip == 0 && (rowcount > 0 || column_count > 0))
@@ -2188,6 +2194,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		DBG("Tuple pos=%d, size=%d",tuplePos, tupleSize);
 	} while (tuplePos < tupleSize);
 	track_time(12,thread);
+
 	if (tupleResult && !(rc > 0 && rc < 100))
 	{
 		results = enif_make_tuple_from_array(cmd->env, tupleResult, tupleSize);
@@ -2200,7 +2207,10 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
 		sqlite3_step(statement);
 		sqlite3_finalize(statement);
+		statement = NULL;
 	}
+	if (statement != NULL)
+		dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
 
 	// enif_release_resource(cmd->conn);
 	// Errors are from 1 to 99.
