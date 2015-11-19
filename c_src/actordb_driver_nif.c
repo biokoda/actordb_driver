@@ -42,8 +42,6 @@
 
 static void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 
-// wal.c code has been taken out of sqlite3.c and placed in wal.c file.
-// Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
 #include "queue.c"
 #include "nullvfs.c"
@@ -1324,6 +1322,27 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	// no dirty pages, but will write info
 	sqlite3WalFrames(pWal, SQLITE_DEFAULT_PAGE_SIZE, NULL, pWal->mxPage, 1, 0);
 	pWal->changed = 1;
+
+	if (cmd->arg1 && limitEvnum == 0)
+	{
+		ErlNifBinary sqlbin;
+		if (enif_inspect_iolist_as_binary(cmd->env, cmd->arg1, &sqlbin))
+		{
+			char *sqlstr = NULL;
+			u8 repl = cmd->conn->doReplicate;
+
+			if (sqlbin.size < 10000)
+			{
+				sqlstr = alloca(sqlbin.size+1);
+				memcpy(sqlstr, sqlbin.data, sqlbin.size);
+				sqlstr[sqlbin.size] = 0;
+				
+				cmd->conn->doReplicate = 0;
+				sqlite3_exec(cmd->conn->db,sqlstr,NULL,NULL,NULL);
+				cmd->conn->doReplicate = repl;
+			}
+		}
+	}
 
 	enif_mutex_lock(pWal->mtx);
 	pWal->readSafeTerm = pWal->lastCompleteTerm;
@@ -3740,7 +3759,7 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 
 	DBG("wal_rewind");
 
-	if(argc != 4)
+	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
 	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
@@ -3751,12 +3770,16 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 		return make_error_tuple(env, "invalid_pid");
 	if (!enif_is_number(env,argv[3]))
 		return make_error_tuple(env,"evnum");
+	if (argc == 5 && (!enif_is_list(env,argv[4]) && !enif_is_binary(env,argv[4])))
+		return make_error_tuple(env,"not_iolist");
 
 	item = command_create(res->wthread,-1,pd);
 	item->cmd.type = cmd_wal_rewind;
 	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
 	item->cmd.pid = pid;
 	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
+	if (argc == 5)
+		item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]);
 	item->cmd.conn = res;
 	enif_keep_resource(res);
 
@@ -4152,6 +4175,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"page_size",0,page_size},
 	{"inject_page",5,inject_page},
 	{"wal_rewind",4,wal_rewind},
+	{"wal_rewind",5,wal_rewind},
 	{"actor_info",4,get_actor_info},
 	{"term_store",3,term_store},
 	{"term_store",4,term_store},

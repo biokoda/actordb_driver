@@ -32,6 +32,7 @@ all_tunnel_call/4,
 checkpoint_lock/4,
 inject_page/5,
 wal_rewind/4,
+wal_rewind/5,
 checkpoint/4,
 term_store/3,
 term_store/4,
@@ -77,6 +78,9 @@ checkpoint(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 wal_rewind(_,_,_,_) ->
+	exit(nif_library_not_loaded).
+
+wal_rewind(_,_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 page_size() ->

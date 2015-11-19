@@ -235,8 +235,11 @@ checkpoint() ->
 	[[{columns,{<<"id">>,<<"txt">>,<<"val">>}},
       {rows,[{199,<<"aaa">>,2},{198,<<"aaa">>,2}|_]}]] = S,
 	% ?debugFmt("AfterCheckpoint ~p",[S]),
-	ok = actordb_driver:wal_rewind(Db,0),
-	?debugFmt("After rewind to 0=~p",[actordb_driver:actor_info("original",0)]),
+	ok = actordb_driver:wal_rewind(Db,0, "create table tab1 (id INTEGER PRIMARY KEY, x TEXT);insert into tab1 values (1,'replaced');"),
+	?debugFmt("After rewind+replace to 0=~p",[actordb_driver:actor_info("original",0)]),
+	{ok,[[{columns,{<<"name">>}},{rows,[{<<"tab1">>}]}],
+         [{columns,{<<"id">>,<<"x">>}},{rows,[{1,<<"replaced">>}]}]]} = 
+        actordb_driver:exec_script("select * from tab1;select name from sqlite_master where type='table';",Db),
 	ok.
 
 checkpoint1() ->

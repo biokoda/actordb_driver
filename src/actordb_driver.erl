@@ -16,7 +16,7 @@
 		lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
 		iterate_close/1, fsync_num/1,fsync/1,fsync/0,
 		replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,all_tunnel_call/2,checkpoint_lock/2,
-		checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,
+		checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,wal_rewind/3,
 		tcp_connect_async/4,tcp_connect_async/5,tcp_reconnect/0, stmt_info/2]).
 
 % Every path is a write thread.
@@ -132,6 +132,10 @@ lz4_decompress(B,SizeOrig,SizeIn) ->
 wal_rewind({actordb_driver, _Ref, Connection},Evnum) ->
 	Ref = make_ref(),
 	ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),Evnum),
+	receive_answer(Ref).
+wal_rewind({actordb_driver, _Ref, Connection}, 0, ReplaceSql) when is_binary(ReplaceSql); is_list(ReplaceSql) ->
+	Ref = make_ref(),
+	ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),0, ReplaceSql),
 	receive_answer(Ref).
 
 fsync_num({actordb_driver, _Ref, Connection}) ->
