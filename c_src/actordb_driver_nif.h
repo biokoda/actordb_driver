@@ -321,6 +321,7 @@ ERL_NIF_TERM atom_rowid;
 ERL_NIF_TERM atom_changes;
 ERL_NIF_TERM atom_done;
 ERL_NIF_TERM atom_iter;
+ERL_NIF_TERM atom_blob;
 
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
 static ERL_NIF_TERM push_command(int thread, int readThreadNum,priv_data *pd, qitem *cmd);

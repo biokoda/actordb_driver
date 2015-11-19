@@ -2324,7 +2324,7 @@ make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i)
 	case SQLITE_FLOAT:
 		return enif_make_double(env, sqlite3_column_double(statement, i));
 	case SQLITE_BLOB:
-		return enif_make_tuple2(env, make_atom(env, "blob"),
+		return enif_make_tuple2(env, atom_blob,
 				make_binary(env, sqlite3_column_blob(statement, i),
 					sqlite3_column_bytes(statement, i)));
 	case SQLITE_NULL:
@@ -3882,6 +3882,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_changes = enif_make_atom(env,"changes");
 	atom_done = enif_make_atom(env,"done");
 	atom_iter = enif_make_atom(env,"iter");
+	atom_blob = enif_make_atom(env, "blob");
 
 	// Paths will determine thread numbers. Every path has a thread.
 	// {{Path1,Path2,Path3,...},{StaticSql1,StaticSql2,StaticSql3,...}}

@@ -343,7 +343,7 @@ static int do_backup(const char *src, const char *dst)
 		rc = mdb_get(wr.txn,wr.infodb,&key,&data);
 		if (rc != MDB_SUCCESS)
 		{
-			printf("No info?\n");
+			printf("No info for: %.*s\n", (int)key.mv_size, nm);
 			continue;
 		}
 		memcpy(&firstCompleteTerm, ((u8*)data.mv_data)+1, sizeof(u64));
