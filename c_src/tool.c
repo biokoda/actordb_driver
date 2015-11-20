@@ -343,7 +343,7 @@ static int do_backup(const char *src, const char *dst)
 		rc = mdb_get(wr.txn,wr.infodb,&key,&data);
 		if (rc != MDB_SUCCESS)
 		{
-			printf("No info for: %.*s\n", (int)key.mv_size, nm);
+			// printf("No info for: %.*s\n", (int)key.mv_size, nm);
 			continue;
 		}
 		memcpy(&firstCompleteTerm, ((u8*)data.mv_data)+1, sizeof(u64));
@@ -582,17 +582,7 @@ int main(int argc, const char* argv[])
 			return 0;
 		}
 
-		if (strcmp(argv[3], "-") != 0)
-		{
-			fprintf(stderr,"Read from:\n%s\nWrite to:\n%s\nConfirm (Y/N)?\n", argv[2], argv[3]);
-			do
-			{
-				ch = fgetc(stdin);
-			} while (ch != 'y' && ch != 'Y' && ch != 'N' && ch != 'n');
-		}
-		
-		if (ch == 'y' || ch == 'Y')
-			do_backup(argv[2],argv[3]);
+		do_backup(argv[2],argv[3]);
 	}
 	else if ((argc == 5 || argc == 6) && strcmp(argv[1],"extract") == 0)
 	{
