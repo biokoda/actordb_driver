@@ -455,7 +455,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	iterate_resource iter;
 	u8 buf[PAGE_BUFF_SIZE];
 	u8 hdrbuf[sizeof(u64)*2+sizeof(u32)*2];
-	u32 done;
+	u32 done = 0;
 	db_connection conn;
 	int nfilled;
 	db_thread thr;
@@ -490,6 +490,8 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 
 	if (strcmp("termstore",actor) == 0 && strcmp("termstore",type) == 0)
 		sprintf(actorpth,"termstore");
+	if (strcmp("__state__",type) == 0)
+		sprintf(actorpth,"state/%s.__state__",actor);
 	else
 		sprintf(actorpth,"actors/%s.%s",actor,type);
 	if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL, &thr) == SQLITE_ERROR)
