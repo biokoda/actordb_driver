@@ -86,7 +86,6 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		txn = thr->txn;
 	else if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 		return SQLITE_ERROR;
-		
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = nmLen-cutoff;
@@ -98,6 +97,15 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	{
 		i64 index = 0;
 		MDB_val key1 = {1,(void*)"?"};
+
+		#ifndef _WIN32
+		if (pthread_equal(pthread_self(), pWal->rthreadId))
+		#else
+		if (GetCurrentThreadId() == pWal->rthreadId)
+		#endif
+		{
+			return SQLITE_ERROR;
+		}
 
 		rc = mdb_get(txn,actorsdb,&key1,&data);
 		if (rc == MDB_NOTFOUND)

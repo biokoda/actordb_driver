@@ -324,6 +324,7 @@ static int do_backup(const char *src, const char *dst)
 		MDB_val pgKey, pgVal, logKey, logVal;
 		u32 pgno = 1;
 		int pgop = MDB_SET;
+		size_t nmsz = key.mv_size;
 		char *nm = (char*)key.mv_data;
 		u64 index,firstCompleteTerm,firstCompleteEvnum;
 		u8 logKeyBuf[sizeof(u64)*3];
@@ -343,7 +344,23 @@ static int do_backup(const char *src, const char *dst)
 		rc = mdb_get(wr.txn,wr.infodb,&key,&data);
 		if (rc != MDB_SUCCESS)
 		{
-			// printf("No info for: %.*s\n", (int)key.mv_size, nm);
+			// printf("No info for: %.*s\n", (int)nmsz, nm);
+			continue;
+		}
+		if (strncmp(nm,"state/global.__state__",nmsz) == 0)
+		{
+			MDB_val rnmKey, rnmVal;
+
+			// Delete this entry in actors
+			mdb_cursor_del(wr.cursorActors,0);
+
+			rnmKey.mv_size = strlen("globalbckp");
+			rnmKey.mv_data = "globalbckp";
+			rnmVal.mv_size = sizeof(index);
+			rnmVal.mv_data = &index;
+
+			// Store it under globalbckp
+			mdb_put(wr.txn, wr.actorsdb, &rnmKey, &rnmVal, 0);
 			continue;
 		}
 		memcpy(&firstCompleteTerm, ((u8*)data.mv_data)+1, sizeof(u64));
@@ -460,6 +477,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	int nfilled;
 	db_thread thr;
 	char actorpth[512];
+	int i;
 
 	memset(&iter,0,sizeof(iterate_resource));
 	memset(&thr,0,sizeof(db_thread));
@@ -488,16 +506,33 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	conn.wal.rthread = &thr;
 	conn.wal.rthreadId = pthread_self();
 
-	if (strcmp("termstore",actor) == 0 && strcmp("termstore",type) == 0)
-		sprintf(actorpth,"termstore");
-	if (strcmp("__state__",type) == 0)
-		sprintf(actorpth,"state/%s.__state__",actor);
-	else
-		sprintf(actorpth,"actors/%s.%s",actor,type);
-	if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL, &thr) == SQLITE_ERROR)
+
+	for (i = 0; i < 10; i++)
 	{
-		fprintf(stderr,"Can not open actor\n");
-		return -1;
+		if (strcmp("termstore",actor) == 0 && strcmp("termstore",type) == 0)
+			sprintf(actorpth,"termstore");
+		else if (i == 0)
+			sprintf(actorpth,"actors/%s.%s",actor,type);
+		else if (i == 1)
+			sprintf(actorpth,"shards/%s.%s",actor,type);
+		else if (i == 2)
+			sprintf(actorpth,"state/%s.%s",actor,type);
+		else if (i == 3)
+			sprintf(actorpth,"actors/%s",actor);
+		else if (i == 4)
+			sprintf(actorpth,"shards/%s",actor);
+		else if (i == 5)
+			sprintf(actorpth,"%s",actor);
+		else
+		{
+			printf("Can not find actor\n");
+			return -1;
+		}
+
+		if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL, &thr) == SQLITE_ERROR)
+			continue;
+		else
+			break;
 	}
 
 	if (dst == NULL)
