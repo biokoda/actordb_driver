@@ -2278,9 +2278,11 @@ static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt
 	if(enif_get_atom(env, cell, the_atom, sizeof(the_atom), ERL_NIF_LATIN1))
 	{
 		if(strcmp("undefined", the_atom) == 0)
-		{
-		   return sqlite3_bind_null(stmt, i);
-		}
+			return sqlite3_bind_null(stmt, i);
+		else if (strcmp("false",the_atom) == 0)
+			return sqlite3_bind_int(stmt, i, 0);
+		else if (strcmp("true",the_atom) == 0)
+			return sqlite3_bind_int(stmt, i, 1);
 
 		return sqlite3_bind_text(stmt, i, the_atom, strlen(the_atom), SQLITE_TRANSIENT);
 	}
