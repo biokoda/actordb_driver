@@ -3896,7 +3896,9 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	while (scratchSize % (SQLITE_DEFAULT_PAGE_SIZE*6) > 0)
 		scratchSize += SQLITE_DEFAULT_PAGE_SIZE;
 	priv->sqlite_scratch = malloc(scratchSize);
+	// priv->sqlite_pgcache = malloc((4096+128) * 4096*6);
 	sqlite3_config(SQLITE_CONFIG_SCRATCH, priv->sqlite_scratch, 6*SQLITE_DEFAULT_PAGE_SIZE, scratchSize / (6*SQLITE_DEFAULT_PAGE_SIZE));
+	// sqlite3_config(SQLITE_CONFIG_PAGECACHE, priv->sqlite_pgcache, 4096+128, 4096*6);
 	// sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
 	sqlite3_initialize();
 	sqlite3_vfs_register(sqlite3_nullvfs(), 1);
@@ -4155,6 +4157,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->thrMutexes);
 	free(priv->syncNumbers);
 	free(priv->sqlite_scratch);
+	// free(priv->sqlite_pgcache);
 	free(pd);
 }
 
