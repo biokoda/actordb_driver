@@ -590,6 +590,8 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	char mode[10];
 	sqlite3 *db = NULL;
 
+	track_time(20,thread);
+
 	memset(filename,0,MAX_PATHNAME);
 
 	enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
@@ -601,6 +603,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	if(size <= 0 || size >= MAX_ACTOR_NAME)
 		return make_error_tuple(cmd->env, "invalid_filename");
 
+	track_time(21,thread);
 	// Blob type uses lmdb directly. 
 	// Stores data in binary chunks (like pages of sqlite). 
 	// Blob connections have db=NULL
@@ -620,7 +623,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	if(!conn)
 		return make_error_tuple(cmd->env, "no_memory");
 	memset(conn,0,sizeof(db_connection));
-
+	track_time(22,thread);
 	cmd->conn = conn;
 	thread->curConn = cmd->conn;
 	conn->db = db;
@@ -649,7 +652,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 		// open wal directly
 		sqlite3WalOpen(NULL, NULL, filename, 0, 0, NULL, thread);
 	}
-
+	track_time(23,thread);
 	DBG("opened new thread=%d name=%s mode=%s.",(int)thread->nThread,filename,mode);
 	result = enif_make_resource(cmd->env, conn);
 
