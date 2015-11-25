@@ -3863,8 +3863,9 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	db_thread *controlThread = NULL;
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
-// Apple/Win get smaller max dbsize
-// Havent really tested win32 yet, but apple mmap is fucked. Can't create mmap larger than RAM.
+	int scratchSize;
+// Apple/Win get smaller max dbsize because they are both fucked when it comes to mmap.
+// They are just dev platforms anyway.
 #if defined(__APPLE__) || defined(_WIN32)
 	u64 dbsize = 4096*1024*1024LL;
 #else
@@ -3891,11 +3892,12 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	g_log = fopen(nodename, "w");
 #endif
 
-	// experiment
-	// priv->sqlite_space = malloc(1024*1024*128);
-	// sqlite3_config(SQLITE_CONFIG_HEAP, priv->sqlite_space, 1024*1024*128, 8);
-	
-	sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
+	scratchSize = 1024*1024*10;
+	while (scratchSize % (SQLITE_DEFAULT_PAGE_SIZE*6) > 0)
+		scratchSize += SQLITE_DEFAULT_PAGE_SIZE;
+	priv->sqlite_scratch = malloc(scratchSize);
+	sqlite3_config(SQLITE_CONFIG_SCRATCH, priv->sqlite_scratch, 6*SQLITE_DEFAULT_PAGE_SIZE, scratchSize / (6*SQLITE_DEFAULT_PAGE_SIZE));
+	// sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
 	sqlite3_initialize();
 	sqlite3_vfs_register(sqlite3_nullvfs(), 1);
 	// This must not be enabled. It might cause Wal structure to be shared
@@ -4152,6 +4154,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->rtids);
 	free(priv->thrMutexes);
 	free(priv->syncNumbers);
+	free(priv->sqlite_scratch);
 	free(pd);
 }
 

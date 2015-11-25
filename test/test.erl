@@ -84,7 +84,8 @@ modes() ->
 % lo(undefined,Val,N) ->
 % 	{Pid,_} = spawn_monitor(fun() ->
 % 		% ?debugFmt("Open start ~p",[N]),
-% 		{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
+% 		% Always open on same name. This is to avoid write transactions to actors db.
+% 		{ok,Db} = actordb_driver:open("ac",N),
 % 		% Sql = <<"CREATE TABLE tab (id integer primary key, val text);insert into tab values (1,?1);">>,
 % 		% {ok,_} = actordb_driver:exec_script(Sql,[[[Val]]],Db,infinity,1,1,<<>>),
 % 		% ?debugFmt("Open complete ~p",[N]),

@@ -47,7 +47,7 @@ typedef u16 ht_slot;
 
 struct priv_data
 {
-	// void *sqlite_space;
+	void *sqlite_scratch;
 	queue **wtasks;      // array of queues for every write thread + control thread
 	queue **rtasks;      // every environment has nReadThreads
 	int nEnvs;           // number of environments
