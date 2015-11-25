@@ -3888,8 +3888,12 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	g_log = fopen(nodename, "w");
 #endif
 
-	sqlite3_initialize();
+	// experiment
+	// priv->sqlite_space = malloc(1024*1024*128);
+	// sqlite3_config(SQLITE_CONFIG_HEAP, priv->sqlite_space, 1024*1024*128, 8);
+	
 	sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
+	sqlite3_initialize();
 	sqlite3_vfs_register(sqlite3_nullvfs(), 1);
 	// This must not be enabled. It might cause Wal structure to be shared
 	// on two connections without them knowing. If first gets deleted (which will happen)

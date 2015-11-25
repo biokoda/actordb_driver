@@ -20,8 +20,8 @@ run_test_() ->
 	{timeout,25,fun async/0},
 	fun problem_checkpoint/0,
 	fun problem_rewind/0
+	% {timeout,25,fun open_test/0}
 	].
-
 
 lz4() ->
 	?debugFmt("lz4",[]),
@@ -57,6 +57,50 @@ modes() ->
 	{ok,1,3} = actordb_driver:stmt_info(Db,"select * from tab where id=?1;"),
 
 	ok.
+
+% open_test() ->
+% 	?debugFmt("Opening and closing lots of connections for 20s",[]),
+% 	?INIT,
+% 	Val = binary:copy(<<"a">>,1024*1024),
+% 	{Pid,_} = spawn_monitor(fun() -> loop_open(Val) end),
+% 	receive
+% 		{'DOWN',_Monitor,_,_PID,Reason} ->
+% 			exit(Reason)
+% 	after 20000 ->
+% 		Pid ! stop,
+% 		receive
+% 			{'DOWN',_Monitor,_,_PID,Reason} ->
+% 				?debugFmt("Opened: ~p times",[Reason])
+% 		after 2000 ->
+% 			exit(Pid,stop)
+% 		end
+% 	end,
+% 	code:delete(actordb_driver_nif),
+% 	code:purge(actordb_driver_nif),
+% 	ok.
+
+% loop_open(Val) ->
+% 	lo(undefined,Val,0).
+% lo(undefined,Val,N) ->
+% 	{Pid,_} = spawn_monitor(fun() ->
+% 		% ?debugFmt("Open start ~p",[N]),
+% 		{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
+% 		% Sql = <<"CREATE TABLE tab (id integer primary key, val text);insert into tab values (1,?1);">>,
+% 		% {ok,_} = actordb_driver:exec_script(Sql,[[[Val]]],Db,infinity,1,1,<<>>),
+% 		% ?debugFmt("Open complete ~p",[N]),
+% 		exit(normal)
+% 	end),
+% 	lo(Pid,Val,N);
+% lo(Pid,Val,N) ->
+% 	receive
+% 		{'DOWN',_Monitor,_,Pid,normal} ->
+% 			% ?debugFmt("Opened exit ~p",[N]),
+% 			lo(undefined,Val,N+1);
+% 		{'DOWN',_,_,_,_} ->
+% 			exit(error);
+% 		stop ->
+% 			exit(N)
+% 	end.
 
 async() ->
 	?debugFmt("Running many async reads/writes for 20s",[]),
