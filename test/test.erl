@@ -143,7 +143,7 @@ w(Db,C,[Rand|T],L) ->
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
 			ets:update_counter(ops,w,{2,1});
 		_ ->
-			{ok,_RR} = ?READ("select * from tab limit 5",Db),
+			{ok,_RR} = ?READ("select * from tab limit 1",Db),
 			ets:update_counter(ops,r,{2,1})
 	end,
 	w(Db,C+1,T,[Rand|L]);

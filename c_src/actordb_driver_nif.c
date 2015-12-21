@@ -37,13 +37,11 @@
 #define SQLITE_EXTERN static
 #include "sqlite3.c"
 
-
 #include "actordb_driver_nif.h"
 
 static void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 
 #include "wal.c"
-#include "queue.c"
 #include "nullvfs.c"
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
@@ -197,14 +195,15 @@ void fail_send(int i,priv_data *priv)
 {
 	// tell control thread to create new connections for position i
 	qitem *item = command_create(-1,-1,priv);
+	db_command *cmd = (db_command*)item->cmd;
 	DBG("FAIL SEND!");
-	item->cmd.type = cmd_tcp_connect;
-	item->cmd.arg3 = enif_make_int(item->cmd.env,i);
+	cmd->type = cmd_tcp_connect;
+	cmd->arg3 = enif_make_int(item->env,i);
 	push_command(-1,-1, priv, item);
 }
 
 
-static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
+static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread, ErlNifEnv *env)
 {
 #ifndef  _WIN32
 	struct iovec iov[PACKET_ITEMS];
@@ -224,14 +223,14 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 	memset(&body,0,sizeof(ErlNifBinary));
 
 	if (memcmp(sockets,thread->sockets,sizeof(int)*MAX_CONNECTIONS) == 0)
-		return enif_make_int(cmd->env,0);
+		return enif_make_int(env,0);
 
-	if (!enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(head)))
+	if (!enif_inspect_iolist_as_binary(env,cmd->arg,&(head)))
 		return atom_false;
 
 	if (cmd->arg1)
 	{
-		if (!enif_inspect_iolist_as_binary(cmd->env,cmd->arg1,&body))
+		if (!enif_inspect_iolist_as_binary(env,cmd->arg1,&body))
 			return atom_false;
 		mxSz = LZ4_COMPRESSBOUND(body.size)+4;
 		if (mxSz < 64*1024)
@@ -310,7 +309,7 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 		}
 	}
 
-	return enif_make_int(cmd->env,nsent);
+	return enif_make_int(env,nsent);
 }
 
 
@@ -335,10 +334,10 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 // 	}
 
 // 	// {{1,2,2,0,0,..},{0,0,0,0,...}}
-// 	if (!enif_get_tuple(cmd->env, cmd->arg, &tupleSize, &versTuple))
+// 	if (!enif_get_tuple(env, cmd->arg, &tupleSize, &versTuple))
 // 		return atom_false;
 // 	// {{"select....","insert into..."},{"select....","update ...."}}
-// 	if (!enif_get_tuple(cmd->env, cmd->arg1, &tupleSize, &sqlTuple))
+// 	if (!enif_get_tuple(env, cmd->arg1, &tupleSize, &sqlTuple))
 // 		return atom_false;
 
 // 	if (tupleSize > MAX_PREP_SQLS)
@@ -346,18 +345,18 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread)
 
 // 	for (i = 0; i < tupleSize; i++)
 // 	{
-// 		if (!enif_get_tuple(cmd->env, versTuple[i], &rowSize, &versRow))
+// 		if (!enif_get_tuple(env, versTuple[i], &rowSize, &versRow))
 // 			break;
-// 		if (!enif_get_tuple(cmd->env, sqlTuple[i], &rowSize, &sqlRow))
+// 		if (!enif_get_tuple(env, sqlTuple[i], &rowSize, &sqlRow))
 // 			break;
 
 // 		thread->prepSize = rowSize;
 // 		for (j = 0; j < rowSize; j++)
 // 		{
-// 			enif_get_int(cmd->env,versRow[j],&(thread->prepVersions[i][j]));
-// 			if (enif_is_list(cmd->env,sqlRow[j]) || enif_is_binary(cmd->env,sqlRow[j]))
+// 			enif_get_int(env,versRow[j],&(thread->prepVersions[i][j]));
+// 			if (enif_is_list(env,sqlRow[j]) || enif_is_binary(env,sqlRow[j]))
 // 			{
-// 				enif_inspect_iolist_as_binary(cmd->env,sqlRow[j],&bin);
+// 				enif_inspect_iolist_as_binary(env,sqlRow[j],&bin);
 // 				thread->prepSqls[i][j] = malloc(bin.size+1);
 // 				thread->prepSqls[i][j][bin.size] = 0;
 // 				memcpy(thread->prepSqls[i][j],bin.data,bin.size);
@@ -456,7 +455,6 @@ static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p
 {
 	queue *thrCmds = NULL;
 	qitem *item;
-	ErlNifEnv *env;
 
 	if (writeThreadNum == -1 && readThreadNum == -1)
 		thrCmds = p->wtasks[p->nEnvs*p->nWriteThreads];
@@ -466,13 +464,11 @@ static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p
 		thrCmds = p->rtasks[readThreadNum];
 
 	item = queue_get_item(thrCmds);
-	if (item->cmd.env == NULL)
+	if (item->cmd == NULL)
 	{
-		item->cmd.env = enif_alloc_env();
+		item->cmd = enif_alloc(sizeof(db_command));
 	}
-	env = item->cmd.env;
-	memset(&item->cmd,0,sizeof(db_command));
-	item->cmd.env = env;
+	memset(item->cmd,0,sizeof(db_command));
 
 	return item;
 }
@@ -561,6 +557,7 @@ static void destruct_iterate(ErlNifEnv *env, void *arg)
 	qitem *item;
 	iterate_resource *res = (iterate_resource*)arg;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd;
 
 	DBG("destruct iterate.");
 	if (res->closed)
@@ -568,18 +565,19 @@ static void destruct_iterate(ErlNifEnv *env, void *arg)
 
 	// enif_release_resource(conn);
 	item = command_create(res->thread,-1,pd);
+	cmd = (db_command*)item->cmd;
 
-	item->cmd.type = cmd_checkpoint_lock;
-	item->cmd.arg = enif_make_int(item->cmd.env, 0);
+	cmd->type = cmd_checkpoint_lock;
+	cmd->arg = enif_make_int(item->env, 0);
 	// No keep. This way release for connection will be called on thread when done with command.
 	// It will decrement keep on connection held by iterate.
-	item->cmd.conn = res->conn;
+	cmd->conn = res->conn;
 
 	push_command(res->thread, -1, pd, item);
 }
 
 
-static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	static u32 rThrCounter = 0;
 	char filename[MAX_PATHNAME];
@@ -594,14 +592,14 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 
 	memset(filename,0,MAX_PATHNAME);
 
-	enif_get_atom(cmd->env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
+	enif_get_atom(env,cmd->arg1,mode,10,ERL_NIF_LATIN1);
 	if (strcmp(mode,"wal") != 0 && strcmp(mode, "blob") != 0)
 		return atom_false;
 
-	size = enif_get_string(cmd->env, cmd->arg, filename, MAX_PATHNAME, ERL_NIF_LATIN1);
+	size = enif_get_string(env, cmd->arg, filename, MAX_PATHNAME, ERL_NIF_LATIN1);
 	// Actor path name must be written to wal. Filename slot is MAX_ACTOR_NAME bytes.
 	if(size <= 0 || size >= MAX_ACTOR_NAME)
-		return make_error_tuple(cmd->env, "invalid_filename");
+		return make_error_tuple(env, "invalid_filename");
 
 	track_time(21,thread);
 	// Blob type uses lmdb directly. 
@@ -612,7 +610,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 		rc = sqlite3_open(filename,&(db));
 		if(rc != SQLITE_OK)
 		{
-			result = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc,0, cmd->conn->db);
+			result = make_sqlite3_error_tuple(env, "sqlite3_open", rc,0, cmd->conn->db);
 			sqlite3_close(db);
 			cmd->conn = NULL;
 			return result;
@@ -621,7 +619,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	
 	conn = enif_alloc_resource(thread->pd->db_connection_type, sizeof(db_connection));
 	if(!conn)
-		return make_error_tuple(cmd->env, "no_memory");
+		return make_error_tuple(env, "no_memory");
 	memset(conn,0,sizeof(db_connection));
 	track_time(22,thread);
 	cmd->conn = conn;
@@ -654,19 +652,19 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread)
 	}
 	track_time(23,thread);
 	DBG("opened new thread=%d name=%s mode=%s.",(int)thread->nThread,filename,mode);
-	result = enif_make_resource(cmd->env, conn);
+	result = enif_make_resource(env, conn);
 
 	return result;
 }
 
-static ERL_NIF_TERM do_interrupt(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_interrupt(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	sqlite3_interrupt(cmd->conn->db);
 	// enif_release_resource(cmd->conn);
 	return atom_error;
 }
 
-static ERL_NIF_TERM do_tcp_reconnect(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_tcp_reconnect(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	int i;
 
@@ -678,13 +676,13 @@ static ERL_NIF_TERM do_tcp_reconnect(db_command *cmd, db_thread *thread)
 		// address set and not open
 		if (thread->control->addresses[i][0] && !thread->control->isopen[i])
 		{
-			do_tcp_connect1(cmd,thread, i);
+			do_tcp_connect1(cmd,thread, i, env);
 		}
 	}
 	return atom_ok;
 }
 
-static ERL_NIF_TERM do_tcp_connect(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_tcp_connect(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	int pos;
 	ErlNifBinary bin;
@@ -693,11 +691,11 @@ static ERL_NIF_TERM do_tcp_connect(db_command *cmd, db_thread *thread)
 		thread->control = enif_alloc(sizeof(control_data));
 		memset(thread->control,0,sizeof(control_data));
 	}
-	if (!enif_get_int(cmd->env,cmd->arg3,&pos))
-		return enif_make_badarg(cmd->env);
+	if (!enif_get_int(env,cmd->arg3,&pos))
+		return enif_make_badarg(env);
 
 	if (pos < 0 || pos > 7)
-		return enif_make_badarg(cmd->env);
+		return enif_make_badarg(env);
 
 	// this can be called from erlang, or it can be called
 	// from a thread that has lost connection.
@@ -705,19 +703,19 @@ static ERL_NIF_TERM do_tcp_connect(db_command *cmd, db_thread *thread)
 	//  has already been set on first call from erlang.
 	if (cmd->arg)
 	{
-		if (!enif_get_string(cmd->env, cmd->arg,thread->control->addresses[pos],255,ERL_NIF_LATIN1))
-			return enif_make_badarg(cmd->env);
-		if (!enif_get_int(cmd->env,cmd->arg1,&(thread->control->ports[pos])))
-			return enif_make_badarg(cmd->env);
-		if (!enif_inspect_iolist_as_binary(cmd->env,cmd->arg2,&bin))
-			return enif_make_badarg(cmd->env);
+		if (!enif_get_string(env, cmd->arg,thread->control->addresses[pos],255,ERL_NIF_LATIN1))
+			return enif_make_badarg(env);
+		if (!enif_get_int(env,cmd->arg1,&(thread->control->ports[pos])))
+			return enif_make_badarg(env);
+		if (!enif_inspect_iolist_as_binary(env,cmd->arg2,&bin))
+			return enif_make_badarg(env);
 
 		enif_alloc_binary(bin.size,&(thread->control->prefixes[pos]));
 		memcpy(thread->control->prefixes[pos].data,bin.data,bin.size);
 		if (cmd->arg4)
 		{
-			if (!enif_get_int(cmd->env,cmd->arg4,&(thread->control->types[pos])))
-				return enif_make_badarg(cmd->env);
+			if (!enif_get_int(env,cmd->arg4,&(thread->control->types[pos])))
+				return enif_make_badarg(env);
 		}
 		else
 			thread->control->types[pos] = 1;
@@ -727,10 +725,10 @@ static ERL_NIF_TERM do_tcp_connect(db_command *cmd, db_thread *thread)
 		bin = thread->control->prefixes[pos];
 	}
 
-	return do_tcp_connect1(cmd,thread,pos);
+	return do_tcp_connect1(cmd,thread,pos, env);
 }
 
-static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
+static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos, ErlNifEnv *env)
 {
 	int i;
 	// struct sockaddr_in addr;
@@ -782,7 +780,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"noblock");
+			result = make_error_tuple(env,"noblock");
 			break;
 		}
 
@@ -797,7 +795,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (getaddrinfo(thread->control->addresses[pos], portstr, NULL, &addrlist) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"getaddrinfo");
+			result = make_error_tuple(env,"getaddrinfo");
 			break;
 		}
 		for(adrp = addrlist; adrp != NULL; adrp = adrp->ai_next)
@@ -809,7 +807,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 			}
 		}
 		if (adrp == NULL)
-			result = make_error_tuple(cmd->env,"findaddrinfo");
+			result = make_error_tuple(env,"findaddrinfo");
 
 		freeaddrinfo(addrlist);
 #ifndef _WIN32
@@ -819,7 +817,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"connect");
+			result = make_error_tuple(env,"connect");
 			break;
 		}
 
@@ -838,7 +836,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (rt != 1 || error != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"connect");
+			result = make_error_tuple(env,"connect");
 			break;
 		}
 
@@ -851,33 +849,33 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 #endif
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"blocking");
+			result = make_error_tuple(env,"blocking");
 			break;
 		}
 
 		if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int)) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"keepalive");
+			result = make_error_tuple(env,"keepalive");
 			break;
 		}
 		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int)) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"reuseaddr");
+			result = make_error_tuple(env,"reuseaddr");
 			break;
 		}
 		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int)) != 0)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"nodelay");
+			result = make_error_tuple(env,"nodelay");
 			break;
 		}
 #ifdef SO_NOSIGPIPE
 		if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&flag, sizeof(int)) != 0)
 		{
 		  close(fd);
-		  result = make_error_tuple(cmd->env,"nosigpipe");
+		  result = make_error_tuple(env,"nosigpipe");
 		  break;
 		}
 #endif
@@ -897,7 +895,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (thread->control->prefixes[pos].size+4 != rt)
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"initialize");
+			result = make_error_tuple(env,"initialize");
 			break;
 		}
 
@@ -905,7 +903,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
 		{
 			close(fd);
-			result = make_error_tuple(cmd->env,"initialize");
+			result = make_error_tuple(env,"initialize");
 			break;
 		}
 
@@ -919,10 +917,11 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 		for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
 		{
 			qitem *item = command_create(i,-1,thread->pd);
-			item->cmd.type = cmd_set_socket;
-			item->cmd.arg = enif_make_int(item->cmd.env,sockets[i]);
-			item->cmd.arg1 = enif_make_int(item->cmd.env,pos);
-			item->cmd.arg2 = enif_make_int(item->cmd.env,thread->control->types[pos]);
+			db_command *cmd = (db_command*)item->cmd;
+			cmd->type = cmd_set_socket;
+			cmd->arg = enif_make_int(item->env,sockets[i]);
+			cmd->arg1 = enif_make_int(item->env,pos);
+			cmd->arg2 = enif_make_int(item->env,thread->control->types[pos]);
 			push_command(i, -1, thread->pd, item);
 		}
 	}
@@ -941,7 +940,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos)
 }
 
 
-static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	ErlNifBinary bin;
 	ERL_NIF_TERM tBin,tHead, tDone;
@@ -957,21 +956,21 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 	u64 evterm;
 	char mismatch = 0;
 
-	if (!enif_get_resource(cmd->env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
+	if (!enif_get_resource(env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
 	{
 		dorel = 1;
 		DBG("Create iterate %d",(int)cmd->conn->checkpointLock);
 
-		if (!enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&evtermFrom))
-			return enif_make_badarg(cmd->env);
-		if (cmd->arg1 == 0 || !enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&evnumFrom))
+		if (!enif_get_uint64(env,cmd->arg,(ErlNifUInt64*)&evtermFrom))
+			return enif_make_badarg(env);
+		if (cmd->arg1 == 0 || !enif_get_uint64(env,cmd->arg1,(ErlNifUInt64*)&evnumFrom))
 		{
-			return enif_make_badarg(cmd->env);
+			return enif_make_badarg(env);
 		}
 
 		iter = enif_alloc_resource(thread->pd->iterate_type, sizeof(iterate_resource));
 		if(!iter)
-			return make_error_tuple(cmd->env, "no_memory");
+			return make_error_tuple(env, "no_memory");
 		memset(iter,0,sizeof(iterate_resource));
 		iter->thread = thread->nEnv * thread->pd->nWriteThreads + thread->nThread;
 		iter->evnum = evnumFrom;
@@ -983,7 +982,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 		// On iterator destruct lock will be released.
 		cmd->conn->checkpointLock++;
 
-		res = enif_make_resource(cmd->env,iter);
+		res = enif_make_resource(env,iter);
 	}
 	else
 	{
@@ -1002,8 +1001,8 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 		memcpy(bin.data, buf, nfilled);
 		memcpy(header.data, hdrbuf, sizeof(hdrbuf));
 
-		tBin = enif_make_binary(cmd->env,&bin);
-		tHead = enif_make_binary(cmd->env,&header);
+		tBin = enif_make_binary(env,&bin);
+		tHead = enif_make_binary(env,&header);
 		enif_release_binary(&bin);
 		enif_release_binary(&header);
 	}
@@ -1019,19 +1018,19 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread)
 	{
 		DBG("RET DONE");
 		if (mismatch)
-			return enif_make_tuple2(cmd->env, atom_ok, enif_make_uint64(cmd->env,evterm));
+			return enif_make_tuple2(env, atom_ok, enif_make_uint64(env,evterm));
 		return atom_done;
 	}
 	else
 	{
-		tDone = enif_make_uint(cmd->env,done);
-		return enif_make_tuple5(cmd->env,atom_ok, 
-			enif_make_tuple2(cmd->env,atom_iter,res), tBin, tHead, tDone);
+		tDone = enif_make_uint(env,done);
+		return enif_make_tuple5(env,atom_ok, 
+			enif_make_tuple2(env,atom_iter,res), tBin, tHead, tDone);
 	}
 }
 
 
-static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
+static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *env)
 {
 	// Rewind discards a certain number of writes. This may happen due to consensus conflicts.
 	// Rewind is very similar to checkpoint. Checkpoint goes from beginning 
@@ -1045,7 +1044,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	u64 evnum,evterm,aindex,limitEvnum;
 	Wal *pWal = &cmd->conn->wal;
 
-	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&limitEvnum);
+	enif_get_uint64(env,cmd->arg,(ErlNifUInt64*)&limitEvnum);
 
 	DBG("do_wal_rewind, actor=%llu, limit=%llu",pWal->index, limitEvnum);
 
@@ -1329,7 +1328,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	if (cmd->arg1 && limitEvnum == 0)
 	{
 		ErlNifBinary sqlbin;
-		if (enif_inspect_iolist_as_binary(cmd->env, cmd->arg1, &sqlbin))
+		if (enif_inspect_iolist_as_binary(env, cmd->arg1, &sqlbin))
 		{
 			char *sqlstr = NULL;
 			u8 repl = cmd->conn->doReplicate;
@@ -1352,18 +1351,18 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr)
 	pWal->readSafeEvnum = pWal->lastCompleteEvnum;
 	pWal->readSafeMxPage = pWal->readSafeEvnum;
 	enif_mutex_unlock(pWal->mtx);
-	// return enif_make_tuple2(cmd->env, atom_ok, enif_make_int(cmd->env,rc));
+	// return enif_make_tuple2(env, atom_ok, enif_make_int(env,rc));
 	return atom_ok;
 }
 
-static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	ErlNifBinary votedFor;
 	u64 currentTerm;
 
-	if (!enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&currentTerm))
+	if (!enif_get_uint64(env,cmd->arg1,(ErlNifUInt64*)&currentTerm))
 		return atom_false;
-	if (!enif_inspect_binary(cmd->env,cmd->arg2,&votedFor))
+	if (!enif_inspect_binary(env,cmd->arg2,&votedFor))
 		return atom_false;
 
 	if (votedFor.size > 128)
@@ -1379,7 +1378,7 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread)
 		db_connection con;
 		char pth[MAX_PATHNAME];
 
-		if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &name))
+		if (!enif_inspect_iolist_as_binary(env, cmd->arg, &name))
 			return atom_false;
 		if (name.size >= MAX_PATHNAME-5)
 			return atom_false;
@@ -1395,15 +1394,15 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread)
 	return atom_ok;
 }
 
-static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr)
+static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr, ErlNifEnv *env)
 {
 	MDB_val key, data;
 	ErlNifBinary bin;
 	// MDB_txn *txn;
 	int rc;
 
-	if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
-		return make_error_tuple(cmd->env, "not_iolist");
+	if (!enif_inspect_iolist_as_binary(env, cmd->arg, &bin))
+		return make_error_tuple(env, "not_iolist");
 	//
 	// if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 	// 	return SQLITE_ERROR;
@@ -1449,24 +1448,24 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr)
 
 			enif_alloc_binary(vfSize, &vfbin);
 			memcpy(vfbin.data, votedFor, vfSize);
-			vft = enif_make_binary(cmd->env,&vfbin);
+			vft = enif_make_binary(env,&vfbin);
 			enif_release_binary(&vfbin);
 
-			fct = enif_make_uint64(cmd->env, firstCompleteTerm);
-			fce = enif_make_uint64(cmd->env, firstCompleteEvnum);
-			lct = enif_make_uint64(cmd->env, lastCompleteTerm);
-			lce = enif_make_uint64(cmd->env, lastCompleteEvnum);
-			ipt = enif_make_uint64(cmd->env, inProgressTerm);
-			ipe = enif_make_uint64(cmd->env, inProgressEvnum);
-			ct  = enif_make_uint64(cmd->env, currentTerm);
+			fct = enif_make_uint64(env, firstCompleteTerm);
+			fce = enif_make_uint64(env, firstCompleteEvnum);
+			lct = enif_make_uint64(env, lastCompleteTerm);
+			lce = enif_make_uint64(env, lastCompleteEvnum);
+			ipt = enif_make_uint64(env, inProgressTerm);
+			ipe = enif_make_uint64(env, inProgressEvnum);
+			ct  = enif_make_uint64(env, currentTerm);
 
-			fc = enif_make_tuple2(cmd->env, fct, fce);
-			lc = enif_make_tuple2(cmd->env, lct, lce);
-			in = enif_make_tuple2(cmd->env, ipt, ipe);
-			allt = enif_make_uint(cmd->env, allPages);
-			mxt = enif_make_uint(cmd->env, mxPage);
+			fc = enif_make_tuple2(env, fct, fce);
+			lc = enif_make_tuple2(env, lct, lce);
+			in = enif_make_tuple2(env, ipt, ipe);
+			allt = enif_make_uint(env, allPages);
+			mxt = enif_make_uint(env, mxPage);
 
-			res = enif_make_tuple7(cmd->env,fc,lc,in,mxt,allt,ct,vft);
+			res = enif_make_tuple7(env,fc,lc,in,mxt,allt,ct,vft);
 			return res;
 		}
 		else
@@ -1476,7 +1475,7 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr)
 		return atom_error;
 }
 
-static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	#ifndef _WIN32
 	int n = 0, i;
@@ -1489,8 +1488,8 @@ static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread)
 		thread->fd = open("q",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP);
 	}
 
-	enif_get_uint(cmd->env,cmd->arg,&offset);
-	enif_get_int(cmd->env,cmd->arg1,&n);
+	enif_get_uint(env,cmd->arg,&offset);
+	enif_get_int(env,cmd->arg1,&n);
 
 	list = cmd->arg2;
 
@@ -1498,8 +1497,8 @@ static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread)
 	for (i = 0; i < n; i++)
 	{
 		ErlNifBinary bin;
-		enif_get_list_cell(cmd->env,list,&head,&list);
-		enif_inspect_binary(cmd->env,head,&bin);
+		enif_get_list_cell(env,list,&head,&list);
+		enif_inspect_binary(env,head,&bin);
 		iov[i].iov_base = bin.data;
 		iov[i].iov_len = bin.size;
 	}
@@ -1510,7 +1509,7 @@ static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread)
 	return atom_ok;
 }
 
-static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	priv_data *pd = thread->pd;
 
@@ -1527,7 +1526,7 @@ static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread)
 	return atom_ok;
 }
 
-static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	ErlNifBinary bin;
 	u32 commit;
@@ -1539,19 +1538,19 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 	ErlNifBinary header;
 	Wal *pWal = &cmd->conn->wal;
 
-	if (!enif_is_binary(cmd->env,cmd->arg))
-		return make_error_tuple(cmd->env,"not_bin");
+	if (!enif_is_binary(env,cmd->arg))
+		return make_error_tuple(env,"not_bin");
 
-	if (!enif_is_binary(cmd->env,cmd->arg1))
-		return make_error_tuple(cmd->env,"hdr_not_bin");
+	if (!enif_is_binary(env,cmd->arg1))
+		return make_error_tuple(env,"hdr_not_bin");
 
 	memset(&page,0,sizeof(page));
-	enif_inspect_binary(cmd->env,cmd->arg,&bin);
+	enif_inspect_binary(env,cmd->arg,&bin);
 	page.pData = pbuf;
-	enif_inspect_binary(cmd->env,cmd->arg1,&header);
+	enif_inspect_binary(env,cmd->arg1,&header);
 
 	if (header.size != sizeof(u64)*2+sizeof(u32)*2)
-		return make_error_tuple(cmd->env,"bad_hdr_size");
+		return make_error_tuple(env,"bad_hdr_size");
 
 	evterm = get8byte(header.data);
 	evnum = get8byte(header.data+sizeof(u64));
@@ -1581,7 +1580,7 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 		else
 		{
 			DBG("Unable to decompress inject page!! %ld",bin.size);
-			return make_error_tuple(cmd->env,"cant_decompress");
+			return make_error_tuple(env,"cant_decompress");
 		}
 	}
 	cmd->conn->doReplicate = 0;
@@ -1590,7 +1589,7 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 	if (rc != SQLITE_OK)
 	{
 		DBG("Unable to write inject page");
-		return make_error_tuple(cmd->env,"cant_inject");
+		return make_error_tuple(env,"cant_inject");
 	}
 	enif_mutex_lock(pWal->mtx);
 	pWal->readSafeTerm = cmd->conn->wal.lastCompleteTerm;
@@ -1601,13 +1600,13 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread)
 	return atom_ok;
 }
 
-static ERL_NIF_TERM do_checkpoint(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_checkpoint(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	ErlNifUInt64 evnum;
 	db_connection *con = cmd->conn;
 	int rc;
 
-	enif_get_uint64(cmd->env,cmd->arg,(ErlNifUInt64*)&(evnum));
+	enif_get_uint64(env,cmd->arg,(ErlNifUInt64*)&(evnum));
 
 	if (con->wal.firstCompleteEvnum >= evnum || con->checkpointLock)
 	{
@@ -1627,7 +1626,7 @@ static ERL_NIF_TERM do_checkpoint(db_command *cmd, db_thread *thread)
 		return atom_false;
 }
 
-static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	int rc;
 	ErlNifBinary bin;
@@ -1635,9 +1634,9 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
 	ERL_NIF_TERM res;
 	sqlite3_stmt *statement = NULL;
 
-	enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&bin);
+	enif_inspect_iolist_as_binary(env,cmd->arg,&bin);
 	if (bin.size == 0)
-		return enif_make_int(cmd->env,0);
+		return enif_make_int(env,0);
 
 	if (bin.size >= 6 && bin.data[0] == '#' && (bin.data[1] == 'r' || bin.data[1] == 'w'))
 	{
@@ -1678,12 +1677,12 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread)
 
 	sqlite3_finalize(statement);
 
-	res = enif_make_tuple3(cmd->env,atom_ok,enif_make_int(cmd->env,nparam),enif_make_int(cmd->env,ncols));
+	res = enif_make_tuple3(env,atom_ok,enif_make_int(env,nparam),enif_make_int(env,ncols));
 	
 	return res;
 }
 
-static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
+static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	u32 pagesPre = thread->pagesChanged;
 	int rc = 0,i;
@@ -1705,9 +1704,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 	if (cmd->arg1)
 	{
-		enif_get_uint64(cmd->env,cmd->arg1,(ErlNifUInt64*)&(newTerm));
-		enif_get_uint64(cmd->env,cmd->arg2,(ErlNifUInt64*)&(newEvnum));
-		enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
+		enif_get_uint64(env,cmd->arg1,(ErlNifUInt64*)&(newTerm));
+		enif_get_uint64(env,cmd->arg2,(ErlNifUInt64*)&(newEvnum));
+		enif_inspect_binary(env,cmd->arg3,&(cmd->conn->packetVarPrefix));
 	}
 
 	if ((cmd->conn->wal.inProgressTerm > 0 || cmd->conn->wal.inProgressEvnum > 0) && cmd->arg1)
@@ -1732,9 +1731,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		enif_mutex_unlock(cmd->conn->wal.mtx);
 	}
 
-	if (enif_get_tuple(cmd->env, cmd->arg, &tupleSize, &inputTuple))
+	if (enif_get_tuple(env, cmd->arg, &tupleSize, &inputTuple))
 	{
-		if (cmd->arg4 != 0 && !enif_get_tuple(cmd->env, cmd->arg4, &tupleRecsSize, &tupleRecs))
+		if (cmd->arg4 != 0 && !enif_get_tuple(env, cmd->arg4, &tupleRecsSize, &tupleRecs))
 			return atom_false;
 		if (cmd->arg4 != 0 && tupleRecsSize != tupleSize)
 			return atom_false;
@@ -1763,7 +1762,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 		track_flag(thread,1);
 		track_time(8,thread);
 
-		results = enif_make_list(cmd->env,0);
+		results = enif_make_list(env,0);
 
 		if (inputTuple)
 		{
@@ -1783,9 +1782,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 		if (cmd->conn->db)
 		{
-			if (!enif_inspect_iolist_as_binary(cmd->env, headTop, &bin))
-				// return make_error_tuple(cmd->env, "not_iolist");
-				return make_sqlite3_error_tuple(cmd->env, "not_iolist", 0, tuplePos, cmd->conn->db);
+			if (!enif_inspect_iolist_as_binary(env, headTop, &bin))
+				// return make_error_tuple(env, "not_iolist");
+				return make_sqlite3_error_tuple(env, "not_iolist", 0, tuplePos, cmd->conn->db);
 		}
 		else
 		{
@@ -1794,9 +1793,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			skip = 1;
 			memset(&pg,0,sizeof(PgHdr));
 			
-			if (!enif_get_uint(cmd->env,headTop, &pg.pgno))
-				// return make_error_tuple(cmd->env,"not_pgno");
-				return make_sqlite3_error_tuple(cmd->env, "not_pgno", 0, tuplePos, cmd->conn->db);
+			if (!enif_get_uint(env,headTop, &pg.pgno))
+				// return make_error_tuple(env,"not_pgno");
+				return make_sqlite3_error_tuple(env, "not_pgno", 0, tuplePos, cmd->conn->db);
 
 			// Blob storage
 			if (listTop == 0)
@@ -1809,7 +1808,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 				DBG("BLOB STORAGE READ!");
 
-				results = enif_make_list(cmd->env,0);
+				results = enif_make_list(env,0);
 				sqlite3WalFindFrame(&cmd->conn->wal, pg.pgno, &foundFrame);
 				if (foundFrame)
 				{
@@ -1818,10 +1817,10 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					if (actualsize != SQLITE_DEFAULT_PAGE_SIZE)
 						enif_realloc_binary(&binOut, actualsize);
 
-					termbin = enif_make_binary(cmd->env,&binOut);
+					termbin = enif_make_binary(env,&binOut);
 					enif_release_binary(&binOut);
 
-					results = enif_make_list_cell(cmd->env,termbin,results);
+					results = enif_make_list_cell(env,termbin,results);
 				}
 
 				if (tuplePos < tupleSize)
@@ -1835,11 +1834,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				DBG("BLOB STORAGE WRITE!");
 				
 				// this is write
-				if (!enif_inspect_iolist_as_binary(cmd->env,listTop,&pageBody))
-					return make_error_tuple(cmd->env,"not_iolist");
+				if (!enif_inspect_iolist_as_binary(env,listTop,&pageBody))
+					return make_error_tuple(env,"not_iolist");
 
 				if (pageBody.size > SQLITE_DEFAULT_PAGE_SIZE)
-					return make_error_tuple(cmd->env,"too_large");
+					return make_error_tuple(env,"too_large");
 
 				pg.pData = pageBody.data;
 				mxPage = pg.pgno > mxPage ? pg.pgno : mxPage;
@@ -1850,7 +1849,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					//tuplePos,mxPage,commit, pageBody.size);
 
 				if (sqlite3WalFrames(&cmd->conn->wal, pageBody.size, &pg, mxPage, commit, 0) != SQLITE_OK)
-					return make_error_tuple(cmd->env,"write_error");
+					return make_error_tuple(env,"write_error");
 
 				if (tuplePos < tupleSize)
 					tupleResult[tuplePos] = results;
@@ -1900,7 +1899,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 				}
 				rc = SQLITE_DONE;
 
-				if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
+				if (!enif_get_list_cell(env, listTop, &headTop, &listTop))
 				{
 					rc = SQLITE_INTERRUPT;
 					sqlite3_finalize(statement);
@@ -1910,9 +1909,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 				// Move over a list of records.
 				// First element is ignored as it is presumed to be record name.
-				while (rc == SQLITE_DONE && enif_get_list_cell(cmd->env, headTop, &headBot, &headTop))
+				while (rc == SQLITE_DONE && enif_get_list_cell(env, headTop, &headBot, &headTop))
 				{
-					if (!enif_get_tuple(cmd->env, headBot, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
+					if (!enif_get_tuple(env, headBot, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
 					{
 						rc = SQLITE_INTERRUPT;
 						break;
@@ -1920,7 +1919,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 					for (i = 1; i < rowLen; i++)
 					{
-						if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
+						if (bind_cell(env, insertRow[i], statement, i) == -1)
 						{
 							errat = "cant_bind";
 							sqlite3_finalize(statement);
@@ -2052,7 +2051,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 						// [[Tuple1,Tuple2],...] -> for every statement, list of rows.
 						// [[[Column1,Column2,..],..],...] -> for every statement, 
 						// 		for every row, list of columns.
-						if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
+						if (!enif_get_list_cell(env, listTop, &headTop, &listTop))
 						{
 							rc = SQLITE_INTERRUPT;
 							break;
@@ -2061,12 +2060,12 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 					// Every row is a list. It can be a list of tuples (which implies records 
 					// thus we start at offset 1), or a list of columns.
-					if (enif_get_list_cell(cmd->env, headTop, &headBot, &headTop))
+					if (enif_get_list_cell(env, headTop, &headBot, &headTop))
 					{
 						// If tuple bind from tuple
-						if (enif_is_tuple(cmd->env, headBot))
+						if (enif_is_tuple(env, headBot))
 						{
-							if (!enif_get_tuple(cmd->env, headBot, &rowLen, &insertRow) &&
+							if (!enif_get_tuple(env, headBot, &rowLen, &insertRow) &&
 								rowLen > 1 && rowLen < 100)
 							{
 								rc = SQLITE_INTERRUPT;
@@ -2075,7 +2074,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 							for (i = 1; i < rowLen; i++)
 							{
-								if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
+								if (bind_cell(env, insertRow[i], statement, i) == -1)
 								{
 									errat = "cant_bind";
 									rc = SQLITE_INTERRUPT;
@@ -2084,13 +2083,13 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 							}
 						}
 						// If list, bind from list
-						else if (enif_is_list(cmd->env,headBot))
+						else if (enif_is_list(env,headBot))
 						{
 							ERL_NIF_TERM rowHead;
 							// Index is from 1 because sqlite bind param start with 1 not 0
-							for (i = 1; enif_get_list_cell(cmd->env, headBot, &rowHead, &headBot); i++)
+							for (i = 1; enif_get_list_cell(env, headBot, &rowHead, &headBot); i++)
 							{
-								if (bind_cell(cmd->env, rowHead, statement, i) == -1)
+								if (bind_cell(env, rowHead, statement, i) == -1)
 								{
 									errat = "cant_bind";
 									rc = SQLITE_INTERRUPT;
@@ -2137,10 +2136,10 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					for(i = 0; i < column_count; i++)
 					{
 						const char* cname = sqlite3_column_name(statement, i);
-						array[i] = make_binary(cmd->env, cname,strlen(cname));
+						array[i] = make_binary(env, cname,strlen(cname));
 					}
 
-					column_names = enif_make_tuple_from_array(cmd->env, array, column_count);
+					column_names = enif_make_tuple_from_array(env, array, column_count);
 				}
 				if (!sqlite3_stmt_readonly(statement) && thread->isreadonly)
 				{
@@ -2149,7 +2148,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					break;
 				}
 
-				rows = enif_make_list(cmd->env,0);
+				rows = enif_make_list(env,0);
 				rowcount = 0;
 				track_time(1,thread);
 				while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
@@ -2165,9 +2164,9 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 					}
 
 					for(i = 0; i < column_count; i++)
-						array[i] = make_cell(cmd->env, statement, i);
+						array[i] = make_cell(env, statement, i);
 
-					rows = enif_make_list_cell(cmd->env, enif_make_tuple_from_array(cmd->env, 
+					rows = enif_make_list_cell(env, enif_make_tuple_from_array(env, 
 						array, column_count), rows);
 					rowcount++;
 				}
@@ -2184,17 +2183,17 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			}
 			if (skip == 0 && (rowcount > 0 || column_count > 0))
 			{
-				ERL_NIF_TERM cols = enif_make_tuple2(cmd->env,atom_columns,column_names);
-				ERL_NIF_TERM rowst = enif_make_tuple2(cmd->env,atom_rows,rows);
-				ERL_NIF_TERM res1 = enif_make_list2(cmd->env,cols,rowst);
-				results = enif_make_list_cell(cmd->env, res1,results);
+				ERL_NIF_TERM cols = enif_make_tuple2(env,atom_columns,column_names);
+				ERL_NIF_TERM rowst = enif_make_tuple2(env,atom_rows,rows);
+				ERL_NIF_TERM res1 = enif_make_list2(env,cols,rowst);
+				results = enif_make_list_cell(env, res1,results);
 			}
 			else if (skip == 0)
 			{
-				ERL_NIF_TERM nchanges = enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db));
-				ERL_NIF_TERM lirowid = enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db));
-				ERL_NIF_TERM changes = enif_make_tuple3(cmd->env,atom_changes,lirowid,nchanges);
-				results = enif_make_list_cell(cmd->env, changes, results);
+				ERL_NIF_TERM nchanges = enif_make_int(env,sqlite3_changes(cmd->conn->db));
+				ERL_NIF_TERM lirowid = enif_make_int64(env,sqlite3_last_insert_rowid(cmd->conn->db));
+				ERL_NIF_TERM changes = enif_make_tuple3(env,atom_changes,lirowid,nchanges);
+				results = enif_make_list_cell(env, changes, results);
 			}
 			// if we are not done with prepared statement (because it has multiple invocations with prepared statements)
 			if (headTop != 0)
@@ -2219,7 +2218,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 
 	if (tupleResult && !(rc > 0 && rc < 100))
 	{
-		results = enif_make_tuple_from_array(cmd->env, tupleResult, tupleSize);
+		results = enif_make_tuple_from_array(env, tupleResult, tupleSize);
 		if (tupleSize > 200)
 			free(tupleResult);
 	}
@@ -2237,11 +2236,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 	// enif_release_resource(cmd->conn);
 	// Errors are from 1 to 99.
 	if (rc > 0 && rc < 100 && rc != SQLITE_INTERRUPT)
-		return make_sqlite3_error_tuple(cmd->env, errat, rc, tuplePos, cmd->conn->db);
+		return make_sqlite3_error_tuple(env, errat, rc, tuplePos, cmd->conn->db);
 	else if (rc == SQLITE_INTERRUPT)
 	{
-		// return make_error_tuple(cmd->env, "query_aborted");
-		return make_sqlite3_error_tuple(cmd->env, "query_aborted", rc, tuplePos, cmd->conn->db);
+		// return make_error_tuple(env, "query_aborted");
+		return make_sqlite3_error_tuple(env, "query_aborted", rc, tuplePos, cmd->conn->db);
 	}
 	else
 	{
@@ -2251,7 +2250,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread)
 			cmd->conn->syncNum = pd->syncNumbers[thread->nEnv];
 		}
 		track_time(13,thread);
-		return make_ok_tuple(cmd->env,results);
+		return make_ok_tuple(env,results);
 	}
 }
 
@@ -2361,10 +2360,10 @@ make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i)
 	}
 }
 
-static ERL_NIF_TERM do_checkpoint_lock(db_command *cmd,db_thread *thread)
+static ERL_NIF_TERM do_checkpoint_lock(db_command *cmd,db_thread *thread, ErlNifEnv *env)
 {
 	int lock;
-	enif_get_int(cmd->env,cmd->arg,&lock);
+	enif_get_int(env,cmd->arg,&lock);
 
 	DBG("Checkpoint lock now %d, lockin=%d.",cmd->conn->checkpointLock,lock);
 
@@ -2375,7 +2374,7 @@ static ERL_NIF_TERM do_checkpoint_lock(db_command *cmd,db_thread *thread)
 	return atom_ok;
 }
 
-static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
+static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	thread->curConn = cmd->conn;
 
@@ -2383,9 +2382,9 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 	{
 	case cmd_open:
 	{
-		ERL_NIF_TERM connres = do_open(cmd,thread);
+		ERL_NIF_TERM connres = do_open(cmd, thread,env);
 		if (cmd->conn != NULL && cmd->arg2 == 0)
-			return enif_make_tuple2(cmd->env,atom_ok,connres);
+			return enif_make_tuple2(env,atom_ok,connres);
 		else if (cmd->conn == NULL)
 			return connres;
 		else if (cmd->arg2 != 0)
@@ -2393,53 +2392,53 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 			cmd->arg = cmd->arg2;
 			cmd->arg1 = 0;
 			cmd->arg2 = 0;
-			return enif_make_tuple3(cmd->env,atom_ok,connres,do_exec_script(cmd,thread));
+			return enif_make_tuple3(env,atom_ok,connres,do_exec_script(cmd,thread,env));
 		}
 	}
 	case cmd_exec_script:
-		return do_exec_script(cmd,thread);
+		return do_exec_script(cmd,thread,env);
 	// case cmd_store_prepared:
 	// 	return do_store_prepared_table(cmd,thread);
 	case cmd_checkpoint:
-		return do_checkpoint(cmd,thread);
+		return do_checkpoint(cmd,thread,env);
 	case cmd_sync:
-		return do_sync(cmd,thread);
+		return do_sync(cmd,thread,env);
 	case cmd_inject_page:
-		return do_inject_page(cmd,thread);
+		return do_inject_page(cmd,thread,env);
 	case cmd_actor_info:
-		return do_actor_info(cmd,thread);
+		return do_actor_info(cmd,thread,env);
 	case cmd_wal_rewind:
-		return do_wal_rewind(cmd,thread);
+		return do_wal_rewind(cmd,thread,env);
 	case cmd_stmt_info:
-		return do_stmt_info(cmd,thread);
+		return do_stmt_info(cmd,thread,env);
 	case cmd_file_write:
-		return do_file_write(cmd,thread);
+		return do_file_write(cmd,thread,env);
 	case cmd_interrupt:
-		return do_interrupt(cmd,thread);
+		return do_interrupt(cmd,thread,env);
 	case cmd_iterate:
-		return do_iterate(cmd,thread);
+		return do_iterate(cmd,thread,env);
 	case cmd_term_store:
-		return do_term_store(cmd,thread);
+		return do_term_store(cmd,thread,env);
 	case cmd_unknown:
 		return atom_ok;
 	case cmd_tcp_connect:
-		return do_tcp_connect(cmd,thread);
+		return do_tcp_connect(cmd,thread,env);
 	case cmd_tcp_reconnect:
-		return do_tcp_reconnect(cmd,thread);
+		return do_tcp_reconnect(cmd,thread,env);
 	case cmd_alltunnel_call:
-		return do_all_tunnel_call(cmd,thread);
+		return do_all_tunnel_call(cmd,thread,env);
 	case cmd_checkpoint_lock:
-		return do_checkpoint_lock(cmd,thread);
+		return do_checkpoint_lock(cmd,thread,env);
 	case cmd_set_socket:
 	{
 		int fd = 0;
 		int pos = -1;
 		int type = 1;
-		if (!enif_get_int(cmd->env,cmd->arg,&fd))
+		if (!enif_get_int(env,cmd->arg,&fd))
 			return atom_error;
-		if (!enif_get_int(cmd->env,cmd->arg1,&pos))
+		if (!enif_get_int(env,cmd->arg1,&pos))
 			return atom_error;
-		if (!enif_get_int(cmd->env,cmd->arg2,&type))
+		if (!enif_get_int(env,cmd->arg2,&type))
 			return atom_error;
 
 		if (fd > 3 && pos >= 0 && pos < 8)
@@ -2474,7 +2473,7 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd,db_thread *thread)
 		return atom_error;
 	}
 	default:
-		return make_error_tuple(cmd->env, "invalid_command");
+		return make_error_tuple(env, "invalid_command");
 	}
 }
 
@@ -2490,14 +2489,15 @@ static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_dat
 
 	if(!queue_push(thrCmds, item))
 	{
-		return make_error_tuple(item->cmd.env, "command_push_failed");
+		return make_error_tuple(item->env, "command_push_failed");
 	}
 	return atom_ok;
 }
 
-static ERL_NIF_TERM make_answer(db_command *cmd, ERL_NIF_TERM answer)
+static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 {
-	return enif_make_tuple2(cmd->env, cmd->ref, answer);
+	db_command *cmd = (db_command*)item->cmd;
+	return enif_make_tuple2(item->env, cmd->ref, answer);
 }
 
 
@@ -2582,12 +2582,13 @@ workaround_done:
 
 static void thread_ex(db_thread *data, qitem *item)
 {
-	DBG("thread=%d command=%d.",data->nThread,item->cmd.type);
+	db_command *cmd = (db_command*)item->cmd;
+	DBG("thread=%d command=%d.",data->nThread,cmd->type);
 
-	if (item->cmd.ref == 0)
+	if (cmd->ref == 0)
 	{
-		evaluate_command(&item->cmd,data);
-		enif_clear_env(item->cmd.env);
+		evaluate_command(cmd,data,item->env);
+		enif_clear_env(item->env);
 	}
 	else
 	{
@@ -2598,7 +2599,7 @@ static void thread_ex(db_thread *data, qitem *item)
 		// after every log entry has been processed.
 		while (1)
 		{
-			res = evaluate_command(&item->cmd,data);
+			res = evaluate_command(cmd,data,item->env);
 
 			DBG("thread=%d command done 1. pagesChanged=%d",data->nThread,data->pagesChanged);
 
@@ -2612,7 +2613,7 @@ static void thread_ex(db_thread *data, qitem *item)
 				data->forceCommit = 0;
 			}
 
-			if (item->cmd.type == cmd_checkpoint || item->cmd.type == cmd_wal_rewind)
+			if (cmd->type == cmd_checkpoint || cmd->type == cmd_wal_rewind)
 			{
 				if (data->forceCommit && res == atom_ok)
 				{
@@ -2646,16 +2647,16 @@ static void thread_ex(db_thread *data, qitem *item)
 			data->txn = NULL;
 		}
 		track_time(11,data);
-		answer = make_answer(&item->cmd, res);
-		enif_send(NULL, &item->cmd.pid, item->cmd.env, answer);
+		answer = make_answer(item, res);
+		enif_send(NULL, &cmd->pid, item->env, answer);
 		// track_time(12,data);
-		enif_clear_env(item->cmd.env);
+		enif_clear_env(item->env);
 		// track_time(13,data);
 	}
 
-	if (item->cmd.conn != NULL)
+	if (cmd->conn != NULL)
 	{
-		enif_release_resource(item->cmd.conn);
+		enif_release_resource(cmd->conn);
 	}
 
 	DBG("thread=%d command done 2.",data->nThread);
@@ -2678,11 +2679,13 @@ static void *thread_func(void *arg)
 
 	while(1)
 	{
+		db_command *cmd;
 		qitem *item = queue_pop(data->tasks);
+		cmd = (db_command*)item->cmd;
 		track_flag(data,1);
 		track_time(0,data);
 		track_time(100+queue_size(data->tasks),data);
-		if (item->cmd.type == cmd_stop)
+		if (cmd->type == cmd_stop)
 		{
 			queue_recycle(data->tasks,item);
 			if (data->txn)
@@ -2693,7 +2696,7 @@ static void *thread_func(void *arg)
 			}
 			break;
 		}
-		if (item->cmd.type == cmd_sync)
+		if (cmd->type == cmd_sync)
 		{
 			if (syncList == NULL)
 				chkCounter = 0;
@@ -2725,7 +2728,7 @@ static void *thread_func(void *arg)
 		// - more than 100 requests went by since we started list
 		// - sync list size over 10 items
 		if (syncList != NULL &&
-			(queue_size(data->tasks) == 0 || chkCounter > 100 || syncListSize > 10 || item->cmd.type == cmd_sync))
+			(queue_size(data->tasks) == 0 || chkCounter > 100 || syncListSize > 10 || cmd->type == cmd_sync))
 		{
 			if (data->txn == NULL)
 				open_txn(data,0);
@@ -2798,10 +2801,12 @@ static void *read_thread_func(void *arg)
 
 	while (1)
 	{
+		db_command *cmd;
 		qitem *item = queue_pop(data->tasks);
+		cmd = (db_command*)item->cmd;
 		DBG("rthread=%d command=%d.",data->nThread,item->cmd.type);
 
-		if (item->cmd.type == cmd_stop)
+		if (cmd->type == cmd_stop)
 		{
 			queue_recycle(data->tasks,item);
 			mdb_txn_abort(data->txn);
@@ -2809,14 +2814,14 @@ static void *read_thread_func(void *arg)
 		}
 		else
 		{
-			if (item->cmd.conn && item->cmd.conn->wal.rthread == 0)
+			if (cmd->conn && cmd->conn->wal.rthread == 0)
 			{
 				#ifndef _WIN32
-				item->cmd.conn->wal.rthreadId = pthread_self();
+				cmd->conn->wal.rthreadId = pthread_self();
 				#else
-				item->cmd.conn->wal.rthreadId = GetCurrentThreadId();
+				cmd->conn->wal.rthreadId = GetCurrentThreadId();
 				#endif
-				item->cmd.conn->wal.rthread = data;
+				cmd->conn->wal.rthread = data;
 			}
 			if (!data->txn)
 			{
@@ -2826,9 +2831,9 @@ static void *read_thread_func(void *arg)
 					ERL_NIF_TERM errterm;
 					DBG("Can not open read transaction");
 
-					errterm = make_error_tuple(item->cmd.env, "lmdb_unreadable_1");
-					enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, errterm));
-					enif_clear_env(item->cmd.env);
+					errterm = make_error_tuple(item->env, "lmdb_unreadable_1");
+					enif_send(NULL, &cmd->pid, item->env, make_answer(item, errterm));
+					enif_clear_env(item->env);
 					continue;
 				}
 			}
@@ -2849,9 +2854,9 @@ static void *read_thread_func(void *arg)
 						DBG("Unable to open read transaction");
 						data = NULL;
 
-						errterm = make_error_tuple(item->cmd.env, "lmdb_unreadable_2");
-						enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, errterm));
-						enif_clear_env(item->cmd.env);
+						errterm = make_error_tuple(item->env, "lmdb_unreadable_2");
+						enif_send(NULL, &cmd->pid, item->env, make_answer(item, errterm));
+						enif_clear_env(item->env);
 						continue;
 					}
 				}
@@ -2862,20 +2867,20 @@ static void *read_thread_func(void *arg)
 				}
 			}
 
-			if (item->cmd.ref == 0)
+			if (cmd->ref == 0)
 			{
-				evaluate_command(&item->cmd,data);
-				enif_clear_env(item->cmd.env);
+				evaluate_command(cmd,data,item->env);
+				enif_clear_env(item->env);
 			}
 			else
 			{
-				enif_send(NULL, &item->cmd.pid, item->cmd.env, make_answer(&item->cmd, 
-					evaluate_command(&item->cmd,data)));
-				enif_clear_env(item->cmd.env);
+				enif_send(NULL, &cmd->pid, item->env, make_answer(item, 
+					evaluate_command(cmd,data,item->env)));
+				enif_clear_env(item->env);
 			}
-			if (item->cmd.conn != NULL)
+			if (cmd->conn != NULL)
 			{
-				enif_release_resource(item->cmd.conn);
+				enif_release_resource(cmd->conn);
 			}
 			mdb_txn_reset(data->txn);
 
@@ -2941,6 +2946,7 @@ static ERL_NIF_TERM term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	u32 thread;
 	db_connection *res = NULL;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("term_store");
 
@@ -2960,6 +2966,7 @@ static ERL_NIF_TERM term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 			return enif_make_badarg(env);
 		thread = (thread % pd->nEnvs)*pd->nWriteThreads + (thread % pd->nWriteThreads);
 		item = command_create(thread,-1,pd);
+		cmd = (db_command*)item->cmd;
 	}
 	else
 	{
@@ -2967,14 +2974,15 @@ static ERL_NIF_TERM term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 			return enif_make_badarg(env);
 		thread = res->wthread;
 		item = command_create(thread,-1,pd);
-		item->cmd.conn = res;
+		cmd = (db_command*)item->cmd;
+		cmd->conn = res;
 		enif_keep_resource(res);
 	}
-	item->cmd.type = cmd_term_store;
+	cmd->type = cmd_term_store;
 	if (argc == 4)
-		item->cmd.arg = enif_make_copy(item->cmd.env,argv[0]); // actor path
-	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[1]); // evterm
-	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[2]); // votedfor
+		cmd->arg = enif_make_copy(item->env,argv[0]); // actor path
+	cmd->arg1 = enif_make_copy(item->env,argv[1]); // evterm
+	cmd->arg2 = enif_make_copy(item->env,argv[2]); // votedfor
 
 	enif_consume_timeslice(env,90);
 	return push_command(thread, -1, pd, item);
@@ -2986,6 +2994,7 @@ static ERL_NIF_TERM get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	ErlNifPid pid;
 	u32 thread;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("get_actor_info");
 
@@ -3001,10 +3010,11 @@ static ERL_NIF_TERM get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
 	thread = (thread % pd->nEnvs)*pd->nWriteThreads + (thread % pd->nWriteThreads);
 	item = command_create(thread,-1,pd);
-	item->cmd.type = cmd_actor_info;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[2]);
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_actor_info;
+	cmd->ref = enif_make_copy(item->env, argv[0]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env,argv[2]);
 
 	enif_consume_timeslice(env,90);
 	return push_command(thread, -1, pd, item);
@@ -3022,6 +3032,7 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	u32 thread;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("db_open");
 
@@ -3037,15 +3048,16 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	thread = ((thread % pd->nEnvs) * pd->nWriteThreads) + (thread % pd->nWriteThreads);
 	DBG("db_open open=%u",thread);
 	item = command_create(thread,-1,pd);
+	cmd = (db_command*)item->cmd;
 
-	item->cmd.type = cmd_open;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
-	item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]);
+	cmd->type = cmd_open;
+	cmd->ref = enif_make_copy(item->env, argv[0]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env, argv[2]);
+	cmd->arg1 = enif_make_copy(item->env, argv[4]);
 	if (argc == 6)
 	{
-	  item->cmd.arg2 = enif_make_copy(item->cmd.env, argv[5]);
+		cmd->arg2 = enif_make_copy(item->env, argv[5]);
 	}
 
 	enif_consume_timeslice(env,90);
@@ -3155,6 +3167,7 @@ static ERL_NIF_TERM tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG( "tcp_connect");
 
@@ -3177,16 +3190,16 @@ static ERL_NIF_TERM tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 		return enif_make_badarg(env);
 
 	item = command_create(-1,-1,pd);
-
-	item->cmd.type = cmd_tcp_connect;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[2]);
-	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[3]);
-	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[4]);
-	item->cmd.arg3 = enif_make_copy(item->cmd.env,argv[5]);
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_tcp_connect;
+	cmd->arg = enif_make_copy(item->env,argv[2]);
+	cmd->arg1 = enif_make_copy(item->env,argv[3]);
+	cmd->arg2 = enif_make_copy(item->env,argv[4]);
+	cmd->arg3 = enif_make_copy(item->env,argv[5]);
 	if (argc == 7)
-	  item->cmd.arg4 = enif_make_copy(item->cmd.env,argv[6]);
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
-	item->cmd.pid = pid;
+		cmd->arg4 = enif_make_copy(item->env,argv[6]);
+	cmd->ref = enif_make_copy(item->env, argv[0]);
+	cmd->pid = pid;
 
 	enif_consume_timeslice(env,90);
 	return push_command(-1,-1,pd,item);
@@ -3196,7 +3209,8 @@ static ERL_NIF_TERM tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 {
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	qitem *item = command_create(-1,-1,pd);
-	item->cmd.type = cmd_tcp_reconnect;
+	db_command *cmd = (db_command*)item->cmd;
+	cmd->type = cmd_tcp_reconnect;
 
 	enif_consume_timeslice(env,90);
 
@@ -3208,6 +3222,7 @@ static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	db_connection *res;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG( "interrupt");
 
@@ -3219,8 +3234,9 @@ static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 		return enif_make_badarg(env);
 	}
 	item = command_create(-1,-1,pd);
-	item->cmd.type = cmd_interrupt;
-	item->cmd.conn = res;
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_interrupt;
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3301,6 +3317,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 	// int nthreads = pd->nEnvs;
 
 	DBG( "all_tunnel_call");
@@ -3318,12 +3335,13 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 		return make_error_tuple(env, "invalid_bin2");
 
 	item = command_create(0,-1,pd);
-	item->cmd.type = cmd_alltunnel_call;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[0]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[2]);
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_alltunnel_call;
+	cmd->ref = enif_make_copy(item->env, argv[0]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env, argv[2]);
 	if (argc == 4)
-		item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[3]);
+		cmd->arg1 = enif_make_copy(item->env, argv[3]);
 
 	enif_consume_timeslice(env,90);
 
@@ -3402,6 +3420,7 @@ static ERL_NIF_TERM db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("Checkpoint");
 
@@ -3418,12 +3437,13 @@ static ERL_NIF_TERM db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 		return make_error_tuple(env, "evnum NaN");
 
 	item = command_create(res->wthread,-1,pd);
+	cmd = (db_command*)item->cmd;
 
-	item->cmd.type = cmd_checkpoint;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // evnum
-	item->cmd.conn = res;
+	cmd->type = cmd_checkpoint;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env, argv[3]);  // evnum
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3436,6 +3456,7 @@ static ERL_NIF_TERM stmt_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("stmt_info");
 
@@ -3452,12 +3473,13 @@ static ERL_NIF_TERM stmt_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 		return make_error_tuple(env, "sql not an iolist");
 
 	item = command_create(-1,res->rthread,pd);
+	cmd = (db_command*)item->cmd;
 
-	item->cmd.type = cmd_stmt_info;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // sql
-	item->cmd.conn = res;
+	cmd->type = cmd_stmt_info;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env, argv[3]);  // sql
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3470,6 +3492,7 @@ static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("exec_read %d",argc);
 
@@ -3486,14 +3509,14 @@ static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 		return make_error_tuple(env,"sql");
 
 	item = command_create(-1,res->rthread,pd);
-
-	item->cmd.type = cmd_exec_script;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // sql string
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_exec_script;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env, argv[3]);  // sql string
 	if (argc == 5)
-	  item->cmd.arg4 = enif_make_copy(item->cmd.env, argv[4]);  // records for bulk insert
-	item->cmd.conn = res;
+		cmd->arg4 = enif_make_copy(item->env, argv[4]);  // records for bulk insert
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3507,6 +3530,7 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("exec_script %d",argc);
 
@@ -3533,17 +3557,18 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 
 
 	item = command_create(res->wthread,-1,pd);
+	cmd = (db_command*)item->cmd;
 
-	item->cmd.type = cmd_exec_script;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // sql string
-	item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]); // term
-	item->cmd.arg2 = enif_make_copy(item->cmd.env, argv[5]); // index
-	item->cmd.arg3 = enif_make_copy(item->cmd.env, argv[6]); // appendentries param binary
+	cmd->type = cmd_exec_script;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env, argv[3]);  // sql string
+	cmd->arg1 = enif_make_copy(item->env, argv[4]); // term
+	cmd->arg2 = enif_make_copy(item->env, argv[5]); // index
+	cmd->arg3 = enif_make_copy(item->env, argv[6]); // appendentries param binary
 	if (argc == 8)
-	  item->cmd.arg4 = enif_make_copy(item->cmd.env, argv[7]);  // records for bulk insert
-	item->cmd.conn = res;
+		cmd->arg4 = enif_make_copy(item->env, argv[7]);  // records for bulk insert
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3557,6 +3582,7 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	u8 doit = 1;
+	db_command *cmd = NULL;
 
 	DBG("db_sync");
 
@@ -3590,10 +3616,11 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		if (doit)
 		{
 			item = command_create(res->wthread,-1,pd);
-			item->cmd.type = cmd_sync;
-			item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-			item->cmd.pid = pid;
-			item->cmd.conn = res;
+			cmd = (db_command*)item->cmd;
+			cmd->type = cmd_sync;
+			cmd->ref = enif_make_copy(item->env, argv[1]);
+			cmd->pid = pid;
+			cmd->conn = res;
 			enif_keep_resource(res);
 
 			enif_consume_timeslice(env,90);
@@ -3612,7 +3639,8 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		for (i = 0; i < pd->nEnvs; i++)
 		{
 			item = command_create(i*pd->nWriteThreads,-1,pd);
-			item->cmd.type = cmd_sync;
+			cmd = (db_command*)item->cmd;
+			cmd->type = cmd_sync;
 			push_command(i*pd->nWriteThreads, -1, pd, item);
 		}
 
@@ -3626,6 +3654,7 @@ static ERL_NIF_TERM checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("checkpoint_lock");
 
@@ -3642,11 +3671,12 @@ static ERL_NIF_TERM checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 		return make_error_tuple(env, "term");
 
 	item = command_create(res->wthread,-1,pd);
-	item->cmd.type = cmd_checkpoint_lock;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env, argv[3]);  // 1 - lock, 0 - unlock
-	item->cmd.conn = res;
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_checkpoint_lock;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env, argv[3]);  // 1 - lock, 0 - unlock
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3664,6 +3694,7 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("iterate_db %d",argc);
 
@@ -3678,14 +3709,15 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 		return make_error_tuple(env, "invalid_pid");
 
 	item = command_create(res->wthread,-1,pd);
-	item->cmd.type = cmd_iterate;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.conn = res;
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_iterate;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->conn = res;
 	enif_keep_resource(res);
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]); // evterm or iterator resource
+	cmd->arg = enif_make_copy(item->env,argv[3]); // evterm or iterator resource
 	if (argc == 5)
-	  item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // evnum
+		cmd->arg1 = enif_make_copy(item->env,argv[4]); // evnum
 
 	enif_consume_timeslice(env,90);
 	return push_command(res->wthread, -1, pd, item);
@@ -3696,6 +3728,7 @@ static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	iterate_resource *iter;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("iterate_close %d",argc);
 
@@ -3706,9 +3739,10 @@ static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 
 	iter->closed = 1;
 	item = command_create(iter->thread,-1,pd);
-	item->cmd.type = cmd_checkpoint_lock;
-	item->cmd.arg = enif_make_int(item->cmd.env, 0);
-	item->cmd.conn = iter->conn;
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_checkpoint_lock;
+	cmd->arg = enif_make_int(item->env, 0);
+	cmd->conn = iter->conn;
 	// No keep. This way release for connection will be called on thread when done with command.
 	// It will decrement keep on connection held by iterate.
 	// enif_keep_resource(res);
@@ -3723,6 +3757,7 @@ static ERL_NIF_TERM inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("inject_page");
 
@@ -3743,12 +3778,13 @@ static ERL_NIF_TERM inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 		return make_error_tuple(env,"header");
 
 	item = command_create(res->wthread,-1,pd);
-	item->cmd.type = cmd_inject_page;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);  // bin
-	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[4]); // header bin
-	item->cmd.conn = res;
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_inject_page;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env,argv[3]);  // bin
+	cmd->arg1 = enif_make_copy(item->env,argv[4]); // header bin
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3761,6 +3797,7 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("wal_rewind");
 
@@ -3779,13 +3816,14 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 		return make_error_tuple(env,"not_iolist");
 
 	item = command_create(res->wthread,-1,pd);
-	item->cmd.type = cmd_wal_rewind;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[3]);
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_wal_rewind;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
+	cmd->arg = enif_make_copy(item->env,argv[3]);
 	if (argc == 5)
-		item->cmd.arg1 = enif_make_copy(item->cmd.env, argv[4]);
-	item->cmd.conn = res;
+		cmd->arg1 = enif_make_copy(item->env, argv[4]);
+	cmd->conn = res;
 	enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
@@ -3796,6 +3834,7 @@ static ERL_NIF_TERM file_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 {
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	if(argc != 3)
 		return enif_make_badarg(env);
@@ -3808,10 +3847,11 @@ static ERL_NIF_TERM file_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 		return make_error_tuple(env,"not_list");
 
 	item = command_create(0,-1,pd);
-	item->cmd.type = cmd_file_write;
-	item->cmd.arg = enif_make_copy(item->cmd.env,argv[0]);
-	item->cmd.arg1 = enif_make_copy(item->cmd.env,argv[1]);
-	item->cmd.arg2 = enif_make_copy(item->cmd.env,argv[2]);
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_file_write;
+	cmd->arg = enif_make_copy(item->env,argv[0]);
+	cmd->arg1 = enif_make_copy(item->env,argv[1]);
+	cmd->arg2 = enif_make_copy(item->env,argv[2]);
 
 	enif_consume_timeslice(env,90);
 	return push_command(0, -1, pd, item);
@@ -3823,6 +3863,7 @@ static ERL_NIF_TERM noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	if(argc != 3)
 		return enif_make_badarg(env);
@@ -3834,9 +3875,10 @@ static ERL_NIF_TERM noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_pid");
 
 	item = command_create(res->wthread,-1,pd);
-	item->cmd.type = cmd_unknown;
-	item->cmd.ref = enif_make_copy(item->cmd.env, argv[1]);
-	item->cmd.pid = pid;
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_unknown;
+	cmd->ref = enif_make_copy(item->env, argv[1]);
+	cmd->pid = pid;
 
 	return push_command(res->wthread, -1, pd, item);
 }
@@ -4111,9 +4153,11 @@ static void on_unload(ErlNifEnv* env, void* pd)
 {
 	int i,j,k;
 	priv_data *priv = (priv_data*)pd;
+	db_command *cmd = NULL;
 
 	qitem *item = command_create(-1,-1,priv);
-	item->cmd.type = cmd_stop;
+	cmd = (db_command*)item->cmd;
+	cmd->type = cmd_stop;
 	push_command(-1, -1, priv, item);
 
 	for (i = 0; i < priv->nEnvs; i++)
@@ -4122,7 +4166,8 @@ static void on_unload(ErlNifEnv* env, void* pd)
 		for (k = 0; k < priv->nReadThreads; k++)
 		{
 			item = command_create(-1,i*priv->nEnvs + k,priv);
-			item->cmd.type = cmd_stop;
+			cmd = (db_command*)item->cmd;
+			cmd->type = cmd_stop;
 			push_command(-1, i*priv->nEnvs + k, priv, item);
 		}
 		for (k = 0; k < priv->nReadThreads; k++)
@@ -4131,7 +4176,8 @@ static void on_unload(ErlNifEnv* env, void* pd)
 		for (k = 0; k < priv->nWriteThreads; k++)
 		{
 			item = command_create(i*priv->nEnvs + k,-1,priv);
-			item->cmd.type = cmd_stop;
+			cmd = (db_command*)item->cmd;
+			cmd->type = cmd_stop;
 			push_command(i*priv->nEnvs + k,-1, priv, item);
 		}
 		for (k = 0; k < priv->nWriteThreads; k++)

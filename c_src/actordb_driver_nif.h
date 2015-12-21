@@ -15,7 +15,7 @@
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
-
+#include "queue.h"
 // #define TRACK_TIME 1
 
 FILE *g_log = 0;
@@ -37,8 +37,6 @@ typedef struct WalIndexHdr WalIndexHdr;
 typedef struct WalIterator WalIterator;
 typedef struct WalCkptInfo WalCkptInfo;
 typedef struct iterate_resource iterate_resource;
-typedef struct queue_t queue;
-typedef struct qitem_t qitem;
 typedef struct priv_data priv_data;
 typedef struct ckp_workaround ckp_workaround;
 
@@ -266,7 +264,6 @@ typedef struct
 	// void *p;
 	db_connection *conn;
 #ifndef _TESTAPP_
-	ErlNifEnv *env;
 	ERL_NIF_TERM ref;
 	ErlNifPid pid;
 	ERL_NIF_TERM arg;
@@ -278,13 +275,6 @@ typedef struct
 	// int connindex;
 	command_type type;
 } db_command;
-
-struct qitem_t
-{
-	qitem* next;
-	db_command cmd;
-	char blockStart;
-};
 
 
 #ifdef TRACK_TIME
@@ -330,7 +320,7 @@ static ERL_NIF_TERM push_command(int thread, int readThreadNum,priv_data *pd, qi
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 // int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
 static qitem *command_create(int threadnum,int readThreadNum,priv_data* pd);
-static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos);
+static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos, ErlNifEnv *env);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i,priv_data *priv);
@@ -346,12 +336,12 @@ int read_thread_wal(db_thread*);
 
 
 
-queue *queue_create(void);
-void queue_destroy(queue *queue);
-int queue_push(queue *queue, qitem* item);
-qitem* queue_pop(queue *queue);
-void queue_recycle(queue *queue,qitem* item);
-qitem* queue_get_item(queue *queue);
-int queue_size(queue *queue);
+// queue *queue_create(void);
+// void queue_destroy(queue *queue);
+// int queue_push(queue *queue, qitem* item);
+// qitem* queue_pop(queue *queue);
+// void queue_recycle(queue *queue,qitem* item);
+// qitem* queue_get_item(queue *queue);
+// int queue_size(queue *queue);
 
 #endif

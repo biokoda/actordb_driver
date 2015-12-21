@@ -7,19 +7,9 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-// #include "queue.h"
+#include "queue.h"
 #define BLOCK_SIZE 32
 
-struct queue_t
-{
-    ErlNifMutex *lock;
-    ErlNifCond *cond;
-    qitem *head;
-    qitem *tail;
-    qitem *reuseq;
-    // void (*freeitem)(db_command);
-    int length;
-};
 
 // void*
 // queue_get_item_data(void* item)
@@ -92,8 +82,10 @@ queue_destroy(queue *queue)
     while(queue->reuseq != NULL)
     {
         qitem *tmp = queue->reuseq->next;
-        if(tmp != NULL && tmp->cmd.env != NULL)
-           enif_free_env(tmp->cmd.env);
+        if(tmp != NULL && tmp->env != NULL)
+           enif_free_env(tmp->env);
+        if (tmp != NULL && tmp->cmd != NULL)
+            enif_free(tmp->cmd);
         if (queue->reuseq->blockStart)
         {
           queue->reuseq->next = blocks;
@@ -209,44 +201,14 @@ queue_get_item(queue *queue)
 
         for (i = 1; i < BLOCK_SIZE; i++)
         {
-          entry[i].cmd.env = enif_alloc_env();
+          entry[i].env = enif_alloc_env();
           entry[i].next = queue->reuseq;
           queue->reuseq = &entry[i];
         }
-        entry->cmd.env = enif_alloc_env();
+        entry->env = enif_alloc_env();
         entry->blockStart = 1;
     }
     enif_mutex_unlock(queue->lock);
     return entry;
 }
 
-// int
-// queue_send(queue *queue, void *item)
-// {
-//     enif_mutex_lock(queue->lock);
-//     assert(queue->message == NULL && "Attempting to send multiple messages.");
-//     queue->message = item;
-//     enif_cond_signal(queue->cond);
-//     enif_mutex_unlock(queue->lock);
-//     return 1;
-// }
-
-// void *
-// queue_receive(queue *queue)
-// {
-//     void *item;
-
-//     enif_mutex_lock(queue->lock);
-
-//     /* Wait for an item to become available.
-//      */
-//     while(queue->message == NULL)
-//         enif_cond_wait(queue->cond, queue->lock);
-
-//     item = queue->message;
-//     queue->message = NULL;
-
-//     enif_mutex_unlock(queue->lock);
-
-//     return item;
-// }
