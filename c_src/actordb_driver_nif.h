@@ -1,5 +1,5 @@
 #ifndef ACTORDB_DRIVER_NIF_H
-
+#define ACTORDB_DRIVER_NIF_H
 #ifdef  _WIN32
 #define snprintf _snprintf
 #endif
@@ -16,6 +16,11 @@
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
 #include "queue.h"
+#include <stdatomic.h>
+#include <string.h>
+#include <stdio.h>
+#include <ctype.h>
+#include <fcntl.h>
 // #define TRACK_TIME 1
 
 FILE *g_log = 0;
@@ -25,6 +30,17 @@ FILE *g_log = 0;
 # define DBG(X, ...)
 #endif
 
+// #if defined(_MSC_VER) || defined(__BORLANDC__)
+//   #define i64 __int64
+//   #define u64 unsigned __int64
+// #else
+//   #define i64 long long int 
+//   #define u64 unsigned long long int 
+// #endif
+// #define u8 unsigned char
+// #define u16 unsigned short
+// #define u32 unsigned int
+// #define Pgno u32
 
 typedef struct db_connection db_connection;
 typedef struct db_backup db_backup;
@@ -64,6 +80,8 @@ struct priv_data
 	ErlNifResourceType *db_backup_type;
 	ErlNifResourceType *iterate_type;
 	#endif
+
+	atomic_llong *actorIndexes;
 
 	int prepSize;
 	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
@@ -212,9 +230,9 @@ struct db_connection
 	// Set bit for every failed attempt to write to socket of connection
 	u8 failFlags;
 	// Write thread index
-	u8 wthread;
+	u8 wthreadind;
 	// Read thread index
-	u8 rthread;
+	u8 rthreadind;
 };
 
 struct iterate_resource
@@ -244,9 +262,9 @@ typedef enum
 	cmd_tcp_connect  = 9,
 	cmd_set_socket  = 10,
 	cmd_tcp_reconnect  = 11,
-	cmd_bind_insert  = 12,
+	// cmd_bind_insert  = 12,
 	cmd_alltunnel_call  = 13,
-	cmd_store_prepared  = 14,
+	// cmd_store_prepared  = 14,
 	cmd_checkpoint_lock  = 15,
 	cmd_iterate  = 16,
 	cmd_inject_page  = 17,
@@ -256,7 +274,8 @@ typedef enum
 	cmd_actor_info = 22,
 	cmd_sync = 23,
 	cmd_stmt_info = 24,
-	cmd_file_write = 25
+	cmd_file_write = 25,
+	cmd_actorsdb_add = 26
 } command_type;
 
 typedef struct

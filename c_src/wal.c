@@ -59,13 +59,13 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	MDB_val key, data;
 	int rc;
 	db_thread *thr = (db_thread*)walData;
-	Wal *pWal = &thr->curConn->wal;
+	db_connection *conn = thr->curConn;
+	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn;
 	int offset = 0, cutoff = 0;
 	size_t nmLen;
 
-	pWal->thread = thr;
 	actorsdb = thr->actorsdb;
 	infodb = thr->infodb;
 
@@ -78,14 +78,14 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 
 	DBG("Wal name=%s",zWalName);
 
-	#ifndef _WIN32
-	if (pthread_equal(pthread_self(), pWal->rthreadId))
-	#else
-	if (GetCurrentThreadId() == pWal->rthreadId)
-	#endif
+	// #ifndef _WIN32
+	// if (pthread_equal(pthread_self(), pWal->rthreadId))
+	// #else
+	// if (GetCurrentThreadId() == pWal->rthreadId)
+	// #endif
 		txn = thr->txn;
-	else if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
-		return SQLITE_ERROR;
+	// else if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
+	// 	return SQLITE_ERROR;
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = nmLen-cutoff;
@@ -96,18 +96,28 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	if (rc == MDB_NOTFOUND)
 	{
 		i64 index = 0;
-		MDB_val key1 = {1,(void*)"?"};
+		// MDB_val key1 = {1,(void*)"?"};
+		#ifndef _TESTAPP_
+		qitem *item;
+		db_command *cmd;
 
-		#ifndef _WIN32
-		if (pthread_equal(pthread_self(), pWal->rthreadId))
+		item = command_create(conn->wthreadind,-1,thr->pd);
+		cmd = (db_command*)item->cmd;
+		cmd->type = cmd_actorsdb_add;
+
+		index = atomic_fetch_add_explicit(&thr->pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
+		pWal->index = index;
+
+		cmd->arg = enif_make_string(item->env,zWalName,ERL_NIF_LATIN1);
+		cmd->arg1 = enif_make_uint64(item->env, index);
+		push_command(conn->wthreadind, -1, thr->pd, item);
+		
 		#else
-		if (GetCurrentThreadId() == pWal->rthreadId)
+		return SQLITE_ERROR;
 		#endif
-		{
-			return SQLITE_ERROR;
-		}
 
-		rc = mdb_get(txn,actorsdb,&key1,&data);
+		
+		/*rc = mdb_get(txn,actorsdb,&key1,&data);
 		if (rc == MDB_NOTFOUND)
 		{
 			// this is first actor at index 0
@@ -121,7 +131,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		}
 		else
 		{
-			mdb_txn_abort(txn);
+			// mdb_txn_abort(txn);
 			return SQLITE_ERROR;
 		}
 
@@ -133,7 +143,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		DBG("Writing index %lld",index);
 		if (mdb_put(thr->txn,actorsdb,&key1,&data,0) != MDB_SUCCESS)
 		{
-			mdb_txn_abort(txn);
+			// mdb_txn_abort(txn);
 			return SQLITE_ERROR;
 		}
 
@@ -142,11 +152,11 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		data.mv_data = (void*)&pWal->index;
 		if (mdb_put(thr->txn,actorsdb,&key,&data,0) != MDB_SUCCESS)
 		{
-			mdb_txn_abort(txn);
+			// mdb_txn_abort(txn);
 			return SQLITE_ERROR;
 		}
 		thr->forceCommit = 1;
-		thr->pagesChanged++;
+		thr->pagesChanged++;*/
 	}
 	// Actor exists, read evnum/evterm info
 	else if (rc == MDB_SUCCESS)
@@ -177,10 +187,10 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 			pWal->readSafeEvnum = pWal->lastCompleteEvnum;
 			pWal->readSafeMxPage = pWal->mxPage;
 
-			if (pWal->inProgressTerm != 0)
-			{
-				doundo(pWal,NULL,NULL,1);
-			}
+			// if (pWal->inProgressTerm != 0)
+			// {
+			// 	doundo(pWal,NULL,NULL,1);
+			// }
 		}
 		else if (rc == MDB_NOTFOUND)
 		{
@@ -189,13 +199,9 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	}
 	else
 	{
-		if (txn != thr->txn)
-			mdb_txn_abort(txn);
+		thr->forceCommit = 2;
 		return SQLITE_ERROR;
 	}
-
-	if (txn != thr->txn)
-		mdb_txn_abort(txn);
 
 	pWal->changed = 1;
 	if (ppWal != NULL)
@@ -984,6 +990,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 
 				pgop = MDB_NEXT_DUP;
 			}
+			pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 			storeinfo(pWal,0,0,NULL);
 			thr->pagesChanged++;
 		}
@@ -999,9 +1006,8 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	// }
 
 	DBG("Undo done!");
-	pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 
-  return rc;
+	return rc;
 }
 
 /* Undo any frames written (but not committed) to the log */
