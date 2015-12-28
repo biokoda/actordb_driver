@@ -36,6 +36,8 @@
 #define PRINT_ACTORS 8
 
 pthread_key_t g_tsd_thread;
+pthread_key_t g_tsd_pd;
+pthread_key_t g_tsd_conn;
 #define enif_tsd_get pthread_getspecific
 
 // Directly include sqlite3.c
@@ -491,8 +493,8 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 		return -1;
 	}
 	pthread_setspecific(g_tsd_thread, &thr);
+	pthread_setspecific(g_tsd_conn, &conn);
 
-	thr.curConn = &conn;
 	thr.env = rd.menv;
 	thr.maxvalsize = mdb_env_get_maxkeysize(rd.menv);
 	thr.resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/thr.maxvalsize + 1)*sizeof(MDB_val));

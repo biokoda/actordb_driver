@@ -38,6 +38,9 @@ static void wal_page_hook(void *data,void *page,int pagesize,void* header, int h
 static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p);
 static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_data *pd, qitem *item);
 static ErlNifTSDKey g_tsd_thread;
+static ErlNifTSDKey g_tsd_conn;
+static ErlNifTSDKey g_tsd_pd;
+static priv_data *g_pd;
 
 #include "wal.c"
 #include "nullvfs.c"
@@ -81,7 +84,8 @@ static ERL_NIF_TERM make_error_tuple(ErlNifEnv *env, const char *reason)
 static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 {
 	db_thread *thread = (db_thread *) data;
-	db_connection *conn = thread->curConn;
+	// db_connection *conn = thread->curConn;
+	db_connection *conn = enif_tsd_get(g_tsd_conn);
 	int i = 0;
 	int completeSize = 0;
 #ifndef  _WIN32
@@ -175,7 +179,7 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 				conn->failFlags |= (1 << i);
 				close(thread->sockets[i]);
 				thread->sockets[i] = 0;
-				fail_send(i,thread->pd);
+				fail_send(i,g_pd);
 			}
 			else
 			{
@@ -301,7 +305,7 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread, ErlNif
 			{
 				close(thread->sockets[i]);
 				thread->sockets[i] = 0;
-				fail_send(i,thread->pd);
+				fail_send(i,g_pd);
 			}
 			nsent++;
 		}
@@ -615,18 +619,19 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 		}
 	}
 	
-	conn = enif_alloc_resource(thread->pd->db_connection_type, sizeof(db_connection));
+	conn = enif_alloc_resource(g_pd->db_connection_type, sizeof(db_connection));
 	if(!conn)
 		return make_error_tuple(env, "no_memory");
 	memset(conn,0,sizeof(db_connection));
 	track_time(22,thread);
 	cmd->conn = conn;
-	thread->curConn = cmd->conn;
+	// thread->curConn = cmd->conn;
+	enif_tsd_set(g_tsd_conn, cmd->conn);
 	conn->db = db;
 	if (thread->isreadonly)
 	{
-		conn->rthreadind = thread->nEnv * thread->pd->nReadThreads + thread->nThread;
-		conn->wthreadind = thread->nEnv * thread->pd->nWriteThreads + ((rThrCounter++) % thread->pd->nWriteThreads);
+		conn->rthreadind = thread->nEnv * g_pd->nReadThreads + thread->nThread;
+		conn->wthreadind = thread->nEnv * g_pd->nWriteThreads + ((rThrCounter++) % g_pd->nWriteThreads);
 		// conn->wal.rthread = thread;
 		// #ifndef _WIN32
 		// conn->wal.rthreadId = pthread_self();
@@ -636,8 +641,8 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	}
 	else
 	{
-		conn->wthreadind = thread->nEnv * thread->pd->nWriteThreads + thread->nThread;
-		conn->rthreadind = thread->nEnv * thread->pd->nReadThreads + ((rThrCounter++) % thread->pd->nReadThreads);
+		conn->wthreadind = thread->nEnv * g_pd->nWriteThreads + thread->nThread;
+		conn->rthreadind = thread->nEnv * g_pd->nReadThreads + ((rThrCounter++) % g_pd->nReadThreads);
 		// conn->wal.thread = thread;
 	}
 	conn->wal.mtx = enif_mutex_create("conmutex");
@@ -745,7 +750,7 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos,
 	int i;
 	// struct sockaddr_in addr;
 	int fd;
-	priv_data *pd = thread->pd;
+	priv_data *pd = g_pd;
 	ERL_NIF_TERM result = atom_ok;
 #ifndef _WIN32
 	struct iovec iov[2];
@@ -928,13 +933,13 @@ static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos,
 
 		for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
 		{
-			qitem *item = command_create(i,-1,thread->pd);
+			qitem *item = command_create(i,-1,g_pd);
 			db_command *cmd = (db_command*)item->cmd;
 			cmd->type = cmd_set_socket;
 			cmd->arg = enif_make_int(item->env,sockets[i]);
 			cmd->arg1 = enif_make_int(item->env,pos);
 			cmd->arg2 = enif_make_int(item->env,thread->control->types[pos]);
-			push_command(i, -1, thread->pd, item);
+			push_command(i, -1, g_pd, item);
 		}
 	}
 	else
@@ -968,7 +973,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *en
 	u64 evterm;
 	char mismatch = 0;
 
-	if (!enif_get_resource(env, cmd->arg, thread->pd->iterate_type, (void **) &iter))
+	if (!enif_get_resource(env, cmd->arg, g_pd->iterate_type, (void **) &iter))
 	{
 		dorel = 1;
 		DBG("Create iterate %d",(int)cmd->conn->checkpointLock);
@@ -980,11 +985,11 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *en
 			return enif_make_badarg(env);
 		}
 
-		iter = enif_alloc_resource(thread->pd->iterate_type, sizeof(iterate_resource));
+		iter = enif_alloc_resource(g_pd->iterate_type, sizeof(iterate_resource));
 		if(!iter)
 			return make_error_tuple(env, "no_memory");
 		memset(iter,0,sizeof(iterate_resource));
-		iter->thread = thread->nEnv * thread->pd->nWriteThreads + thread->nThread;
+		iter->thread = thread->nEnv * g_pd->nWriteThreads + thread->nThread;
 		iter->evnum = evnumFrom;
 		iter->evterm = evtermFrom;
 		iter->conn = cmd->conn;
@@ -1150,11 +1155,11 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 			while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 			{
 				u32 pgno;
-				u8 rewrite = 0;
+				// u8 rewrite = 0;
 				u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 				MDB_val pgKey, pgVal;
 				size_t ndupl, nduplorig;
-				size_t rewritePos = 0;
+				// size_t rewritePos = 0;
 				int pgop;
 
 				memcpy(&pgno, logVal.mv_data,sizeof(u32));
@@ -1189,97 +1194,22 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 					DBG("Deleting pgno=%u, evnum=%llu",pgno,evnum);
 					if (evnum >= limitEvnum)
 					{
-						if (rewrite && pgop == MDB_PREV_DUP)
+						// Like checkpoint, we can not trust this will succeed.
+						rc = mdb_cursor_del(thr->cursorPages,0);
+						if (rc != MDB_SUCCESS)
 						{
-							DBG("Workaround step 2");
-							// Step 2 of workaround.
-							// We are still going back from end to count pages.
-							if (frag == 0)
-								allPagesDiff++;
-						}
-						else if (rewrite && pgop == MDB_NEXT_DUP)
-						{
-							DBG("Workaround step 5");
-							// Step 5 of workaround
-							// We copied over everything from beginning to point
-							// of rewind. We must not go further.
+							DBG("Unable to delete rewind page!!!");
 							break;
 						}
 						else
 						{
-							// Like checkpoint, we can not trust this will succeed.
-							rc = mdb_cursor_del(thr->cursorPages,0);
-							if (rc != MDB_SUCCESS)
-							{
-								DBG("Unable to delete rewind page, doing workaround, ndupl=%zu",ndupl);
-								// Step 1 of workaround.
-								// Create operation, reserve space. 
-								// Move back to original position at the end.
-								// Count how many pages we will cut away.
-								thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
-								memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
-								thr->ckpWorkaround->pgno = pgno;
-								thr->ckpWorkaround->actor = pWal->index;
-								thr->ckpWorkaround->bufSize = 5*(thr->maxvalsize+25);
-								thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
-								memset(thr->ckpWorkaround->buf,0,2);
-								rewrite = 1;
-								ndupl = nduplorig;
-								allPagesDiff = 0;
-								mdb_txn_abort(thr->txn);
-								open_txn(thr,0);
-								mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET);
-								mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP);
-								rc = MDB_SUCCESS;
-								continue;
-							}
-							else
-							{
-								// This is normal operation. Delete page and set flag
-								// that something is deleted.
-								DBG("Rewind page deleted!");
-								somethingDeleted = 1;
-							}
-							if (frag == 0)
-								allPagesDiff++;
+							// This is normal operation. Delete page and set flag
+							// that something is deleted.
+							DBG("Rewind page deleted!");
+							somethingDeleted = 1;
 						}
-					}
-					else if (rewrite && pgop == MDB_PREV_DUP)
-					{
-						DBG("Workaround step 3");
-						// Step 3 of workaround.
-						// Time to stop moving back and reset.
-						// Go to beginning, start moving from oldest page to newest.
-						mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP);
-						pgop = MDB_NEXT_DUP;
-						ndupl = nduplorig;
-						thr->ckpWorkaround->allPagesDiff = allPagesDiff;
-						continue;
-					}
-					else if (rewrite)
-					{
-						// Step 4 of workaround.
-						// Copy pages that we will keep to buffer.
-						short pgSz = pgDelVal.mv_size;
-						u8 *buf = thr->ckpWorkaround->buf;
-						DBG("Workaround step 4");
-
-						while (rewritePos+sizeof(short)*2+pgSz > thr->ckpWorkaround->bufSize)
-						{
-							thr->ckpWorkaround->bufSize *= 1.5;
-							thr->ckpWorkaround->buf = buf = realloc(buf, thr->ckpWorkaround->bufSize);
-
-							if (buf == NULL)
-							{
-								exit(EXIT_FAILURE);
-							}
-						}
-
-						memcpy(buf+rewritePos, &pgSz, sizeof(short));
-						memcpy(buf+rewritePos+sizeof(short), pgDelVal.mv_data, pgSz);
-						buf[rewritePos+sizeof(short)+pgSz] = 0;
-						buf[rewritePos+sizeof(short)+pgSz+1] = 0;
-						rewritePos += sizeof(short)+pgSz;
+						if (frag == 0)
+							allPagesDiff++;
 					}
 					else
 					{
@@ -1294,15 +1224,6 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 
 					rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop);
 				} while (rc == MDB_SUCCESS);
-				if (rewrite)
-				{
-					DBG("Workaround exit %d, ndupl=%zu, pagediff=%d",rc, ndupl,thr->ckpWorkaround->allPagesDiff);
-					// If last page and we have not written anything to buffer, we have shrunk DB.
-					if (!rewritePos && pgno == pWal->mxPage)
-						pWal->mxPage--;
-					thr->forceCommit = 2;
-					return atom_ok;
-				}
 				DBG("Done looping pages %d",rc);
 				// If we moved through all pages and rewrite did not happen
 				// and this is last page, we have shrunk DB.
@@ -1398,11 +1319,13 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv 
 		memset(&con, 0, sizeof(db_connection));
 		memset(pth, 0, MAX_PATHNAME);
 		memcpy(pth, name.data, name.size);
-		thread->curConn = &con;
+		// thread->curConn = &con;
+		enif_tsd_set(g_tsd_conn, &con);
 		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL, thread);
 		// con.wal.thread = thread;
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
-		thread->curConn = NULL;
+		// thread->curConn = NULL;
+		enif_tsd_set(g_tsd_conn, NULL);
 	}
 	return atom_ok;
 }
@@ -1583,17 +1506,15 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 
 static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
-	priv_data *pd = thread->pd;
-
-	enif_mutex_lock(pd->thrMutexes[thread->nEnv]);
-	if (!cmd->conn || cmd->conn->syncNum >= pd->syncNumbers[thread->nEnv])
+	enif_mutex_lock(g_pd->thrMutexes[thread->nEnv]);
+	if (!cmd->conn || cmd->conn->syncNum >= g_pd->syncNumbers[thread->nEnv])
 	{
-		pd->syncNumbers[thread->nEnv]++;
+		g_pd->syncNumbers[thread->nEnv]++;
 		mdb_txn_commit(thread->txn);
 		thread->txn = NULL;
 		mdb_env_sync(thread->env,1);
 	}
-	enif_mutex_unlock(pd->thrMutexes[thread->nEnv]);
+	enif_mutex_unlock(g_pd->thrMutexes[thread->nEnv]);
 
 	return atom_ok;
 }
@@ -1717,24 +1638,24 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread, ErlNifEnv *
 		i = (bin.data[2] - '0')*10 + (bin.data[3] - '0');
 		rowLen = (bin.data[4] - '0')*10 + (bin.data[5] - '0');
 
-		enif_mutex_lock(thread->pd->prepMutex);
+		enif_mutex_lock(g_pd->prepMutex);
 
-		if (thread->pd->prepSize <= i)
+		if (g_pd->prepSize <= i)
 		{
-			enif_mutex_unlock(thread->pd->prepMutex);
+			enif_mutex_unlock(g_pd->prepMutex);
 			return atom_false;
 		}
 		
-		if (thread->pd->prepSqls[i][rowLen] == NULL)
+		if (g_pd->prepSqls[i][rowLen] == NULL)
 		{
 			DBG("Did not find sql in prepared statement");
-			enif_mutex_unlock(thread->pd->prepMutex);
+			enif_mutex_unlock(g_pd->prepMutex);
 			return atom_false;
 		}
 
-		rc = sqlite3_prepare_v2(cmd->conn->db, thread->pd->prepSqls[i][rowLen], -1, &statement, NULL);
+		rc = sqlite3_prepare_v2(cmd->conn->db, g_pd->prepSqls[i][rowLen], -1, &statement, NULL);
 		
-		enif_mutex_unlock(thread->pd->prepMutex);
+		enif_mutex_unlock(g_pd->prepMutex);
 	}
 	else
 	{
@@ -2043,12 +1964,12 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 					// statement index
 					rowLen = (readpoint[skip+4] - '0')*10 + (readpoint[skip+5] - '0');
 
-					enif_mutex_lock(thread->pd->prepMutex);
+					enif_mutex_lock(g_pd->prepMutex);
 
-					if (thread->pd->prepSize <= i)
+					if (g_pd->prepSize <= i)
 					{
 						errat = "prepare";
-						enif_mutex_unlock(thread->pd->prepMutex);
+						enif_mutex_unlock(g_pd->prepMutex);
 						break;
 					}
 
@@ -2061,30 +1982,30 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 					}
 
 					if (cmd->conn->prepared[rowLen] == NULL || 
-						cmd->conn->prepVersions[rowLen] != thread->pd->prepVersions[i][rowLen])
+						cmd->conn->prepVersions[rowLen] != g_pd->prepVersions[i][rowLen])
 					{
-						if (thread->pd->prepSqls[i][rowLen] == NULL)
+						if (g_pd->prepSqls[i][rowLen] == NULL)
 						{
 							DBG("Did not find sql in prepared statement");
 							errat = "prepare";
-							enif_mutex_unlock(thread->pd->prepMutex);
+							enif_mutex_unlock(g_pd->prepMutex);
 							break;
 						}
 						if (cmd->conn->prepared[rowLen] != NULL)
 							sqlite3_finalize(cmd->conn->prepared[rowLen]);
 
-						rc = sqlite3_prepare_v2(cmd->conn->db, thread->pd->prepSqls[i][rowLen], -1, 
+						rc = sqlite3_prepare_v2(cmd->conn->db, g_pd->prepSqls[i][rowLen], -1, 
 							&(cmd->conn->prepared[rowLen]), NULL);
 						if(rc != SQLITE_OK)
 						{
 							DBG("Prepared statement failed");
 							errat = "prepare";
-							enif_mutex_unlock(thread->pd->prepMutex);
+							enif_mutex_unlock(g_pd->prepMutex);
 							break;
 						}
-						cmd->conn->prepVersions[rowLen] = thread->pd->prepVersions[i][rowLen];
+						cmd->conn->prepVersions[rowLen] = g_pd->prepVersions[i][rowLen];
 					}
-					enif_mutex_unlock(thread->pd->prepMutex);
+					enif_mutex_unlock(g_pd->prepMutex);
 					readpoint += 7;
 					statement = cmd->conn->prepared[rowLen];
 				}
@@ -2318,8 +2239,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 	{
 		if (pagesPre != thread->pagesChanged)
 		{
-			priv_data *pd = thread->pd;
-			cmd->conn->syncNum = pd->syncNumbers[thread->nEnv];
+			cmd->conn->syncNum = g_pd->syncNumbers[thread->nEnv];
 		}
 		track_time(13,thread);
 		return make_ok_tuple(env,results);
@@ -2448,7 +2368,8 @@ static ERL_NIF_TERM do_checkpoint_lock(db_command *cmd,db_thread *thread, ErlNif
 
 static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
-	thread->curConn = cmd->conn;
+	// thread->curConn = cmd->conn;
+	enif_tsd_set(g_tsd_conn, cmd->conn);
 
 	switch(cmd->type)
 	{
@@ -2575,85 +2496,6 @@ static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 }
 
 
-// Lmdb bug or bad use of lmdb. Sometimes checkpoint/rewind fails and the only thing we can do
-// is delete a pagesdb entry and recreate it.
-static int do_workaround(db_thread *data)
-{
-	size_t pos = 0;
-	u8 *buf = data->ckpWorkaround->buf;
-	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-	MDB_val key, val;
-	int rc;
-
-	DBG("do_workaround, bufsize=%zu",data->ckpWorkaround->bufSize);
-
-	if (data->txn == NULL)
-	{
-		if (open_txn(data,0) == NULL)
-		{
-			rc = MDB_PANIC;
-			goto workaround_done;
-		}
-	}
-
-	memcpy(pagesKeyBuf,               &data->ckpWorkaround->actor,sizeof(u64));
-	memcpy(pagesKeyBuf + sizeof(u64), &data->ckpWorkaround->pgno, sizeof(u32));
-	key.mv_size = sizeof(pagesKeyBuf);
-	key.mv_data = pagesKeyBuf;
-
-	rc = mdb_cursor_get(data->cursorPages,&key,&val,MDB_SET);
-	if (rc != MDB_SUCCESS)
-	{
-		DBG("Unable to position to right page for workaround, err=%d, pgno=%u, actor=%llu, bufsize=%zu",
-			rc, data->ckpWorkaround->pgno, data->ckpWorkaround->actor, data->ckpWorkaround->bufSize);
-		goto workaround_done;
-	}
-		
-	rc = mdb_cursor_del(data->cursorPages,MDB_NODUPDATA);
-	if (rc != MDB_SUCCESS)
-	{
-		DBG("Unable to delete all pages for workaround");
-		goto workaround_done;
-	}
-
-	while (pos < data->ckpWorkaround->bufSize)
-	{
-		short pgSz;
-
-		memcpy(&pgSz, buf+pos, sizeof(short));
-		if (pgSz == 0)
-			break;
-
-		val.mv_size = pgSz;
-		val.mv_data = buf+pos+sizeof(short);
-		DBG("Workaround insert page");
-
-		if ((rc = mdb_cursor_put(data->cursorPages,&key,&val,0)) != MDB_SUCCESS)
-		{
-			DBG("Unable to insert page for workaround");
-			break;
-		}
-
-		pos += pgSz+sizeof(short);
-	}
-	rc = mdb_txn_commit(data->txn);
-	if (rc != MDB_SUCCESS)
-	{
-		mdb_txn_abort(data->txn);
-		data->txn = NULL;
-		goto workaround_done;
-	}
-	data->txn = NULL;
-	rc = MDB_SUCCESS;
-	data->curConn->wal.allPages -= data->ckpWorkaround->allPagesDiff;
-
-workaround_done:
-	free(buf);
-	free(data->ckpWorkaround);
-	data->ckpWorkaround = NULL;
-	return rc;
-}
-
 static void thread_ex(db_thread *data, qitem *item)
 {
 	db_command *cmd = (db_command*)item->cmd;
@@ -2703,15 +2545,6 @@ static void thread_ex(db_thread *data, qitem *item)
 					if (open_txn(data,0) == NULL)
 						break;
 					continue;
-				}
-				if (data->ckpWorkaround)
-				{
-					if (do_workaround(data) == MDB_SUCCESS)
-					{
-						if (open_txn(data,0) == NULL)
-							break;
-						continue;
-					}
 				}
 			}
 
@@ -4004,6 +3837,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv = malloc(sizeof(priv_data));
 	memset(priv,0,sizeof(priv_data));
 	*priv_out = priv;
+	g_pd = priv;
 	priv->nReadThreads = 1;
 	priv->nWriteThreads = 1;
 	memset(nodename,0,128);
@@ -4031,6 +3865,8 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	// There is no reason to have more than 1 connection per actor.
 	// sqlite3_enable_shared_cache(1);
 	enif_tsd_key_create("threaddata",&g_tsd_thread);
+	enif_tsd_key_create("curconn",&g_tsd_conn);
+	enif_tsd_key_create("pd",&g_tsd_pd);
 
 	atom_false = enif_make_atom(env,"false");
 	atom_ok = enif_make_atom(env,"ok");
@@ -4118,7 +3954,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	memset(controlThread,0,sizeof(db_thread));
 	controlThread->nThread = -1;
 	controlThread->tasks = queue_create();
-	controlThread->pd = priv;
 	priv->wtasks[priv->nEnvs*priv->nWriteThreads] = controlThread->tasks;
 	priv->syncNumbers = malloc(sizeof(u64)*priv->nEnvs);
 	priv->thrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
@@ -4208,7 +4043,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			else
 				curThread->nThread = k - priv->nWriteThreads;
 			curThread->tasks = queue_create();
-			curThread->pd = priv;
 			curThread->infodb = infodb;
 			curThread->actorsdb = actorsdb;
 			curThread->logdb = logdb;

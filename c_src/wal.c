@@ -58,8 +58,10 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 {
 	MDB_val key, data;
 	int rc;
-	db_thread *thr = (db_thread*)walData;
-	db_connection *conn = thr->curConn;
+	// db_thread *thr = (db_thread*)walData;
+	// db_connection *conn = thr->curConn;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
+	db_connection *conn = enif_tsd_get(g_tsd_conn);
 	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn;
@@ -101,16 +103,16 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		qitem *item;
 		db_command *cmd;
 
-		item = command_create(conn->wthreadind,-1,thr->pd);
+		item = command_create(conn->wthreadind,-1,g_pd);
 		cmd = (db_command*)item->cmd;
 		cmd->type = cmd_actorsdb_add;
 
-		index = atomic_fetch_add_explicit(&thr->pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
+		index = atomic_fetch_add_explicit(&g_pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
 		pWal->index = index;
 
 		cmd->arg = enif_make_string(item->env,zWalName,ERL_NIF_LATIN1);
 		cmd->arg1 = enif_make_uint64(item->env, index);
-		push_command(conn->wthreadind, -1, thr->pd, item);
+		push_command(conn->wthreadind, -1, g_pd, item);
 		
 		#else
 		return SQLITE_ERROR;
@@ -732,8 +734,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 			MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
 			u64 pgnoLimitEvnum;
-			u8 rewrite = 0;
-			size_t rewritePos = 0;
+			// u8 rewrite = 0;
+			// size_t rewritePos = 0;
 
 			logop = MDB_NEXT_DUP;
 			memcpy(&pgno, logVal.mv_data,sizeof(u32));
@@ -775,31 +777,13 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				DBG("limit limitevnum %lld, curnum %lld, dupl %zu, frag=%d",
 					limitEvnum, evnum, ndupl,(int)frag);
 
-				if (evnum < pgnoLimitEvnum && !rewrite)
+				if (evnum < pgnoLimitEvnum /* && !rewrite*/)
 				{
 					mrc = mdb_cursor_del(thr->cursorPages,0);
 					if (mrc != MDB_SUCCESS)
 					{
-						DBG("Unable to delete page on cursor! %d. Will perform workaround.",mrc);
-						// Step 1 of workaround
-						// Create workaround op. Reset transaction and move to beginning of dupsort.
-						// Everything we did in this checkpoint run will be aborted.
-						thr->ckpWorkaround = malloc(sizeof(ckp_workaround));
-						memset(thr->ckpWorkaround,0,sizeof(ckp_workaround));
-						thr->ckpWorkaround->pgno = pgno;
-						thr->ckpWorkaround->actor = pWal->index;
-						thr->ckpWorkaround->bufSize = 5*(thr->maxvalsize+25);
-						thr->ckpWorkaround->buf = malloc(thr->ckpWorkaround->bufSize);
-						memset(thr->ckpWorkaround->buf,0,2);
-						rewrite = 1;
-						ndupl = nduplorig;
-						allPagesDiff = 0;
-						mdb_txn_abort(thr->txn);
-						open_txn(thr,0);
-						mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET);
-						mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP);
-						mrc = MDB_SUCCESS;
-						continue;
+						DBG("Unable to delete page on cursor! %d.");
+						break;
 					}
 					else
 					{
@@ -810,40 +794,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					if (frag == 0)
 						allPagesDiff++;
 				}
-				else if (evnum >= pgnoLimitEvnum && rewrite)
-				{
-					// Step 3 of workaround
-					// These pages are kept. Copy them to buffer.
-					short pgSz = pgDelVal.mv_size;
-					u8 *buf = thr->ckpWorkaround->buf;
-					DBG("Workaround step 3");
-
-					while (rewritePos+sizeof(short)*2+pgSz > thr->ckpWorkaround->bufSize)
-					{
-						thr->ckpWorkaround->bufSize *= 1.5;
-						thr->ckpWorkaround->buf = buf = realloc(buf, thr->ckpWorkaround->bufSize);
-
-						if (buf == NULL)
-						{
-							exit(EXIT_FAILURE);
-						}
-					}
-
-					memcpy(buf+rewritePos, &pgSz, sizeof(short));
-					memcpy(buf+rewritePos+sizeof(short), pgDelVal.mv_data, pgSz);
-					// mark end 
-					buf[rewritePos+sizeof(short)+pgSz] = 0;
-					buf[rewritePos+sizeof(short)+pgSz+1] = 0;
-					rewritePos += sizeof(short)+pgSz;
-				}
-				else if (rewrite)
-				{
-					DBG("Workaround step 2");
-					// Step 2 of workaround
-					// Move over pages we are discarding. Count how many we discard.
-					if (frag == 0)
-						allPagesDiff++;
-				}
 
 				ndupl--;
 				if (!ndupl)
@@ -851,14 +801,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				
 				mrc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP);
 			} while (mrc == MDB_SUCCESS);
-			if (rewrite)
-			{
-				DBG("Rewrite exit %d, nudpl=%zu, diff=%d",mrc, ndupl,allPagesDiff);
-				// We hit an error. Stop and thread_ex will execute workaround.
-				thr->forceCommit = 2;
-				thr->ckpWorkaround->allPagesDiff = allPagesDiff;
-				return SQLITE_OK;
-			}
 		}
 
 		mrc = mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA);
@@ -1071,7 +1013,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 {
 	PgHdr *p;
 	db_thread *thr = enif_tsd_get(g_tsd_thread);
-	db_connection *pCon = thr->curConn;
+	// db_connection *pCon = thr->curConn;
+	db_connection *pCon = enif_tsd_get(g_tsd_conn);
 	MDB_val key, data;
 	int rc;
 

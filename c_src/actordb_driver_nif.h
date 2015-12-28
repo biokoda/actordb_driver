@@ -55,7 +55,6 @@ typedef struct WalIterator WalIterator;
 typedef struct WalCkptInfo WalCkptInfo;
 typedef struct iterate_resource iterate_resource;
 typedef struct priv_data priv_data;
-typedef struct ckp_workaround ckp_workaround;
 
 typedef u16 ht_slot;
 
@@ -134,14 +133,6 @@ struct control_data
 	#endif
 };
 
-struct ckp_workaround
-{
-	u32 pgno;
-	u64 actor;
-	u8 *buf;
-	size_t bufSize;
-	int allPagesDiff;
-};
 
 struct db_thread
 {
@@ -162,8 +153,7 @@ struct db_thread
 	MDB_cursor *cursorInfo;
 	u8 *wBuffer;
 	int bufSize;
-	// so currently executing connection data is accessible from wal callback
-	db_connection *curConn;
+
 	// For read threads. Before executing sql on a connection, copy over term/evnum upper limit.
 	// Reads/writes can be completely asynchronous, at least from our code
 	// we make no assumptions about sqlite.
@@ -200,9 +190,6 @@ struct db_thread
 
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
-
-	ckp_workaround *ckpWorkaround;
-	priv_data *pd;
 };
 
 
