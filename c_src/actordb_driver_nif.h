@@ -23,6 +23,7 @@
 #include <fcntl.h>
 // #define TRACK_TIME 1
 
+
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
 # define DBG(X, ...)  fprintf(g_log,"thr=%lld: " X "\r\n",(i64)pthread_self(),##__VA_ARGS__) ;fflush(g_log);
@@ -89,18 +90,18 @@ struct priv_data
 };
 
 struct Wal {
-	db_thread *thread;
-	db_thread *rthread;
+	// db_thread *thread;
+	// db_thread *rthread;
 	// for access to readSafeXXX values. They are set on write/scheduler thread and read
 	// on read thread.
 	#ifndef _TESTAPP_
 	ErlNifMutex *mtx;
 	#endif
-	#ifndef _WIN32
-	pthread_t rthreadId;
-	#else
-	DWORD rthreadId;
-	#endif
+	// #ifndef _WIN32
+	// pthread_t rthreadId;
+	// #else
+	// DWORD rthreadId;
+	// #endif
 	u64 index;
 	u64 firstCompleteTerm;
 	u64 firstCompleteEvnum;
@@ -110,6 +111,8 @@ struct Wal {
 	u64 inProgressEvnum;
 	// This is set from lastCompleteXXXX once write is safely replicated.
 	// Or after a rewind. Used by read thread.
+	// -> not used atm because we don't control the sqlite cache
+	//   so we cant set which page versions are used.
 	u64 readSafeTerm;
 	u64 readSafeEvnum;
 	Pgno readSafeMxPage;

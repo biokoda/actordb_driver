@@ -35,6 +35,9 @@
 #define PRINT_LOG    4
 #define PRINT_ACTORS 8
 
+pthread_key_t g_tsd_thread;
+#define enif_tsd_get pthread_getspecific
+
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
 // If we were to just include "sqlite3.h" OSX would actually use /usr/lib/libsqlite3.dylib
@@ -487,6 +490,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 		fprintf(stderr,"Unable to open source environment\n");
 		return -1;
 	}
+	pthread_setspecific(g_tsd_thread, &thr);
 
 	thr.curConn = &conn;
 	thr.env = rd.menv;
@@ -501,9 +505,9 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	thr.cursorPages = rd.cursorPages;
 	thr.cursorInfo = rd.cursorInfo;
 
-	conn.wal.thread = &thr;
-	conn.wal.rthread = &thr;
-	conn.wal.rthreadId = pthread_self();
+	// conn.wal.thread = &thr;
+	// conn.wal.rthread = &thr;
+	// conn.wal.rthreadId = pthread_self();
 
 
 	for (i = 0; i < 10; i++)
@@ -578,6 +582,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 int main(int argc, const char* argv[])
 {
 	g_log = stdout;
+	pthread_key_create(&g_tsd_thread, NULL);
 
 	if (argc >= 3 && strcmp(argv[1],"print") == 0)
 	{

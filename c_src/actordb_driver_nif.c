@@ -37,6 +37,7 @@
 static void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p);
 static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_data *pd, qitem *item);
+static ErlNifTSDKey g_tsd_thread;
 
 #include "wal.c"
 #include "nullvfs.c"
@@ -626,18 +627,18 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	{
 		conn->rthreadind = thread->nEnv * thread->pd->nReadThreads + thread->nThread;
 		conn->wthreadind = thread->nEnv * thread->pd->nWriteThreads + ((rThrCounter++) % thread->pd->nWriteThreads);
-		conn->wal.rthread = thread;
-		#ifndef _WIN32
-		conn->wal.rthreadId = pthread_self();
-		#else
-		conn->wal.rthreadId = GetCurrentThreadId();
-		#endif
+		// conn->wal.rthread = thread;
+		// #ifndef _WIN32
+		// conn->wal.rthreadId = pthread_self();
+		// #else
+		// conn->wal.rthreadId = GetCurrentThreadId();
+		// #endif
 	}
 	else
 	{
 		conn->wthreadind = thread->nEnv * thread->pd->nWriteThreads + thread->nThread;
 		conn->rthreadind = thread->nEnv * thread->pd->nReadThreads + ((rThrCounter++) % thread->pd->nReadThreads);
-		conn->wal.thread = thread;
+		// conn->wal.thread = thread;
 	}
 	conn->wal.mtx = enif_mutex_create("conmutex");
 
@@ -1399,7 +1400,7 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv 
 		memcpy(pth, name.data, name.size);
 		thread->curConn = &con;
 		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL, thread);
-		con.wal.thread = thread;
+		// con.wal.thread = thread;
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
 		thread->curConn = NULL;
 	}
@@ -2658,10 +2659,10 @@ static void thread_ex(db_thread *data, qitem *item)
 	db_command *cmd = (db_command*)item->cmd;
 	DBG("thread=%d command=%d.",data->nThread,cmd->type);
 
-	if (cmd->conn && !cmd->conn->wal.thread)
-	{
-		cmd->conn->wal.thread = data;
-	}
+	// if (cmd->conn && !cmd->conn->wal.thread)
+	// {
+	// 	cmd->conn->wal.thread = data;
+	// }
 
 	if (cmd->ref == 0)
 	{
@@ -2745,6 +2746,7 @@ static void *thread_func(void *arg)
 	int chkCounter = 0, syncListSize = 0;
 	db_thread* data = (db_thread*)arg;
 	qitem *syncList = NULL;
+	enif_tsd_set(g_tsd_thread, data);
 
 	data->isopen = 1;
 
@@ -2872,6 +2874,7 @@ static void *read_thread_func(void *arg)
 	db_thread* data = (db_thread*)arg;
 	int rc;
 	data->isopen = 1;
+	enif_tsd_set(g_tsd_thread, data);
 
 	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
 	data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
@@ -2892,15 +2895,15 @@ static void *read_thread_func(void *arg)
 		}
 		else
 		{
-			if (cmd->conn && cmd->conn->wal.rthread == 0)
-			{
-				#ifndef _WIN32
-				cmd->conn->wal.rthreadId = pthread_self();
-				#else
-				cmd->conn->wal.rthreadId = GetCurrentThreadId();
-				#endif
-				cmd->conn->wal.rthread = data;
-			}
+			// if (cmd->conn && cmd->conn->wal.rthread == 0)
+			// {
+			// 	#ifndef _WIN32
+			// 	cmd->conn->wal.rthreadId = pthread_self();
+			// 	#else
+			// 	cmd->conn->wal.rthreadId = GetCurrentThreadId();
+			// 	#endif
+			// 	cmd->conn->wal.rthread = data;
+			// }
 			if (!data->txn)
 			{
 				DBG("Open read transaction");
@@ -4027,6 +4030,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	// second will crash the server because it will try to access a Wal structure that is dealocated.
 	// There is no reason to have more than 1 connection per actor.
 	// sqlite3_enable_shared_cache(1);
+	enif_tsd_key_create("threaddata",&g_tsd_thread);
 
 	atom_false = enif_make_atom(env,"false");
 	atom_ok = enif_make_atom(env,"ok");
@@ -4293,6 +4297,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->thrMutexes);
 	free(priv->syncNumbers);
 	free(priv->sqlite_scratch);
+	free(priv->actorIndexes);
 	// free(priv->sqlite_pgcache);
 	free(pd);
 }

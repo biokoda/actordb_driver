@@ -243,11 +243,8 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 /* Read a page from the write-ahead log, if it is present. */
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
-	#ifndef _WIN32
-	if (pthread_equal(pthread_self(), pWal->rthreadId))
-	#else
-	if (GetCurrentThreadId() == pWal->rthreadId)
-	#endif
+	db_thread *thread = enif_tsd_get(g_tsd_thread);
+	/*if (thr->isreadonly)
 	{
 		u64 readSafeEvnum, readSafeTerm;
 		#ifndef _TESTAPP_
@@ -261,11 +258,11 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 
 		return findframe(pWal->rthread, pWal, pgno, piRead, readSafeTerm, readSafeEvnum, NULL, NULL);
 	}
-	else if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
-		return findframe(pWal->thread, pWal, pgno, piRead, pWal->inProgressTerm, 
+	else*/ if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
+		return findframe(thread, pWal, pgno, piRead, pWal->inProgressTerm, 
 			pWal->inProgressEvnum, NULL, NULL);
 	else
-		return findframe(pWal->thread, pWal, pgno, piRead, pWal->lastCompleteTerm, 
+		return findframe(thread, pWal, pgno, piRead, pWal->lastCompleteTerm, 
 			pWal->lastCompleteEvnum, NULL, NULL);
 }
 
@@ -364,17 +361,17 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 
 static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
-	db_thread *thr;
 	int result = 0;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
 
-	#ifndef _WIN32
-	if (pthread_equal(pthread_self(), pWal->rthreadId))
-	#else
-	if (GetCurrentThreadId() == pWal->rthreadId)
-	#endif
-		thr = pWal->rthread;
-	else
-		thr = pWal->thread;
+	// #ifndef _WIN32
+	// if (pthread_equal(pthread_self(), pWal->rthreadId))
+	// #else
+	// if (GetCurrentThreadId() == pWal->rthreadId)
+	// #endif
+	// 	thr = pWal->rthread;
+	// else
+	// 	thr = pWal->thread;
 	
 	DBG("Read frame");
 	// i64 term, evnum;
@@ -483,18 +480,10 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 // return number of bytes written
 static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
-	db_thread *thr;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
-	#ifndef _WIN32
-	if (pthread_equal(pthread_self(), pWal->rthreadId))
-	#else
-	if (GetCurrentThreadId() == pWal->rthreadId)
-	#endif
-		thr = pWal->rthread;
-	else
-		thr = pWal->thread;
-
+	
 	#ifndef _TESTAPP_
 	enif_mutex_lock(pWal->mtx);
 	#endif
@@ -702,7 +691,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	MDB_val logKey, logVal;
 	u8 logKeyBuf[sizeof(u64)*3];
 
-	db_thread *thr = pWal->thread;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
 	int logop, mrc = MDB_SUCCESS;
 	u64 evnum,evterm,aindex;
 	u8 somethingDeleted = 0;
@@ -915,7 +904,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	MDB_val logKey, logVal;
 	MDB_val pgKey, pgVal;
 	u8 logKeyBuf[sizeof(u64)*3];
-	db_thread *thr = pWal->thread;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
 	int logop, pgop, rc = SQLITE_OK, mrc;
 
 	if (pWal->inProgressTerm == 0)
@@ -1032,7 +1021,7 @@ int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 {
 	MDB_val key, data = {0,NULL};
-	db_thread *thr = pWal->thread;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
 	int rc;
 
 	key.mv_size = sizeof(u64);
@@ -1081,7 +1070,7 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int isCommit, int sync_flags)
 {
 	PgHdr *p;
-	db_thread *thr = pWal->thread;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
 	db_connection *pCon = thr->curConn;
 	MDB_val key, data;
 	int rc;
