@@ -117,48 +117,6 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		#else
 		return SQLITE_ERROR;
 		#endif
-
-		
-		/*rc = mdb_get(txn,actorsdb,&key1,&data);
-		if (rc == MDB_NOTFOUND)
-		{
-			// this is first actor at index 0
-			DBG("first actor!");
-		}
-		else if (rc == MDB_SUCCESS)
-		{
-			// index = *(i64*)data.mv_data;
-			memcpy(&index,data.mv_data,sizeof(u64));
-			DBG("index assigned=%lld",index);
-		}
-		else
-		{
-			// mdb_txn_abort(txn);
-			return SQLITE_ERROR;
-		}
-
-		pWal->index = index++;
-		key1.mv_size = 1;
-		key1.mv_data = (void*)"?";
-		data.mv_size = sizeof(u64);
-		data.mv_data = (void*)&index;
-		DBG("Writing index %lld",index);
-		if (mdb_put(thr->txn,actorsdb,&key1,&data,0) != MDB_SUCCESS)
-		{
-			// mdb_txn_abort(txn);
-			return SQLITE_ERROR;
-		}
-
-		// key is already set to actorname
-		data.mv_size = sizeof(u64);
-		data.mv_data = (void*)&pWal->index;
-		if (mdb_put(thr->txn,actorsdb,&key,&data,0) != MDB_SUCCESS)
-		{
-			// mdb_txn_abort(txn);
-			return SQLITE_ERROR;
-		}
-		thr->forceCommit = 1;
-		thr->pagesChanged++;*/
 	}
 	// Actor exists, read evnum/evterm info
 	else if (rc == MDB_SUCCESS)

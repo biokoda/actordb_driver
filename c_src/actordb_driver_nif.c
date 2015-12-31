@@ -24,6 +24,7 @@
 #endif
 
 #include "lz4.h"
+#include "wbuf.h"
 
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
@@ -3949,6 +3950,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->rtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nReadThreads));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nWriteThreads+1));
 	priv->rtids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nReadThreads));
+	priv->writeBufs = malloc(sizeof(u8*)*priv->nEnvs);
 
 	controlThread = malloc(sizeof(db_thread));
 	memset(controlThread,0,sizeof(db_thread));
@@ -3978,6 +3980,8 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		MDB_dbi pagesdb;
 		MDB_dbi actorsdb;
 		int j,k;
+
+		priv->writeBufs[i] = (u8*)wbuf_init(2496);
 		for (k = 0; k < priv->nReadThreads+priv->nWriteThreads; k++)
 		{
 			char lmpath[MAX_PATHNAME];
@@ -4112,6 +4116,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			enif_thread_join((ErlNifTid)priv->tids[i*priv->nWriteThreads+k],NULL);
 		
 		enif_mutex_destroy(priv->thrMutexes[i]);
+		free(priv->writeBufs[i]);
 	}
 	enif_thread_join((ErlNifTid)priv->tids[priv->nEnvs * priv->nWriteThreads],NULL);
 
@@ -4132,6 +4137,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->syncNumbers);
 	free(priv->sqlite_scratch);
 	free(priv->actorIndexes);
+	free(priv->writeBufs);
 	// free(priv->sqlite_pgcache);
 	free(pd);
 }

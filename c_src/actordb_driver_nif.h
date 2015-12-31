@@ -15,6 +15,10 @@
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
+
+// #define WBUF_NPAGES 2496 // must be divisible by 64
+// #define WBUF_MAPBYTES ((WBUF_NPAGES/64)*8)
+// #define WBUF_SIZE (SQLITE_DEFAULT_PAGE_SIZE*WBUF_NPAGES)
 #include "queue.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -58,17 +62,18 @@ typedef struct priv_data priv_data;
 
 typedef u16 ht_slot;
 
-
 struct priv_data
 {
-	void *sqlite_scratch;
-	// void *sqlite_pgcache;
-	queue **wtasks;      // array of queues for every write thread + control thread
-	queue **rtasks;      // every environment has nReadThreads
 	int nEnvs;           // number of environments
 	int nReadThreads;
 	int nWriteThreads;
-
+	#ifndef _TESTAPP_
+	ErlNifResourceType *db_connection_type;
+	#endif
+	queue **wtasks;      // array of queues for every write thread + control thread
+	queue **rtasks;      // every environment has nReadThreads
+	// write buffer for write threads. 
+	u8 **writeBufs;
 	u64 *syncNumbers;
 
 	#ifndef _TESTAPP_
@@ -76,16 +81,18 @@ struct priv_data
 	ErlNifMutex **thrMutexes;
 	ErlNifTid *tids;    // tids for every write thread + control
 	ErlNifTid *rtids;    // tids for every read thread
-	ErlNifResourceType *db_connection_type;
-	ErlNifResourceType *db_backup_type;
 	ErlNifResourceType *iterate_type;
 	#endif
 
+	// For actorsdb, when opening a new actor
+	// do an atomic increment to get a unique index. Then send a write
+	// to write thread for it.
 	atomic_llong *actorIndexes;
 
 	int prepSize;
 	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
 	char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
+	void *sqlite_scratch;
 };
 
 struct Wal {
