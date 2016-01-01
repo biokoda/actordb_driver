@@ -495,17 +495,17 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	pthread_setspecific(g_tsd_thread, &thr);
 	pthread_setspecific(g_tsd_conn, &conn);
 
-	thr.env = rd.menv;
+	thr.mdb.env = rd.menv;
 	thr.maxvalsize = mdb_env_get_maxkeysize(rd.menv);
 	thr.resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/thr.maxvalsize + 1)*sizeof(MDB_val));
-	thr.infodb = rd.infodb;
-	thr.logdb = rd.logdb;
-	thr.pagesdb = rd.pagesdb;
-	thr.actorsdb = rd.actorsdb;
-	thr.txn = rd.txn;
-	thr.cursorLog = rd.cursorLog;
-	thr.cursorPages = rd.cursorPages;
-	thr.cursorInfo = rd.cursorInfo;
+	thr.mdb.infodb = rd.infodb;
+	thr.mdb.logdb = rd.logdb;
+	thr.mdb.pagesdb = rd.pagesdb;
+	thr.mdb.actorsdb = rd.actorsdb;
+	thr.mdb.txn = rd.txn;
+	thr.mdb.cursorLog = rd.cursorLog;
+	thr.mdb.cursorPages = rd.cursorPages;
+	thr.mdb.cursorInfo = rd.cursorInfo;
 
 	// conn.wal.thread = &thr;
 	// conn.wal.rthread = &thr;

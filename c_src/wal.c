@@ -50,7 +50,7 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor);
 static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delPages);
 static u64 get8byte(u8* buf);
 static void put8byte(u8* buf, u64 num);
-static MDB_txn* open_txn(db_thread *data, int flags);
+static MDB_txn* open_txn(mdbinf *data, int flags);
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
@@ -62,14 +62,15 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	// db_connection *conn = thr->curConn;
 	db_thread *thr = enif_tsd_get(g_tsd_thread);
 	db_connection *conn = enif_tsd_get(g_tsd_conn);
+	mdbinf * const mdb = &thr->mdb;
 	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn;
 	int offset = 0, cutoff = 0;
 	size_t nmLen;
 
-	actorsdb = thr->actorsdb;
-	infodb = thr->infodb;
+	actorsdb = mdb->actorsdb;
+	infodb = mdb->infodb;
 
 	if (zWalName[0] == '/')
 		offset = 1;
@@ -85,7 +86,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	// #else
 	// if (GetCurrentThreadId() == pWal->rthreadId)
 	// #endif
-		txn = thr->txn;
+		txn = mdb->txn;
 	// else if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
 	// 	return SQLITE_ERROR;
 
@@ -131,8 +132,6 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		{
 			if (*(u8*)data.mv_data != 1)
 			{
-				if (txn != thr->txn)
-					mdb_txn_abort(txn);
 				return SQLITE_ERROR;
 			}
 			memcpy(&pWal->firstCompleteTerm, ((u8*)data.mv_data)+1, sizeof(u64));
@@ -233,6 +232,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 	int rc;
 	size_t ndupl = 0;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+	mdbinf * const mdb = &thr->mdb;
 
 	track_time(7,thr);
 	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu",
@@ -247,16 +247,16 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 
 	// u32 pgno2 = *(u32*)(key.mv_data+sizeof(u64));
 	// DBG("RUN %d",pgno2);
-	rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
+	rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_SET_KEY);
 	if (rc == MDB_SUCCESS)
 	{
-		mdb_cursor_count(thr->cursorPages,&ndupl);
+		mdb_cursor_count(mdb->cursorPages,&ndupl);
 		if (ndupl == 0)
 		{
 			*piRead = 0;
 			return SQLITE_OK;
 		}
-		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
+		rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_LAST_DUP);
 		if (rc == MDB_SUCCESS)
 		{
 			while (1)
@@ -269,7 +269,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 				memcpy(&evnum, ((u8*)data.mv_data) + sizeof(u64), sizeof(u64));
 				if (term > limitTerm || evnum > limitEvnum)
 				{
-					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
+					rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_PREV_DUP);
 					if (rc == MDB_SUCCESS)
 						continue;
 					else
@@ -291,7 +291,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 
 				while (frag >= 0)
 				{
-					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
+					rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_PREV_DUP);
 					frag = *(((u8*)data.mv_data)+sizeof(u64)*2);
 					// DBG("SUCCESS? %d frag=%d, size=%ld",pgno,frag,data.mv_size);
 					thr->resFrames[frag--] = data;
@@ -441,6 +441,7 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
 	db_thread *thr = enif_tsd_get(g_tsd_thread);
+	mdbinf * const mdb = &thr->mdb;
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
 	
@@ -516,7 +517,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		logKey.mv_data = logKeyBuf;
 		logKey.mv_size = sizeof(logKeyBuf);
 		DBG("iterate looking for, matchterm=%llu matchevnum=%llu",iter->evterm,iter->evnum);
-		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+		if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
 			// Evterm/evnum combination not found. Check if evnum is there.
 			// If so return evterm. It will mean a node is in conflict.
@@ -531,17 +532,17 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 				memcpy(logKeyBuf,                 &pWal->index,  sizeof(u64));
 				memcpy(logKeyBuf + sizeof(u64),   &readSafeTerm, sizeof(u64));
 				memcpy(logKeyBuf + sizeof(u64)*2, &readSafeEvnum,sizeof(u64));
-				if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+				if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 				{
 					DBG("Key not found in log for undo");
 					*done = 1;
 					return 0;
 				}
-				while (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) == MDB_SUCCESS)
+				while (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) == MDB_SUCCESS)
 				{
 					u64 aindex, term, evnum;
 
-					mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
+					mdb_cursor_get(mdb->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
 					memcpy(&aindex, logKey.mv_data,              sizeof(u64));
 					memcpy(&term,   (u8*)logKey.mv_data+sizeof(u64),  sizeof(u64));
 					memcpy(&evnum,  (u8*)logKey.mv_data+sizeof(u64)*2,sizeof(u64));
@@ -566,7 +567,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		// We start iterate from next evnum not current. Input evterm/evnum is match_index and match_term.
 		// It needs next.
 		if (iter->started == 1 &&
-			(rc = mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_NEXT_NODUP)) != MDB_SUCCESS)
+			(rc = mdb_cursor_get(mdb->cursorLog,&logKey, &logVal, MDB_NEXT_NODUP)) != MDB_SUCCESS)
 		{
 			*done = 1;
 			return 0;
@@ -575,7 +576,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		{
 			u64 aindex;
 
-			rc = mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
+			rc = mdb_cursor_get(mdb->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
 			if (rc != MDB_SUCCESS)
 			{
 				*done = 1;
@@ -594,7 +595,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 		}
 
 		logop = MDB_FIRST_DUP;
-		while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+		while ((rc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
 			u64 evnum,evterm;
 			u32 pgno;
@@ -602,7 +603,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 
 			logop = MDB_NEXT_DUP;
 
-			mdb_cursor_get(thr->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
+			mdb_cursor_get(mdb->cursorLog,&logKey, &logVal, MDB_GET_CURRENT);
 			memcpy(&pgno,logVal.mv_data,sizeof(u32));
 
 			DBG("iterate at pgno=%u, pgnopos=%u",pgno,iter->pgnoPos);
@@ -629,7 +630,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 			}
 
 			iter->pgnoPos = pgno;
-			if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+			if ((rc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 				*done = 0;
 			else
 				*done = iter->pgnoPos;
@@ -650,12 +651,13 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 {
 	MDB_val logKey, logVal;
 	u8 logKeyBuf[sizeof(u64)*3];
-
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
-	int logop, mrc = MDB_SUCCESS;
 	u64 evnum,evterm,aindex;
+	
+	db_thread *thr 		= enif_tsd_get(g_tsd_thread);
+	mdbinf * const mdb  = &thr->mdb;
+	int logop, mrc 		= MDB_SUCCESS;
 	u8 somethingDeleted = 0;
-	int allPagesDiff = 0;
+	int allPagesDiff 	= 0;
 
 	// if (pWal->inProgressTerm == 0)
 	// 	return SQLITE_OK;
@@ -673,7 +675,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
-		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+		if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
 			DBG("Key not found in log for checkpoint");
 			return SQLITE_OK;
@@ -685,7 +687,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		// Delete from
 		// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
 		logop = MDB_FIRST_DUP;
-		while ((mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+		while ((mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
 			u32 pgno;
 			size_t ndupl, nduplorig;
@@ -705,21 +707,21 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			pgKey.mv_data = pagesKeyBuf;
 			pgKey.mv_size = sizeof(pagesKeyBuf);
 
-			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 			{
 				continue;
 			}
-			mdb_cursor_count(thr->cursorPages,&ndupl);
+			mdb_cursor_count(mdb->cursorPages,&ndupl);
 			nduplorig = ndupl;
 
-			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) == MDB_SUCCESS)
+			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) == MDB_SUCCESS)
 				memcpy(&pgnoLimitEvnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
 			else
 				continue;
 
 			pgnoLimitEvnum = pgnoLimitEvnum < limitEvnum ? pgnoLimitEvnum : limitEvnum;
 
-			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP) != MDB_SUCCESS)
+			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_FIRST_DUP) != MDB_SUCCESS)
 				continue;
 
 			do
@@ -727,7 +729,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				u8 frag;
 				MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 				
-				mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
+				mdb_cursor_get(mdb->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
 				
 				frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgDelVal.mv_data,            sizeof(u64));
@@ -737,7 +739,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 
 				if (evnum < pgnoLimitEvnum /* && !rewrite*/)
 				{
-					mrc = mdb_cursor_del(thr->cursorPages,0);
+					mrc = mdb_cursor_del(mdb->cursorPages,0);
 					if (mrc != MDB_SUCCESS)
 					{
 						DBG("Unable to delete page on cursor! %d.");
@@ -757,11 +759,11 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				if (!ndupl)
 					break;
 				
-				mrc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP);
+				mrc = mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP);
 			} while (mrc == MDB_SUCCESS);
 		}
 
-		mrc = mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA);
+		mrc = mdb_cursor_del(mdb->cursorLog,MDB_NODUPDATA);
 		if (mrc != MDB_SUCCESS)
 		{
 			DBG("Can not delete log");
@@ -769,7 +771,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		}
 
 		// move forward
-		if ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) != MDB_SUCCESS)
+		if ((mrc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) != MDB_SUCCESS)
 		{
 			DBG("Unable to move to next log %d",mrc);
 			break;
@@ -804,8 +806,11 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	MDB_val logKey, logVal;
 	MDB_val pgKey, pgVal;
 	u8 logKeyBuf[sizeof(u64)*3];
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
-	int logop, pgop, rc = SQLITE_OK, mrc;
+	int logop, pgop, rc, mrc;
+
+	db_thread *thr		= enif_tsd_get(g_tsd_thread);
+	mdbinf * const mdb	= &thr->mdb;
+	rc 					= SQLITE_OK;
 
 	if (pWal->inProgressTerm == 0)
 		return SQLITE_OK;
@@ -823,14 +828,14 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	memcpy(logKeyBuf + sizeof(u64),   &pWal->inProgressTerm, sizeof(u64));
 	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->inProgressEvnum,sizeof(u64));
 
-	if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
+	if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 	{
 		DBG("Key not found in log for undo, index=%llu, term=%llu, evnum=%llu",
 		pWal->index, pWal->inProgressTerm, pWal->inProgressEvnum);
 		return SQLITE_OK;
 	}
 	logop = MDB_FIRST_DUP;
-	while ((mrc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+	while ((mrc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 	{
 		u32 pgno;
 		u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
@@ -849,13 +854,13 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 			DBG("UNDO pgno=%d",pgno);
 
 			pgop = MDB_FIRST_DUP;
-			if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 			{
 				DBG("Key not found in log for undo");
 				continue;
 			}
-			mdb_cursor_count(thr->cursorPages,&ndupl);
-			while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
+			mdb_cursor_count(mdb->cursorPages,&ndupl);
+			while (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 			{
 				u8 frag = *((u8*)pgVal.mv_data+sizeof(u64)*2);
 				memcpy(&term, pgVal.mv_data,                 sizeof(u64));
@@ -864,7 +869,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 				  pWal->inProgressTerm, pWal->inProgressEvnum, term, evnum);
 				if (term >= pWal->inProgressTerm && evnum >= pWal->inProgressEvnum)
 				{
-					if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
+					if (mdb_cursor_del(mdb->cursorPages,0) != MDB_SUCCESS)
 					{
 						DBG("Can not delete undo");
 						rc = SQLITE_ERROR;
@@ -889,7 +894,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 
 		logop = MDB_NEXT_DUP;
 	}
-	// if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
+	// if (mdb_cursor_del(mdb->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
 	// {
 	// 	DBG("Unable to cleanup key from logdb"));
 	// }
@@ -920,15 +925,16 @@ int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 
 static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 {
-	MDB_val key, data = {0,NULL};
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
+	MDB_val key = {0,NULL}, data = {0,NULL};
 	int rc;
+	db_thread *thr = enif_tsd_get(g_tsd_thread);
+	mdbinf * const mdb  = &thr->mdb;
 
 	key.mv_size = sizeof(u64);
 	key.mv_data = &pWal->index;
 	if (votedFor == NULL)
 	{
-		rc = mdb_cursor_get(thr->cursorInfo,&key,&data,MDB_SET_KEY);
+		rc = mdb_cursor_get(mdb->cursorInfo,&key,&data,MDB_SET_KEY);
 
 		if (rc == MDB_SUCCESS && data.mv_size >= (1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1))
 		{
@@ -944,7 +950,7 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 	key.mv_data = &pWal->index;
 	data.mv_data = NULL;
 	data.mv_size = 1+sizeof(u64)*6+sizeof(u32)*2+sizeof(u64)+1+votedForSize;
-	rc = mdb_cursor_put(thr->cursorInfo,&key,&data,MDB_RESERVE);
+	rc = mdb_cursor_put(mdb->cursorInfo,&key,&data,MDB_RESERVE);
 	if (rc == MDB_SUCCESS)
 	{
 		u8 *infoBuf = data.mv_data;
@@ -970,11 +976,12 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int isCommit, int sync_flags)
 {
 	PgHdr *p;
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
-	// db_connection *pCon = thr->curConn;
-	db_connection *pCon = enif_tsd_get(g_tsd_conn);
 	MDB_val key, data;
 	int rc;
+	db_thread *thr 		= enif_tsd_get(g_tsd_thread);
+	db_connection *pCon = enif_tsd_get(g_tsd_conn);
+	mdbinf * const mdb  = &thr->mdb;
+	MDB_txn *txn 		= mdb->txn;
 
 	key.mv_size = sizeof(u64);
 	key.mv_data = (void*)&pWal->index;
@@ -1026,13 +1033,13 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		// This can happen if sqlite flushed some page to disk before commiting, because there were
 		// so many pages that they could not be held in memory. Or it could happen if pages need to be
 		// overwritten because there was a write that did not pass raft consensus.
-		rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_SET_KEY);
+		rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_SET_KEY);
 		if (rc == MDB_SUCCESS)
 		{
 			size_t ndupl;
-			mdb_cursor_count(thr->cursorPages,&ndupl);
+			mdb_cursor_count(mdb->cursorPages,&ndupl);
 
-			rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_LAST_DUP);
+			rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_LAST_DUP);
 			if (rc == MDB_SUCCESS)
 			{
 				MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
@@ -1050,16 +1057,16 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 
 					if (pgDelKey.mv_data != NULL)
 					{
-						if ((rc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
+						if ((rc = mdb_del(txn,mdb->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
 						{
 							DBG("Unable to cleanup page from pagedb %d",rc);
 							break;
 						}
 						pgDelKey.mv_data = NULL;
 					}
-					mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
+					mdb_cursor_get(mdb->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
 
-					// if (mdb_cursor_del(thr->cursorPages,0) != MDB_SUCCESS)
+					// if (mdb_cursor_del(mdb->cursorPages,0) != MDB_SUCCESS)
 					// {
 					// 	DBG("Cant delete!");
 					// 	break;
@@ -1070,7 +1077,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 					ndupl--;
 					if (!ndupl)
 						break;
-					rc = mdb_cursor_get(thr->cursorPages,&key,&data,MDB_PREV_DUP);
+					rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_PREV_DUP);
 					if (rc != MDB_SUCCESS)
 						break;
 					memcpy(&evterm, data.mv_data,               sizeof(u64));
@@ -1079,7 +1086,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 				}
 				if (pgDelKey.mv_data != NULL)
 				{
-					if ((rc = mdb_del(thr->txn,thr->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
+					if ((rc = mdb_del(txn,mdb->pagesdb,&pgDelKey,&pgDelVal)) != MDB_SUCCESS)
 					{
 						DBG("Unable to cleanup page from pagedb %d",rc);
 						break;
@@ -1118,7 +1125,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		data.mv_data = pagesBuf;
 
 		// fragment_index == 0 ? MDB_APPENDDUP : 0
-		if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
+		if ((rc = mdb_cursor_put(mdb->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 		{
 			// printf("Cursor put failed to pages %d",rc);
 			DBG("ERROR: cursor put failed=%d, datasize=%d",rc,full_size);
@@ -1139,7 +1146,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			memcpy(pagesBuf + skipped - (sizeof(u64)+1),   &pWal->inProgressEvnum, sizeof(u64));
 			pagesBuf[skipped-1] = fragment_index;
 
-			if ((rc = mdb_cursor_put(thr->cursorPages,&key,&data,0)) != MDB_SUCCESS)
+			if ((rc = mdb_cursor_put(mdb->cursorPages,&key,&data,0)) != MDB_SUCCESS)
 			{
 				DBG("ERROR: cursor secondary put failed: err=%d, datasize=%d, skipped=%d, frag=%d",
 				rc,full_size, skipped, (int)fragment_index);
@@ -1170,7 +1177,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			data.mv_size = sizeof(u32);
 			data.mv_data = &p->pgno;
 
-			if (mdb_cursor_put(thr->cursorLog,&key,&data,0) != MDB_SUCCESS)
+			if (mdb_cursor_put(mdb->cursorLog,&key,&data,0) != MDB_SUCCESS)
 			{
 				// printf("Cursor put failed to log");
 				DBG("ERROR: cursor put to log failed: %d",rc);
@@ -1403,7 +1410,7 @@ static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
 	return diff;
 }
 
-static MDB_txn* open_txn(db_thread *data, int flags)
+static MDB_txn* open_txn(mdbinf *data, int flags)
 {
 	if (mdb_txn_begin(data->env, NULL, flags, &data->txn) != MDB_SUCCESS)
 		return NULL;

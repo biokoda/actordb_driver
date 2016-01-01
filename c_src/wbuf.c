@@ -142,8 +142,8 @@ static void *perform(void *arg)
 		// if (tries > 10)
 			// printf("%lld, i=%d, tries=%d, index=%d\n",me, i, tries, index);
 
-		if ((i % 10000) == 0)
-			printf("%lld, i=%d, tries=%d, index=%d\n",me, i, tries, index);
+		// if ((i % 10000) == 0)
+		// 	printf("%lld, i=%d, tries=%d, index=%d\n",me, i, tries, index);
 	}
 
 	return NULL;

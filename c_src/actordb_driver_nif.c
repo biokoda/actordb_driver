@@ -1061,6 +1061,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 	int logop, rc;
 	u64 evnum,evterm,aindex,limitEvnum;
 	Wal *pWal = &cmd->conn->wal;
+	mdbinf * const mdb = &thr->mdb;
 
 	enif_get_uint64(env,cmd->arg,(ErlNifUInt64*)&limitEvnum);
 
@@ -1099,13 +1100,13 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 		memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
 		pgKey.mv_data = pagesKeyBuf;
 		pgKey.mv_size = sizeof(pagesKeyBuf);
-		while (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
+		while (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,pgop) == MDB_SUCCESS)
 		{
 			u64 aindex;
 			memcpy(&aindex,pgKey.mv_data,sizeof(u64));
 			if (aindex != pWal->index)
 				break;
-			mdb_cursor_del(thr->cursorPages, MDB_NODUPDATA);
+			mdb_cursor_del(mdb->cursorPages, MDB_NODUPDATA);
 			pgop = MDB_NEXT_NODUP;
 		}
 		pWal->mxPage = 0;
@@ -1114,17 +1115,17 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64),   &pWal->firstCompleteTerm, sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
-		if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET) == MDB_SUCCESS)
+		if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET) == MDB_SUCCESS)
 		{
 			u64 aindex;
 
-			mdb_cursor_del(thr->cursorLog, MDB_NODUPDATA);
-			while ((mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) == MDB_SUCCESS)
+			mdb_cursor_del(mdb->cursorLog, MDB_NODUPDATA);
+			while ((mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) == MDB_SUCCESS)
 			{
 				memcpy(&aindex, logKey.mv_data, sizeof(u64));
 				if (pWal->index != aindex)
 					break;
-				mdb_cursor_del(thr->cursorLog, MDB_NODUPDATA);
+				mdb_cursor_del(mdb->cursorLog, MDB_NODUPDATA);
 			}
 			pWal->firstCompleteTerm = pWal->firstCompleteTerm = pWal->lastCompleteTerm = 
 			pWal->lastCompleteEvnum = 0;
@@ -1138,7 +1139,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 		memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
 
-		if ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS)
+		if ((rc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS)
 		{
 			DBG("Key not found in log for rewind %llu %llu",
 				pWal->lastCompleteTerm,pWal->lastCompleteEvnum);
@@ -1153,7 +1154,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 			// Delete from
 			// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
 			logop = MDB_LAST_DUP;
-			while ((rc = mdb_cursor_get(thr->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+			while ((rc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 			{
 				u32 pgno;
 				// u8 rewrite = 0;
@@ -1172,15 +1173,15 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 				pgKey.mv_size = sizeof(pagesKeyBuf);
 
 				logop = MDB_PREV_DUP;
-				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+				if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 				{
 					continue;
 				}
-				mdb_cursor_count(thr->cursorPages,&ndupl);
+				mdb_cursor_count(mdb->cursorPages,&ndupl);
 				if (ndupl == 0)
 					continue;
 				nduplorig = ndupl;
-				if (mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) != MDB_SUCCESS)
+				if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) != MDB_SUCCESS)
 					continue;
 				pgop = MDB_PREV_DUP;
 				do
@@ -1188,7 +1189,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 					u8 frag;
 					MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
 
-					if (mdb_cursor_get(thr->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT) != MDB_SUCCESS)
+					if (mdb_cursor_get(mdb->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT) != MDB_SUCCESS)
 						break;
 					frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
 					memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
@@ -1196,7 +1197,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 					if (evnum >= limitEvnum)
 					{
 						// Like checkpoint, we can not trust this will succeed.
-						rc = mdb_cursor_del(thr->cursorPages,0);
+						rc = mdb_cursor_del(mdb->cursorPages,0);
 						if (rc != MDB_SUCCESS)
 						{
 							DBG("Unable to delete rewind page!!!");
@@ -1223,7 +1224,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 					if (!ndupl)
 						break;
 
-					rc = mdb_cursor_get(thr->cursorPages,&pgKey,&pgVal,pgop);
+					rc = mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,pgop);
 				} while (rc == MDB_SUCCESS);
 				DBG("Done looping pages %d",rc);
 				// If we moved through all pages and rewrite did not happen
@@ -1231,11 +1232,11 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 				if (!ndupl && pgno == pWal->mxPage)
 					pWal->mxPage--;
 			}
-			if (mdb_cursor_del(thr->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
+			if (mdb_cursor_del(mdb->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
 			{
 				DBG("Rewind Unable to cleanup key from logdb");
 			}
-			if (mdb_cursor_get(thr->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) != MDB_SUCCESS)
+			if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) != MDB_SUCCESS)
 			{
 				DBG("Rewind Unable to move to next log");
 				break;
@@ -1335,6 +1336,7 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr, ErlNifEnv *en
 {
 	MDB_val key, data;
 	ErlNifBinary bin;
+	mdbinf * const mdb = &thr->mdb;
 	// MDB_txn *txn;
 	int rc;
 
@@ -1346,14 +1348,14 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr, ErlNifEnv *en
 
 	key.mv_size = bin.size;
 	key.mv_data = bin.data;
-	rc = mdb_get(thr->txn,thr->actorsdb,&key,&data);
+	rc = mdb_get(mdb->txn,mdb->actorsdb,&key,&data);
 
 	if (rc == MDB_NOTFOUND)
 		return atom_false;
 	else if (rc == MDB_SUCCESS)
 	{
 		key = data;
-		rc = mdb_get(thr->txn,thr->infodb,&key,&data);
+		rc = mdb_get(mdb->txn,mdb->infodb,&key,&data);
 
 		if (rc == MDB_SUCCESS)
 		{
@@ -1455,6 +1457,7 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 	char name[MAX_PATHNAME];
 	int offset = 0, cutoff = 0;
 	size_t nmLen;
+	mdbinf* const mdb = &thread->mdb;
 
 	enif_get_string(env,cmd->arg, name, sizeof(name), ERL_NIF_LATIN1);
 	enif_get_uint64(env,cmd->arg1,(ErlNifUInt64*)&(index));
@@ -1471,7 +1474,7 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 	data.mv_size = sizeof(u64);
 	data.mv_data = (void*)&index;
 	DBG("Writing actors index for=%s, to=%llu",name,index);
-	if (mdb_put(thread->txn,thread->actorsdb,&key,&data,0) != MDB_SUCCESS)
+	if (mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0) != MDB_SUCCESS)
 	{
 		DBG("Unable to write actor index!! %llu", index);
 		return atom_false;
@@ -1480,7 +1483,7 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 	key.mv_size = 1;
 	key.mv_data = (void*)"?";
 
-	if (mdb_get(thread->txn,thread->actorsdb,&key,&data) == MDB_SUCCESS)
+	if (mdb_get(mdb->txn,mdb->actorsdb,&key,&data) == MDB_SUCCESS)
 		memcpy(&topIndex,data.mv_data,sizeof(u64));
 	else
 		topIndex = 0;
@@ -1492,7 +1495,7 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 		data.mv_data = (void*)&index;
 		
 		DBG("Writing ? index %lld",index);
-		if (mdb_put(thread->txn,thread->actorsdb,&key,&data,0) != MDB_SUCCESS)
+		if (mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0) != MDB_SUCCESS)
 		{
 			DBG("Unable to write ? index!! %llu", index);
 			return atom_false;
@@ -1507,13 +1510,15 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 
 static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
+	mdbinf* const mdb = &thread->mdb;
+
 	enif_mutex_lock(g_pd->thrMutexes[thread->nEnv]);
 	if (!cmd->conn || cmd->conn->syncNum >= g_pd->syncNumbers[thread->nEnv])
 	{
 		g_pd->syncNumbers[thread->nEnv]++;
-		mdb_txn_commit(thread->txn);
-		thread->txn = NULL;
-		mdb_env_sync(thread->env,1);
+		mdb_txn_commit(mdb->txn);
+		mdb->txn = NULL;
+		mdb_env_sync(mdb->env,1);
 	}
 	enif_mutex_unlock(g_pd->thrMutexes[thread->nEnv]);
 
@@ -1716,14 +1721,14 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 		cmd->conn->wal.inProgressTerm = newTerm;
 		cmd->conn->wal.inProgressEvnum = newEvnum;
 	}
-	else
-	{
-		// Copy over safe read limits.
-		enif_mutex_lock(cmd->conn->wal.mtx);
-		thread->readSafeTerm = cmd->conn->wal.readSafeTerm;
-		thread->readSafeEvnum = cmd->conn->wal.readSafeEvnum;
-		enif_mutex_unlock(cmd->conn->wal.mtx);
-	}
+	// else
+	// {
+	// 	// Copy over safe read limits.
+	// 	enif_mutex_lock(cmd->conn->wal.mtx);
+	// 	thread->readSafeTerm = cmd->conn->wal.readSafeTerm;
+	// 	thread->readSafeEvnum = cmd->conn->wal.readSafeEvnum;
+	// 	enif_mutex_unlock(cmd->conn->wal.mtx);
+	// }
 
 	if (enif_get_tuple(env, cmd->arg, &tupleSize, &inputTuple))
 	{
@@ -2500,6 +2505,7 @@ static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 static void thread_ex(db_thread *data, qitem *item)
 {
 	db_command *cmd = (db_command*)item->cmd;
+	mdbinf *mdb = &data->mdb;
 	DBG("thread=%d command=%d.",data->nThread,cmd->type);
 
 	// if (cmd->conn && !cmd->conn->wal.thread)
@@ -2528,8 +2534,8 @@ static void thread_ex(db_thread *data, qitem *item)
 			if (data->forceCommit == 2)
 			{
 				DBG("Aborting transaction due to error!");
-				mdb_txn_abort(data->txn);
-				data->txn = NULL;
+				mdb_txn_abort(mdb->txn);
+				mdb->txn = NULL;
 				// if (open_txn(data,0) == NULL)
 				// 	break;
 				data->forceCommit = 0;
@@ -2539,11 +2545,11 @@ static void thread_ex(db_thread *data, qitem *item)
 			{
 				if (data->forceCommit && res == atom_ok)
 				{
-					if (mdb_txn_commit(data->txn) != MDB_SUCCESS)
-						mdb_txn_abort(data->txn);
+					if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
+						mdb_txn_abort(mdb->txn);
 					data->forceCommit = 0;
-					data->txn = NULL;
-					if (open_txn(data,0) == NULL)
+					mdb->txn = NULL;
+					if (open_txn(mdb,0) == NULL)
 						break;
 					continue;
 				}
@@ -2555,9 +2561,9 @@ static void thread_ex(db_thread *data, qitem *item)
 		if (data->forceCommit)
 		{
 			data->forceCommit = 0;
-			if (mdb_txn_commit(data->txn) != MDB_SUCCESS)
-				mdb_txn_abort(data->txn);
-			data->txn = NULL;
+			if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
+				mdb_txn_abort(mdb->txn);
+			mdb->txn = NULL;
 		}
 		track_time(11,data);
 		answer = make_answer(item, res);
@@ -2580,13 +2586,15 @@ static void *thread_func(void *arg)
 	int chkCounter = 0, syncListSize = 0;
 	db_thread* data = (db_thread*)arg;
 	qitem *syncList = NULL;
+	mdbinf* mdb = &data->mdb;
+
 	enif_tsd_set(g_tsd_thread, data);
 
 	data->isopen = 1;
 
-	if (data->env)
+	if (mdb->env)
 	{
-		data->maxvalsize = mdb_env_get_maxkeysize(data->env);
+		data->maxvalsize = mdb_env_get_maxkeysize(mdb->env);
 		DBG("Maxvalsize=%d",data->maxvalsize);
 		data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
 	}
@@ -2602,11 +2610,11 @@ static void *thread_func(void *arg)
 		if (cmd->type == cmd_stop)
 		{
 			queue_recycle(data->tasks,item);
-			if (data->txn)
+			if (mdb->txn)
 			{
-				mdb_txn_commit(data->txn);
-				mdb_env_sync(data->env,1);
-				mdb_env_close(data->env);
+				mdb_txn_commit(mdb->txn);
+				mdb_env_sync(mdb->env,1);
+				mdb_env_close(mdb->env);
 			}
 			break;
 		}
@@ -2627,9 +2635,9 @@ static void *thread_func(void *arg)
 		}
 		chkCounter++;
 
-		if (data->env && data->txn == NULL)
+		if (mdb->env && mdb->txn == NULL)
 		{
-			if (open_txn(data,0) == NULL)
+			if (open_txn(mdb,0) == NULL)
 				break;
 		}
 
@@ -2644,15 +2652,15 @@ static void *thread_func(void *arg)
 		if (syncList != NULL &&
 			(queue_size(data->tasks) == 0 || chkCounter > 100 || syncListSize > 10 || cmd->type == cmd_sync))
 		{
-			if (data->txn == NULL)
-				open_txn(data,0);
+			if (mdb->txn == NULL)
+				open_txn(mdb,0);
 
 			while (syncList != NULL)
 			{
 				qitem *tmpItem;
 				thread_ex(data, syncList);
-				if (data->txn == NULL)
-					open_txn(data,0);
+				if (mdb->txn == NULL)
+					open_txn(mdb,0);
 
 				tmpItem = syncList->next;
 				queue_recycle(data->tasks,syncList);
@@ -2707,10 +2715,12 @@ static void *read_thread_func(void *arg)
 {
 	db_thread* data = (db_thread*)arg;
 	int rc;
+	mdbinf* mdb = &data->mdb;
+
 	data->isopen = 1;
 	enif_tsd_set(g_tsd_thread, data);
 
-	data->maxvalsize = mdb_env_get_maxkeysize(data->env);
+	data->maxvalsize = mdb_env_get_maxkeysize(mdb->env);
 	data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
 	data->isreadonly = 1;
 
@@ -2724,7 +2734,7 @@ static void *read_thread_func(void *arg)
 		if (cmd->type == cmd_stop)
 		{
 			queue_recycle(data->tasks,item);
-			mdb_txn_abort(data->txn);
+			mdb_txn_abort(mdb->txn);
 			break;
 		}
 		else
@@ -2738,10 +2748,10 @@ static void *read_thread_func(void *arg)
 			// 	#endif
 			// 	cmd->conn->wal.rthread = data;
 			// }
-			if (!data->txn)
+			if (!mdb->txn)
 			{
 				DBG("Open read transaction");
-				if (open_txn(data,MDB_RDONLY) == NULL)
+				if (open_txn(mdb, MDB_RDONLY) == NULL)
 				{
 					ERL_NIF_TERM errterm;
 					DBG("Can not open read transaction");
@@ -2754,16 +2764,16 @@ static void *read_thread_func(void *arg)
 			}
 			else
 			{
-				if ((rc = mdb_txn_renew(data->txn)) != MDB_SUCCESS)
+				if ((rc = mdb_txn_renew(mdb->txn)) != MDB_SUCCESS)
 					break;
-				if ((rc = mdb_cursor_renew(data->txn, data->cursorLog)) != MDB_SUCCESS)
+				if ((rc = mdb_cursor_renew(mdb->txn, mdb->cursorLog)) != MDB_SUCCESS)
 				{
 					DBG("Unable to renew cursor, reopening read txn");
-					mdb_cursor_close(data->cursorLog);
-					mdb_cursor_close(data->cursorPages);
-					mdb_cursor_close(data->cursorInfo);
-					mdb_txn_abort(data->txn);
-					if (open_txn(data,MDB_RDONLY) == NULL)
+					mdb_cursor_close(mdb->cursorLog);
+					mdb_cursor_close(mdb->cursorPages);
+					mdb_cursor_close(mdb->cursorInfo);
+					mdb_txn_abort(mdb->txn);
+					if (open_txn(mdb,MDB_RDONLY) == NULL)
 					{
 						ERL_NIF_TERM errterm;
 						DBG("Unable to open read transaction");
@@ -2777,8 +2787,8 @@ static void *read_thread_func(void *arg)
 				}
 				else
 				{
-					mdb_cursor_renew(data->txn, data->cursorPages);
-					mdb_cursor_renew(data->txn, data->cursorInfo);
+					mdb_cursor_renew(mdb->txn, mdb->cursorPages);
+					mdb_cursor_renew(mdb->txn, mdb->cursorInfo);
 				}
 			}
 
@@ -2797,7 +2807,7 @@ static void *read_thread_func(void *arg)
 			{
 				enif_release_resource(cmd->conn);
 			}
-			mdb_txn_reset(data->txn);
+			mdb_txn_reset(mdb->txn);
 
 			DBG("rthread=%d command done 2.",data->nThread);
 			queue_recycle(data->tasks,item);
@@ -4000,6 +4010,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 				MDB_val key = {1,(void*)"?"}, data = {0,NULL};
 				u64 index = 0;
 				int rc;
+				MDB_txn *txn;
 
 				// MDB INIT
 				if (mdb_env_create(&menv) != MDB_SUCCESS)
@@ -4013,33 +4024,32 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 					return -1;
 
 				// Create databases if they do not exist yet
-				if (mdb_txn_begin(menv, NULL, 0, &curThread->txn) != MDB_SUCCESS)
+				if (mdb_txn_begin(menv, NULL, 0, &txn) != MDB_SUCCESS)
 					return -1;
-				if (mdb_dbi_open(curThread->txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != 
+				if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != 
 					MDB_SUCCESS)
 					return -1;
-				if (mdb_dbi_open(curThread->txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
+				if (mdb_dbi_open(txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
 					return -1;
-				if (mdb_dbi_open(curThread->txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | 
+				if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | 
 					MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
 					return -1;
-				if (mdb_dbi_open(curThread->txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
+				if (mdb_dbi_open(txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
 					return -1;
 
-				rc = mdb_get(curThread->txn,actorsdb,&key,&data);
+				rc = mdb_get(txn,actorsdb,&key,&data);
 				if (rc == MDB_SUCCESS)
 					memcpy(&index,data.mv_data,sizeof(u64));
 
 				atomic_init(&priv->actorIndexes[i],index);
 
-				if (mdb_txn_commit(curThread->txn) != MDB_SUCCESS)
+				if (mdb_txn_commit(txn) != MDB_SUCCESS)
 					return -1;
-				curThread->txn = NULL;
 			}
 
 			if (k == 0)
 				priv->thrMutexes[i] = enif_mutex_create("envmutex");
-			curThread->env = menv;
+			curThread->mdb.env = menv;
 			curThread->pathlen = strlen(curThread->path);
 			curThread->nEnv = i;
 			if (k < priv->nWriteThreads)
@@ -4047,10 +4057,10 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			else
 				curThread->nThread = k - priv->nWriteThreads;
 			curThread->tasks = queue_create();
-			curThread->infodb = infodb;
-			curThread->actorsdb = actorsdb;
-			curThread->logdb = logdb;
-			curThread->pagesdb = pagesdb;
+			curThread->mdb.infodb = infodb;
+			curThread->mdb.actorsdb = actorsdb;
+			curThread->mdb.logdb = logdb;
+			curThread->mdb.pagesdb = pagesdb;
 			if (k < priv->nWriteThreads)
 				priv->wtasks[i*priv->nWriteThreads + k] = curThread->tasks;
 			else

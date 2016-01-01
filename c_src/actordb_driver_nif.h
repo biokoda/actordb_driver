@@ -59,8 +59,22 @@ typedef struct WalIterator WalIterator;
 typedef struct WalCkptInfo WalCkptInfo;
 typedef struct iterate_resource iterate_resource;
 typedef struct priv_data priv_data;
+typedef struct mdbinf mdbinf;
 
 typedef u16 ht_slot;
+
+struct mdbinf
+{
+	MDB_dbi infodb;
+	MDB_dbi logdb;
+	MDB_dbi pagesdb;
+	MDB_dbi actorsdb;
+	MDB_env *env;
+	MDB_txn *txn;
+	MDB_cursor *cursorLog;
+	MDB_cursor *cursorPages;
+	MDB_cursor *cursorInfo;
+};
 
 struct priv_data
 {
@@ -149,15 +163,7 @@ struct db_thread
 	u8 timeTrack;
 	#endif
 	MDB_val *resFrames;
-	MDB_dbi infodb;
-	MDB_dbi logdb;
-	MDB_dbi pagesdb;
-	MDB_dbi actorsdb;
-	MDB_env *env;
-	MDB_txn *txn;
-	MDB_cursor *cursorLog;
-	MDB_cursor *cursorPages;
-	MDB_cursor *cursorInfo;
+	mdbinf mdb;
 	u8 *wBuffer;
 	int bufSize;
 
@@ -165,8 +171,8 @@ struct db_thread
 	// Reads/writes can be completely asynchronous, at least from our code
 	// we make no assumptions about sqlite.
 	// We can't allow readSafeTerm/readSafeEvnum to change in the middle of a read.
-	u64 readSafeTerm;
-	u64 readSafeEvnum;
+	// u64 readSafeTerm;
+	// u64 readSafeEvnum;
 
 	// Raft page replication
 	// MAX_CONNECTIONS (8) servers to replicate write log to
