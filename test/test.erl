@@ -202,6 +202,7 @@ problem_rewind() ->
 
 dbcopy() ->
 	?INIT,
+	?debugFmt("Dbcopy",[]),
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
 	ok = actordb_driver:term_store(Db,10,<<"abcdef">>),

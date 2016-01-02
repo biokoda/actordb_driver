@@ -87,7 +87,7 @@ struct priv_data
 	queue **wtasks;      // array of queues for every write thread + control thread
 	queue **rtasks;      // every environment has nReadThreads
 	// write buffer for write threads. 
-	u8 **writeBufs;
+	// u8 **writeBufs;
 	u64 *syncNumbers;
 
 	#ifndef _TESTAPP_
@@ -357,13 +357,5 @@ int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);
 int read_thread_wal(db_thread*);
 
 
-
-// queue *queue_create(void);
-// void queue_destroy(queue *queue);
-// int queue_push(queue *queue, qitem* item);
-// qitem* queue_pop(queue *queue);
-// void queue_recycle(queue *queue,qitem* item);
-// qitem* queue_get_item(queue *queue);
-// int queue_size(queue *queue);
 
 #endif

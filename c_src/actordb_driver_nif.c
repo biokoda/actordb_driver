@@ -38,6 +38,8 @@
 static void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p);
 static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_data *pd, qitem *item);
+static mdbinf* get_write_txn(int env);
+
 static ErlNifTSDKey g_tsd_thread;
 static ErlNifTSDKey g_tsd_conn;
 static ErlNifTSDKey g_tsd_pd;
@@ -66,21 +68,13 @@ static ERL_NIF_TERM make_error_tuple(ErlNifEnv *env, const char *reason)
 	return enif_make_tuple2(env, atom_error, make_atom(env, reason));
 }
 
-// static ERL_NIF_TERM
-// make_row_tuple(ErlNifEnv *env, ERL_NIF_TERM value)
-// {
-//     return enif_make_tuple2(env, make_atom(env, "row"), value);
-// }
-
-
-// int
-// wal_hook(void *data,sqlite3* db,const char* nm,int npages)
-// {
-//     db_connection *conn = (db_connection *) data;
-//     conn->nPrevPages = conn->nPages;
-//     conn->nPages = npages;
-//     return SQLITE_OK;
-// }
+static mdbinf* get_write_txn(int env)
+{
+	while (1)
+	{
+		usleep(10);
+	}
+}
 
 static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 {
@@ -2481,6 +2475,7 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifE
 static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_data *pd, qitem *item)
 {
 	queue *thrCmds = NULL;
+
 	if (writeThreadNum == -1 && readThreadNum == -1)
 		thrCmds = pd->wtasks[pd->nEnvs * pd->nWriteThreads];
 	else if (writeThreadNum >= 0)
@@ -2606,7 +2601,7 @@ static void *thread_func(void *arg)
 		cmd = (db_command*)item->cmd;
 		track_flag(data,1);
 		track_time(0,data);
-		track_time(100+queue_size(data->tasks),data);
+		// track_time(100+queue_size(data->tasks),data);
 		if (cmd->type == cmd_stop)
 		{
 			queue_recycle(data->tasks,item);
@@ -2971,10 +2966,8 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 		return make_error_tuple(env, "invalid_pid");
 
 	thread = ((thread % pd->nEnvs) * pd->nReadThreads) + (thread % pd->nReadThreads);
-	DBG("db_open open=%u",thread);
-	item = command_create(thread,-1,pd);
+	item = command_create(-1,thread,pd);
 	cmd = (db_command*)item->cmd;
-
 	cmd->type = cmd_open;
 	cmd->ref = enif_make_copy(item->env, argv[0]);
 	cmd->pid = pid;
@@ -2984,7 +2977,6 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	{
 		cmd->arg2 = enif_make_copy(item->env, argv[5]);
 	}
-
 	enif_consume_timeslice(env,90);
 	// return enif_make_tuple2(env,push_command(conn->thread, item),db_conn);
 	return push_command(-1, thread, pd, item);
@@ -3960,7 +3952,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->rtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nReadThreads));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nWriteThreads+1));
 	priv->rtids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nReadThreads));
-	priv->writeBufs = malloc(sizeof(u8*)*priv->nEnvs);
+	// priv->writeBufs = malloc(sizeof(u8*)*priv->nEnvs);
 
 	controlThread = malloc(sizeof(db_thread));
 	memset(controlThread,0,sizeof(db_thread));
@@ -3991,7 +3983,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		MDB_dbi actorsdb;
 		int j,k;
 
-		priv->writeBufs[i] = (u8*)wbuf_init(2496);
+		// priv->writeBufs[i] = (u8*)wbuf_init(2496);
 		for (k = 0; k < priv->nReadThreads+priv->nWriteThreads; k++)
 		{
 			char lmpath[MAX_PATHNAME];
@@ -4126,7 +4118,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			enif_thread_join((ErlNifTid)priv->tids[i*priv->nWriteThreads+k],NULL);
 		
 		enif_mutex_destroy(priv->thrMutexes[i]);
-		free(priv->writeBufs[i]);
+		// free(priv->writeBufs[i]);
 	}
 	enif_thread_join((ErlNifTid)priv->tids[priv->nEnvs * priv->nWriteThreads],NULL);
 
@@ -4147,7 +4139,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->syncNumbers);
 	free(priv->sqlite_scratch);
 	free(priv->actorIndexes);
-	free(priv->writeBufs);
+	// free(priv->writeBufs);
 	// free(priv->sqlite_pgcache);
 	free(pd);
 }

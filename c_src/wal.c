@@ -60,12 +60,12 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	int rc;
 	// db_thread *thr = (db_thread*)walData;
 	// db_connection *conn = thr->curConn;
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
-	db_connection *conn = enif_tsd_get(g_tsd_conn);
-	mdbinf * const mdb = &thr->mdb;
+	db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
+	db_connection* const conn = enif_tsd_get(g_tsd_conn);
+	mdbinf * const mdb 		  = &thr->mdb;
 	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
-	MDB_txn *txn;
+	MDB_txn *txn = mdb->txn;
 	int offset = 0, cutoff = 0;
 	size_t nmLen;
 
@@ -80,15 +80,6 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		cutoff = 4;
 
 	DBG("Wal name=%s",zWalName);
-
-	// #ifndef _WIN32
-	// if (pthread_equal(pthread_self(), pWal->rthreadId))
-	// #else
-	// if (GetCurrentThreadId() == pWal->rthreadId)
-	// #endif
-		txn = mdb->txn;
-	// else if (mdb_txn_begin(thr->env, NULL, MDB_RDONLY, &txn) != MDB_SUCCESS)
-	// 	return SQLITE_ERROR;
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = nmLen-cutoff;
@@ -202,7 +193,7 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 /* Read a page from the write-ahead log, if it is present. */
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
-	db_thread *thread = enif_tsd_get(g_tsd_thread);
+	db_thread * const thread = enif_tsd_get(g_tsd_thread);
 	/*if (thr->isreadonly)
 	{
 		u64 readSafeEvnum, readSafeTerm;
@@ -321,8 +312,8 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 
 static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
-	int result = 0;
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
+	int result 			  = 0;
+	db_thread * const thr = enif_tsd_get(g_tsd_thread);
 
 	// #ifndef _WIN32
 	// if (pthread_equal(pthread_self(), pWal->rthreadId))
@@ -440,8 +431,8 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 // return number of bytes written
 static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
-	mdbinf * const mdb = &thr->mdb;
+	db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	mdbinf* const mdb 	 = &thr->mdb;
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
 	
@@ -653,11 +644,11 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	u8 logKeyBuf[sizeof(u64)*3];
 	u64 evnum,evterm,aindex;
 	
-	db_thread *thr 		= enif_tsd_get(g_tsd_thread);
-	mdbinf * const mdb  = &thr->mdb;
-	int logop, mrc 		= MDB_SUCCESS;
-	u8 somethingDeleted = 0;
-	int allPagesDiff 	= 0;
+	db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	mdbinf* const mdb 	 = &thr->mdb;
+	int logop, mrc 		 = MDB_SUCCESS;
+	u8 somethingDeleted  = 0;
+	int allPagesDiff 	 = 0;
 
 	// if (pWal->inProgressTerm == 0)
 	// 	return SQLITE_OK;
@@ -742,7 +733,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 					mrc = mdb_cursor_del(mdb->cursorPages,0);
 					if (mrc != MDB_SUCCESS)
 					{
-						DBG("Unable to delete page on cursor! %d.");
+						DBG("Unable to delete page on cursor!.");
 						break;
 					}
 					else
@@ -808,9 +799,9 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	u8 logKeyBuf[sizeof(u64)*3];
 	int logop, pgop, rc, mrc;
 
-	db_thread *thr		= enif_tsd_get(g_tsd_thread);
-	mdbinf * const mdb	= &thr->mdb;
-	rc 					= SQLITE_OK;
+	db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	mdbinf* const mdb	 = &thr->mdb;
+	rc 					 = SQLITE_OK;
 
 	if (pWal->inProgressTerm == 0)
 		return SQLITE_OK;
@@ -927,8 +918,8 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 {
 	MDB_val key = {0,NULL}, data = {0,NULL};
 	int rc;
-	db_thread *thr = enif_tsd_get(g_tsd_thread);
-	mdbinf * const mdb  = &thr->mdb;
+	db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	mdbinf* const mdb    = &thr->mdb;
 
 	key.mv_size = sizeof(u64);
 	key.mv_data = &pWal->index;
@@ -978,10 +969,10 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	PgHdr *p;
 	MDB_val key, data;
 	int rc;
-	db_thread *thr 		= enif_tsd_get(g_tsd_thread);
-	db_connection *pCon = enif_tsd_get(g_tsd_conn);
-	mdbinf * const mdb  = &thr->mdb;
-	MDB_txn *txn 		= mdb->txn;
+	db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
+	db_connection* const pCon = enif_tsd_get(g_tsd_conn);
+	mdbinf* const mdb 		  = &thr->mdb;
+	MDB_txn* const txn 		  = mdb->txn;
 
 	key.mv_size = sizeof(u64);
 	key.mv_data = (void*)&pWal->index;

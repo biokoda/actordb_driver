@@ -5,9 +5,9 @@
 #define PGSZ SQLITE_DEFAULT_PAGE_SIZE
 #define ffz(x) ffsll(~(x))
 
-#define WBUF_MAP_ELEMENTS(NP) (NP/(sizeof(long long int)*sizeof(long long int)))
-#define WBUF_MAPBYTES(NP) (NP*sizeof(long long int))
-#define WBUF_SIZE(NP) (SQLITE_DEFAULT_PAGE_SIZE*NP)
+#define WBUF_MAP_ELEMENTS(NP) (NP/(sizeof(long long int)*8))
+#define WBUF_MAPBYTES(NP) (WBUF_MAP_ELEMENTS(NP)*sizeof(long long int))
+#define WBUF_SIZE(NP) (PGSZ*NP)
 
 char* wbuf_init(const int npages)
 {
@@ -49,7 +49,7 @@ int wbuf_put(const int npages, char *buf1, char *data, int *tries)
 			if (!(zbit = ffz(mval)))
 				continue;
 
-			nval = mval | (1 << (--zbit));
+			nval = mval | (((long long int)1) << (--zbit));
 
 			// update map val with bit set. 
 			// If successful we are done.
@@ -95,7 +95,7 @@ void wbuf_release(char *buf1, int index)
 	while (1)
 	{
 		long long int mval = atomic_load(&map[i]);
-		long long int nval = mval & (~(1 << bit));
+		long long int nval = mval & (~(((long long int)1) << bit));
 		if (atomic_compare_exchange_strong(&map[i], &mval, nval))
 			break;
 	}
@@ -106,10 +106,10 @@ void wbuf_release(char *buf1, int index)
 //  TEST APP
 // 
 // 
-// gcc c_src/wbuf.c -DTEST_WBUF -DSQLITE_DEFAULT_PAGE_SIZE=4096 -lpthread -o wb
+// gcc c_src/wbuf.c -DTEST_WBUF -DSQLITE_DEFAULT_PAGE_SIZE=4096 -lpthread -O2 -o wb
 #ifdef TEST_WBUF
 
-#define NUM_THREADS 70
+#define NUM_THREADS 6
 #define NPAGES 64
 
 static void *perform(void *arg)
