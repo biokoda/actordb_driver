@@ -44,6 +44,8 @@ static ErlNifTSDKey g_tsd_thread;
 static ErlNifTSDKey g_tsd_conn;
 static ErlNifTSDKey g_tsd_pd;
 static priv_data *g_pd;
+static ErlNifResourceType *db_connection_type;
+static ErlNifResourceType *iterate_type;
 
 #include "wal.c"
 #include "nullvfs.c"
@@ -614,7 +616,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 		}
 	}
 	
-	conn = enif_alloc_resource(g_pd->db_connection_type, sizeof(db_connection));
+	conn = enif_alloc_resource(db_connection_type, sizeof(db_connection));
 	if(!conn)
 		return make_error_tuple(env, "no_memory");
 	memset(conn,0,sizeof(db_connection));
@@ -968,7 +970,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *en
 	u64 evterm;
 	char mismatch = 0;
 
-	if (!enif_get_resource(env, cmd->arg, g_pd->iterate_type, (void **) &iter))
+	if (!enif_get_resource(env, cmd->arg, iterate_type, (void **) &iter))
 	{
 		dorel = 1;
 		DBG("Create iterate %d",(int)cmd->conn->checkpointLock);
@@ -980,7 +982,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *en
 			return enif_make_badarg(env);
 		}
 
-		iter = enif_alloc_resource(g_pd->iterate_type, sizeof(iterate_resource));
+		iter = enif_alloc_resource(iterate_type, sizeof(iterate_resource));
 		if(!iter)
 			return make_error_tuple(env, "no_memory");
 		memset(iter,0,sizeof(iterate_resource));
@@ -2550,7 +2552,6 @@ static void thread_ex(db_thread *data, qitem *item)
 					continue;
 				}
 			}
-
 			break;
 		}
 		track_time(14,data);
@@ -2891,7 +2892,7 @@ static ERL_NIF_TERM term_store(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	}
 	else
 	{
-		if (!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		if (!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 			return enif_make_badarg(env);
 		thread = res->wthreadind;
 		item = command_create(thread,-1,pd);
@@ -2985,14 +2986,13 @@ static ERL_NIF_TERM db_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 static ERL_NIF_TERM sync_num(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-	priv_data *pd = (priv_data*)enif_priv_data(env);
 	db_connection *res;
 
 	DBG("sync_num");
 
 	if (argc != 1)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return make_error_tuple(env, "invalid_connection");
 
 	return enif_make_uint64(env,res->syncNum);
@@ -3001,12 +3001,11 @@ static ERL_NIF_TERM sync_num(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 static ERL_NIF_TERM replication_done(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	db_connection *res;
-	priv_data *pd = (priv_data*)enif_priv_data(env);
 
 	if (argc != 1)
 		return atom_false;
 
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return make_error_tuple(env, "invalid_connection");
 
 	enif_mutex_lock(res->wal.mtx);
@@ -3022,13 +3021,12 @@ static ERL_NIF_TERM replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 {
 	db_connection *res;
 	ErlNifBinary bin;
-	priv_data *pd = (priv_data*)enif_priv_data(env);
 
 	DBG("replicate_opts");
 
 	if (!(argc == 3))
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return make_error_tuple(env, "invalid_connection");
 	if (!enif_inspect_iolist_as_binary(env, argv[1], &bin))
 		return make_error_tuple(env, "not_iolist");
@@ -3147,7 +3145,7 @@ static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	if(argc != 1)
 		return enif_make_badarg(env);
 
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 	{
 		return enif_make_badarg(env);
 	}
@@ -3345,7 +3343,7 @@ static ERL_NIF_TERM db_checkpoint(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	if (argc != 4)
 		return enif_make_badarg(env);
 
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 	if(!enif_is_ref(env, argv[1]))
 		return make_error_tuple(env, "invalid_ref");
@@ -3381,7 +3379,7 @@ static ERL_NIF_TERM stmt_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	if (argc != 4)
 		return enif_make_badarg(env);
 
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 	if(!enif_is_ref(env, argv[1]))
 		return make_error_tuple(env, "invalid_ref");
@@ -3417,7 +3415,7 @@ static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
 
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 	if(!enif_is_ref(env, argv[1]))
 		return make_error_tuple(env, "invalid_ref");
@@ -3455,7 +3453,7 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 	if(argc != 7 && argc != 8)
 		return enif_make_badarg(env);
 
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 	if(!enif_is_ref(env, argv[1]))
 		return make_error_tuple(env, "invalid_ref");
@@ -3510,7 +3508,7 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if (argc == 3)
 	{
 		int nEnv;
-		if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+		if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 			return enif_make_badarg(env);
 		if(!enif_is_ref(env, argv[1]))
 			return make_error_tuple(env, "invalid_ref");
@@ -3578,7 +3576,7 @@ static ERL_NIF_TERM checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 
 	if(argc != 4)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 
 	if(!enif_is_ref(env, argv[1]))
@@ -3618,7 +3616,7 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 
 	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 
 	if(!enif_is_ref(env, argv[1]))
@@ -3652,7 +3650,7 @@ static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 
 	if(argc != 1)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->iterate_type, (void **) &iter))
+	if(!enif_get_resource(env, argv[0], iterate_type, (void **) &iter))
 		return enif_make_badarg(env);
 
 	iter->closed = 1;
@@ -3681,7 +3679,7 @@ static ERL_NIF_TERM inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 
 	if(argc != 5)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 
 	if(!enif_is_ref(env, argv[1]))
@@ -3721,7 +3719,7 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 
 	if(argc != 4 && argc != 5)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 
 	if(!enif_is_ref(env, argv[1]))
@@ -3785,7 +3783,7 @@ static ERL_NIF_TERM noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 	if(argc != 3)
 		return enif_make_badarg(env);
-	if(!enif_get_resource(env, argv[0], pd->db_connection_type, (void **) &res))
+	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 		return enif_make_badarg(env);
 	if(!enif_is_ref(env, argv[1]))
 		return make_error_tuple(env, "invalid_ref");
@@ -3938,14 +3936,14 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	for (i = 0; i < nstaticSqls; i++)
 		enif_get_string(env,param[i],staticSqls[i],256,ERL_NIF_LATIN1);
 
-	priv->db_connection_type = enif_open_resource_type(env, NULL, "db_connection_type",
+	db_connection_type = enif_open_resource_type(env, NULL, "db_connection_type",
 				destruct_connection, ERL_NIF_RT_CREATE, NULL);
-	if(!priv->db_connection_type)
+	if(!db_connection_type)
 		return -1;
 
-	priv->iterate_type =  enif_open_resource_type(env, NULL, "iterate_type",
+	iterate_type =  enif_open_resource_type(env, NULL, "iterate_type",
 				destruct_iterate, ERL_NIF_RT_CREATE, NULL);
-	if(!priv->iterate_type)
+	if(!iterate_type)
 		return -1;
 
 	priv->actorIndexes = malloc(sizeof(atomic_llong)*priv->nEnvs);
@@ -3953,6 +3951,9 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->rtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nReadThreads));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nWriteThreads+1));
 	priv->rtids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nReadThreads));
+	priv->wmdb = malloc(sizeof(mdbinf)*priv->nEnvs);
+
+	memset(priv->wmdb, 0, sizeof(mdbinf)*priv->nEnvs);
 	// priv->writeBufs = malloc(sizeof(u8*)*priv->nEnvs);
 
 	controlThread = malloc(sizeof(db_thread));
@@ -3988,15 +3989,16 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		for (k = 0; k < priv->nReadThreads+priv->nWriteThreads; k++)
 		{
 			char lmpath[MAX_PATHNAME];
+			char path[MAX_PATHNAME];
 			db_thread *curThread = malloc(sizeof(db_thread));
 
 			memset(curThread,0,sizeof(db_thread));
 
-			if (!(enif_get_string(env,param1[i],curThread->path,MAX_PATHNAME,ERL_NIF_LATIN1) < 
+			if (!(enif_get_string(env,param1[i],path,MAX_PATHNAME,ERL_NIF_LATIN1) < 
 				(MAX_PATHNAME-MAX_ACTOR_NAME)))
 				return -1;
 
-			sprintf(lmpath,"%s/lmdb",curThread->path);
+			sprintf(lmpath,"%s/lmdb",path);
 
 			if (k == 0)
 			{
@@ -4043,7 +4045,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			if (k == 0)
 				priv->thrMutexes[i] = enif_mutex_create("envmutex");
 			curThread->mdb.env = menv;
-			curThread->pathlen = strlen(curThread->path);
 			curThread->nEnv = i;
 			if (k < priv->nWriteThreads)
 				curThread->nThread = k;

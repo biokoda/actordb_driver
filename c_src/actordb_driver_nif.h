@@ -32,17 +32,6 @@ FILE *g_log = 0;
 # define DBG(X, ...)
 #endif
 
-// #if defined(_MSC_VER) || defined(__BORLANDC__)
-//   #define i64 __int64
-//   #define u64 unsigned __int64
-// #else
-//   #define i64 long long int 
-//   #define u64 unsigned long long int 
-// #endif
-// #define u8 unsigned char
-// #define u16 unsigned short
-// #define u32 unsigned int
-// #define Pgno u32
 
 typedef struct db_connection db_connection;
 typedef struct db_backup db_backup;
@@ -57,8 +46,6 @@ typedef struct WalCkptInfo WalCkptInfo;
 typedef struct iterate_resource iterate_resource;
 typedef struct priv_data priv_data;
 typedef struct mdbinf mdbinf;
-
-typedef u16 ht_slot;
 
 struct mdbinf
 {
@@ -78,21 +65,16 @@ struct priv_data
 	int nEnvs;           // number of environments
 	int nReadThreads;
 	int nWriteThreads;
-	#ifndef _TESTAPP_
-	ErlNifResourceType *db_connection_type;
-	#endif
 	queue **wtasks;      // array of queues for every write thread + control thread
 	queue **rtasks;      // every environment has nReadThreads
-	// write buffer for write threads. 
-	// u8 **writeBufs;
 	u64 *syncNumbers;
+	mdbinf *wmdb;
 
 	#ifndef _TESTAPP_
 	ErlNifMutex *prepMutex;
 	ErlNifMutex **thrMutexes;
 	ErlNifTid *tids;    // tids for every write thread + control
 	ErlNifTid *rtids;    // tids for every read thread
-	ErlNifResourceType *iterate_type;
 	#endif
 
 	// For actorsdb, when opening a new actor
@@ -192,11 +174,6 @@ struct db_thread
 	u8 forceCommit;
 	u8 isopen;
 	u8 isreadonly;
-
-	// All DB paths are relative to this thread path.
-	// This path is absolute and stems from app.config (main_db_folder, extra_db_folders).
-	char path[MAX_PATHNAME];
-	int pathlen;
 
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;

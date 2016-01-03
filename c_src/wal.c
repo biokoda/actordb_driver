@@ -659,7 +659,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	// If we will delete any page during this run, we must stop when we delete log and return back to thread_ex.
 	// Transaction will be commited and executed again to continue.
 	// We must never run mdb_cursor_del on a page more than once.
-	while (pWal->firstCompleteEvnum < limitEvnum && somethingDeleted == 0)
+	// ---> must have been bug from earlier version of lmdb
+	while (pWal->firstCompleteEvnum < limitEvnum  && somethingDeleted == 0)
 	{
 		logKey.mv_data = logKeyBuf;
 		logKey.mv_size = sizeof(logKeyBuf);
