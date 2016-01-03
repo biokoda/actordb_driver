@@ -111,7 +111,9 @@ queue_destroy(queue *queue)
 int
 queue_push(queue *queue, qitem *entry)
 {
-    enif_mutex_lock(queue->lock);
+    while (enif_mutex_trylock(queue->lock) != 0)
+    {
+    }
 
     assert(queue->length >= 0 && "Invalid queue size at push");
 
@@ -124,9 +126,8 @@ queue_push(queue *queue, qitem *entry)
         queue->head = queue->tail;
 
     queue->length += 1;
-
-    enif_cond_signal(queue->cond);
     enif_mutex_unlock(queue->lock);
+    enif_cond_signal(queue->cond);
 
     return 1;
 }
@@ -134,7 +135,9 @@ queue_push(queue *queue, qitem *entry)
 int queue_size(queue *queue)
 {
     int r = 0;
-    enif_mutex_lock(queue->lock);
+    while (enif_mutex_trylock(queue->lock) != 0)
+    {
+    }
     r = queue->length;
     enif_mutex_unlock(queue->lock);
     return r;
@@ -145,10 +148,9 @@ queue_pop(queue *queue)
 {
     qitem *entry;
 
-    enif_mutex_lock(queue->lock);
-
-    /* Wait for an item to become available.
-     */
+    while (enif_mutex_trylock(queue->lock) != 0)
+    {
+    }
     while(queue->head == NULL)
         enif_cond_wait(queue->cond, queue->lock);
 
@@ -176,7 +178,9 @@ queue_pop(queue *queue)
 void
 queue_recycle(queue *queue,qitem *entry)
 {
-    enif_mutex_lock(queue->lock);
+    while (enif_mutex_trylock(queue->lock) != 0)
+    {
+    }
     entry->next = queue->reuseq;
     queue->reuseq = entry;
     enif_mutex_unlock(queue->lock);
@@ -187,7 +191,9 @@ queue_get_item(queue *queue)
 {
     qitem *entry = NULL;
     int i;
-    enif_mutex_lock(queue->lock);
+    while (enif_mutex_trylock(queue->lock) != 0)
+    {
+    }
     if (queue->reuseq != NULL)
     {
         entry = queue->reuseq;

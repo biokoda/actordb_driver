@@ -16,9 +16,6 @@
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
 
-// #define WBUF_NPAGES 2496 // must be divisible by 64
-// #define WBUF_MAPBYTES ((WBUF_NPAGES/64)*8)
-// #define WBUF_SIZE (SQLITE_DEFAULT_PAGE_SIZE*WBUF_NPAGES)
 #include "queue.h"
 #include <stdatomic.h>
 #include <string.h>

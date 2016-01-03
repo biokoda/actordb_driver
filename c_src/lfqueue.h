@@ -21,6 +21,7 @@ typedef struct queue
 {
 	char       *buf;
 	atomic_int size;
+	atomic_int ct;
 	int        last_map_pos;
 	long long int visited;
 	int        npages;
@@ -36,10 +37,6 @@ int queue_push(queue *queue, qitem* item);
 qitem* queue_pop(queue *queue);
 void queue_recycle(queue *queue, qitem* item);
 int queue_size(queue *queue);
-
-// char* wbuf_init(const int npages);
-// int  wbuf_put(const int npages, char *buf, char *data, int *tries);
-// char* wbuf_get(const int npages, char *buf, int index);
-// void wbuf_release(char *buf, int index);
+int queue_getct(queue *q);
 
 #endif

@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
-
 // usleep value
 #define DELAY_BY 1
 #define PGSZ sizeof(qitem)
@@ -16,12 +15,13 @@
 // - UsedBMap is used to signal consumer thread that data available to use. 
 
 // !!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!
-// -> DOES NOT ENSURE AN ACCURATE SEQUENCE OF EVENTS
+// -> DOES NOT ENSURE A CONSISTENT SEQUENCE OF EVENTS
 //   ActorDB does not need it, a single actor always waits for event to complete before
 //   issuing a new one.
 
 // Not used as it is actually slower than mutex based queue.
 // It does appear to work fine however.
+// Normal queue.c does not have enough contention for lock free to be a benefit.
 
 queue *queue_create(const int npages)
 {
@@ -49,6 +49,8 @@ queue *queue_create(const int npages)
 	{
 		atomic_init(&map[i],0);
 	}
+	atomic_init(&q->size,0);
+	atomic_init(&q->ct,0);
 	#ifndef _TESTAPP_
 	for (i = 0; i < q->npages; i++)
 	{
@@ -98,6 +100,8 @@ int queue_push(queue *q, qitem* item)
 			// printf("PUSHING ON POS i=%d zbit=%d diff=%d rdiff=%lld\n",i, zbit, diff, item-buf);
 			break;
 		}
+		else
+			atomic_fetch_add(&q->ct, 1);
 
 		usleep(DELAY_BY);
 	}
@@ -140,6 +144,7 @@ qitem* queue_get_item(queue *q)
 			// Unable to exchange, go again for same index. 
 			else
 			{
+				atomic_fetch_add(&q->ct, 1);
 				i--;
 			}
 		}
@@ -236,13 +241,14 @@ void queue_recycle(queue *q, qitem* item)
 			{
 				map = rmap;
 			}
-
 			else
 			{
 				break;
 			}
 			continue;
 		}
+		else
+			atomic_fetch_add(&q->ct, 1);
 
 		usleep(DELAY_BY);
 	}
@@ -251,6 +257,11 @@ void queue_recycle(queue *q, qitem* item)
 int queue_size(queue *q)
 {
 	return atomic_load(&q->size);
+}
+
+int queue_getct(queue *q)
+{
+	return atomic_load(&q->ct);
 }
 
 // 

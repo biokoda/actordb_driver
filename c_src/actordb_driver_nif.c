@@ -2413,6 +2413,7 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifE
 	case cmd_term_store:
 		return do_term_store(cmd,thread,env);
 	case cmd_unknown:
+		// return enif_make_int(env,queue_getct(thread->tasks));
 		return atom_ok;
 	case cmd_tcp_connect:
 		return do_tcp_connect(cmd,thread,env);

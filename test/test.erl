@@ -130,11 +130,13 @@ w(N,RandList) ->
 	% {ok,Db} = actordb_driver:open(":memory:",N),
 	Sql = "CREATE TABLE tab (id integer primary key, val text);",
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
-	w(Db,1,RandList,[]).
-w(Db,C,[Rand|T],L) ->
+	w(Db,N,1,RandList,[]).
+w(Db,Me,C,[Rand|T],L) ->
 	case C rem 2 of
 		0 when C rem 20 == 0 ->
 			actordb_driver:checkpoint(Db,C-20);
+		% _ when C rem 101 == 0, Me == 1 ->
+		% 	?debugFmt("Contention situations:~p",[actordb_driver:noop(Db)]);
 		0 ->
 		% _ ->
 			% Using static sql with parameterized queries cuts down on sql parsing
@@ -146,9 +148,9 @@ w(Db,C,[Rand|T],L) ->
 			{ok,_RR} = ?READ("select * from tab limit 1",Db),
 			ets:update_counter(ops,r,{2,1})
 	end,
-	w(Db,C+1,T,[Rand|L]);
-w(Db,C,[],L) ->
-	w(Db,C,L,[]).
+	w(Db,Me,C+1,T,[Rand|L]);
+w(Db,Me,C,[],L) ->
+	w(Db,Me,C,L,[]).
 
 problem_checkpoint() ->
 	case file:read_file_info("../problemlmdb") of
