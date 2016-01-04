@@ -1142,7 +1142,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 			return atom_false;
 		}
 
-		while (pWal->lastCompleteEvnum >= limitEvnum && somethingDeleted == 0)
+		while (pWal->lastCompleteEvnum >= limitEvnum)
 		{
 			// mdb_cursor_count(thr->cursorLog,&ndupl);
 			// For every page here
@@ -1215,11 +1215,9 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 						// we deleted a few pages off the top and we are done.
 						break;
 					}
-
 					ndupl--;
 					if (!ndupl)
 						break;
-
 					rc = mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,pgop);
 				} while (rc == MDB_SUCCESS);
 				DBG("Done looping pages %d",rc);
@@ -1249,6 +1247,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 			pWal->lastCompleteTerm = evterm;
 			pWal->lastCompleteEvnum = evnum;
 			pWal->allPages -= allPagesDiff;
+			allPagesDiff = 0;
 		}
 	}
 	DBG("evterm = %llu, evnum=%llu",pWal->lastCompleteTerm, pWal->lastCompleteEvnum);
@@ -2523,7 +2522,7 @@ static void thread_ex(db_thread *data, qitem *item)
 
 		// Checkpoint and rewind loop. This is because we must commit transaction
 		// after every log entry has been processed.
-		while (1)
+		// while (1)
 		{
 			res = evaluate_command(cmd,data,item->env);
 
@@ -2538,21 +2537,20 @@ static void thread_ex(db_thread *data, qitem *item)
 				// 	break;
 				data->forceCommit = 0;
 			}
-
-			if (cmd->type == cmd_checkpoint || cmd->type == cmd_wal_rewind)
-			{
-				if (data->forceCommit && res == atom_ok)
-				{
-					if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
-						mdb_txn_abort(mdb->txn);
-					data->forceCommit = 0;
-					mdb->txn = NULL;
-					if (open_txn(mdb,0) == NULL)
-						break;
-					continue;
-				}
-			}
-			break;
+			// if (cmd->type == cmd_checkpoint || cmd->type == cmd_wal_rewind)
+			// {
+			// 	if (data->forceCommit && res == atom_ok)
+			// 	{
+			// 		if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
+			// 			mdb_txn_abort(mdb->txn);
+			// 		data->forceCommit = 0;
+			// 		mdb->txn = NULL;
+			// 		if (open_txn(mdb,0) == NULL)
+			// 			break;
+			// 		continue;
+			// 	}
+			// }
+			// break;
 		}
 		track_time(14,data);
 		if (data->forceCommit)

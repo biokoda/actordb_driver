@@ -656,11 +656,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	DBG("checkpoint actor=%llu, fct=%llu, fcev=%llu, limitEvnum=%llu",pWal->index,
 		pWal->firstCompleteTerm,pWal->firstCompleteEvnum,limitEvnum);
 
-	// If we will delete any page during this run, we must stop when we delete log and return back to thread_ex.
-	// Transaction will be commited and executed again to continue.
-	// We must never run mdb_cursor_del on a page more than once.
-	// ---> must have been bug from earlier version of lmdb
-	while (pWal->firstCompleteEvnum < limitEvnum  && somethingDeleted == 0)
+	while (pWal->firstCompleteEvnum < limitEvnum)
 	{
 		logKey.mv_data = logKeyBuf;
 		logKey.mv_size = sizeof(logKeyBuf);
@@ -686,8 +682,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 			MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
 			u64 pgnoLimitEvnum;
-			// u8 rewrite = 0;
-			// size_t rewritePos = 0;
 
 			logop = MDB_NEXT_DUP;
 			memcpy(&pgno, logVal.mv_data,sizeof(u32));
@@ -729,7 +723,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				DBG("limit limitevnum %lld, curnum %lld, dupl %zu, frag=%d",
 					limitEvnum, evnum, ndupl,(int)frag);
 
-				if (evnum < pgnoLimitEvnum /* && !rewrite*/)
+				if (evnum < pgnoLimitEvnum)
 				{
 					mrc = mdb_cursor_del(mdb->cursorPages,0);
 					if (mrc != MDB_SUCCESS)
@@ -742,7 +736,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 						DBG("Deleted page!");
 						somethingDeleted = 1;
 					}
-
 					if (frag == 0)
 						allPagesDiff++;
 				}
@@ -750,7 +743,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				ndupl--;
 				if (!ndupl)
 					break;
-				
 				mrc = mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_NEXT_DUP);
 			} while (mrc == MDB_SUCCESS);
 		}
@@ -782,6 +774,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		pWal->firstCompleteTerm = evterm;
 		pWal->firstCompleteEvnum = evnum;
 		pWal->allPages -= allPagesDiff;
+		allPagesDiff = 0;
 		DBG("Checkpint fce now=%lld",(u64)evnum);
 	}
 
