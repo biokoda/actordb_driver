@@ -986,7 +986,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *en
 		if(!iter)
 			return make_error_tuple(env, "no_memory");
 		memset(iter,0,sizeof(iterate_resource));
-		iter->thread = thread->nEnv * g_pd->nWriteThreads + thread->nThread;
+		iter->thread = thread->nEnv * g_pd->nReadThreads + thread->nThread;
 		iter->evnum = evnumFrom;
 		iter->evterm = evtermFrom;
 		iter->conn = cmd->conn;
@@ -2501,72 +2501,40 @@ static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 
 static void thread_ex(db_thread *data, qitem *item)
 {
+	ERL_NIF_TERM res;
 	db_command *cmd = (db_command*)item->cmd;
 	mdbinf *mdb = &data->mdb;
 	DBG("thread=%d command=%d.",data->nThread,cmd->type);
 
-	// if (cmd->conn && !cmd->conn->wal.thread)
-	// {
-	// 	cmd->conn->wal.thread = data;
-	// }
+	res = evaluate_command(cmd,data,item->env);
 
-	if (cmd->ref == 0)
+	DBG("thread=%d command done 1. pagesChanged=%d",data->nThread,data->pagesChanged);
+
+	if (data->forceCommit == 2)
 	{
-		evaluate_command(cmd,data,item->env);
-		enif_clear_env(item->env);
+		DBG("Aborting transaction due to error!");
+		mdb_txn_abort(mdb->txn);
+		mdb->txn = NULL;
+		// if (open_txn(data,0) == NULL)
+		// 	break;
+		data->forceCommit = 0;
 	}
-	else
+	track_time(14,data);
+	if (data->forceCommit)
 	{
-		ERL_NIF_TERM res;
-		ERL_NIF_TERM answer;
-
-		// Checkpoint and rewind loop. This is because we must commit transaction
-		// after every log entry has been processed.
-		// while (1)
-		{
-			res = evaluate_command(cmd,data,item->env);
-
-			DBG("thread=%d command done 1. pagesChanged=%d",data->nThread,data->pagesChanged);
-
-			if (data->forceCommit == 2)
-			{
-				DBG("Aborting transaction due to error!");
-				mdb_txn_abort(mdb->txn);
-				mdb->txn = NULL;
-				// if (open_txn(data,0) == NULL)
-				// 	break;
-				data->forceCommit = 0;
-			}
-			// if (cmd->type == cmd_checkpoint || cmd->type == cmd_wal_rewind)
-			// {
-			// 	if (data->forceCommit && res == atom_ok)
-			// 	{
-			// 		if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
-			// 			mdb_txn_abort(mdb->txn);
-			// 		data->forceCommit = 0;
-			// 		mdb->txn = NULL;
-			// 		if (open_txn(mdb,0) == NULL)
-			// 			break;
-			// 		continue;
-			// 	}
-			// }
-			// break;
-		}
-		track_time(14,data);
-		if (data->forceCommit)
-		{
-			data->forceCommit = 0;
-			if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
-				mdb_txn_abort(mdb->txn);
-			mdb->txn = NULL;
-		}
-		track_time(11,data);
-		answer = make_answer(item, res);
-		enif_send(NULL, &cmd->pid, item->env, answer);
-		// track_time(12,data);
-		enif_clear_env(item->env);
-		// track_time(13,data);
+		DBG("Commit transaction");
+		data->forceCommit = 0;
+		if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
+			mdb_txn_abort(mdb->txn);
+		mdb->txn = NULL;
 	}
+	track_time(11,data);
+
+	if (cmd->ref != 0)
+	{
+		enif_send(NULL, &cmd->pid, item->env, make_answer(item, res));
+	}
+	enif_clear_env(item->env);
 
 	if (cmd->conn != NULL)
 	{
@@ -2928,8 +2896,8 @@ static ERL_NIF_TERM get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	if(!enif_get_uint(env, argv[3], &thread))
 		return make_error_tuple(env, "invalid_pid");
 
-	thread = (thread % pd->nEnvs)*pd->nWriteThreads + (thread % pd->nWriteThreads);
-	item = command_create(thread,-1,pd);
+	thread = ((thread % pd->nEnvs) * pd->nReadThreads) + (thread % pd->nReadThreads);
+	item = command_create(-1, thread, pd);
 	cmd = (db_command*)item->cmd;
 	cmd->type = cmd_actor_info;
 	cmd->ref = enif_make_copy(item->env, argv[0]);
@@ -2937,7 +2905,7 @@ static ERL_NIF_TERM get_actor_info(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	cmd->arg = enif_make_copy(item->env,argv[2]);
 
 	enif_consume_timeslice(env,90);
-	return push_command(thread, -1, pd, item);
+	return push_command(-1, thread, pd, item);
 }
 
 
@@ -3057,23 +3025,6 @@ static ERL_NIF_TERM replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 	return atom_ok;
 }
 
-
-// static ERL_NIF_TERM
-// replicate_status(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-// {
-//     db_connection* conn;
-
-//     if (argc != 1)
-//         return enif_make_badarg(env);
-
-//     if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &conn))
-//     {
-//         return enif_make_badarg(env);
-//     }
-
-//     enif_consume_timeslice(env,500);
-//     return enif_make_tuple2(env,enif_make_int(env,conn->nSent),enif_make_int(env,conn->failFlags));
-// }
 
 // Called with: ref,pid, ip, port, connect string, connection number
 static ERL_NIF_TERM tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -3529,7 +3480,7 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
 		if (doit)
 		{
-			item = command_create(res->wthreadind,-1,pd);
+			item = command_create(res->wthreadind, -1, pd);
 			cmd = (db_command*)item->cmd;
 			cmd->type = cmd_sync;
 			cmd->ref = enif_make_copy(item->env, argv[1]);
@@ -3622,7 +3573,7 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	if(!enif_get_local_pid(env, argv[2], &pid))
 		return make_error_tuple(env, "invalid_pid");
 
-	item = command_create(res->wthreadind,-1,pd);
+	item = command_create(-1,res->rthreadind,pd);
 	cmd = (db_command*)item->cmd;
 	cmd->type = cmd_iterate;
 	cmd->ref = enif_make_copy(item->env, argv[1]);
@@ -3634,7 +3585,7 @@ static ERL_NIF_TERM iterate_db(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 		cmd->arg1 = enif_make_copy(item->env,argv[4]); // evnum
 
 	enif_consume_timeslice(env,90);
-	return push_command(res->wthreadind, -1, pd, item);
+	return push_command(-1, res->rthreadind, pd, item);
 }
 
 static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -3652,7 +3603,7 @@ static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 		return enif_make_badarg(env);
 
 	iter->closed = 1;
-	item = command_create(iter->thread,-1,pd);
+	item = command_create(-1, iter->thread, pd);
 	cmd = (db_command*)item->cmd;
 	cmd->type = cmd_checkpoint_lock;
 	cmd->arg = enif_make_int(item->env, 0);
@@ -3662,7 +3613,7 @@ static ERL_NIF_TERM iterate_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	// enif_keep_resource(res);
 
 	enif_consume_timeslice(env,90);
-	return push_command(iter->thread, -1, pd, item);
+	return push_command(-1, iter->thread, pd, item);
 }
 
 static ERL_NIF_TERM inject_page(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])

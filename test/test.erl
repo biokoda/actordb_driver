@@ -208,6 +208,9 @@ dbcopy() ->
 	{ok,Db} = actordb_driver:open("original"),
 	{ok,_} = actordb_driver:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT, val INTEGER);",Db,infinity,1,1,<<>>),
 	ok = actordb_driver:term_store(Db,10,<<"abcdef">>),
+	% Sleep because term store does not wait for response and actor_info uses read thread
+	% term_store uses write thread.
+	timer:sleep(500),
 	{{1,1},{1,1},{0,0},2,2,10,<<"abcdef">>} = actordb_driver:actor_info("original",0),
 	ok = actordb_driver:term_store("original",10,<<"abcdef1">>,0),
 	EN = 100,

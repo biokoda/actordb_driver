@@ -951,7 +951,7 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 		memcpy(infoBuf+1+sizeof(u64)*6+sizeof(u32)*2, &currentTerm, sizeof(u64));
 		infoBuf[1+sizeof(u64)*7+sizeof(u32)*2] = votedForSize;
 		memcpy(infoBuf+2+sizeof(u64)*7+sizeof(u32)*2, votedFor, votedForSize);
-
+		thr->forceCommit = 1;
 		return SQLITE_OK;
 	}
 	return SQLITE_ERROR;
