@@ -38,7 +38,7 @@
 static void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p);
 static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_data *pd, qitem *item);
-static mdbinf* get_write_txn(int env);
+static mdbinf* lock_wtxn(int env);
 
 static ErlNifTSDKey g_tsd_thread;
 static ErlNifTSDKey g_tsd_conn;
@@ -70,12 +70,37 @@ static ERL_NIF_TERM make_error_tuple(ErlNifEnv *env, const char *reason)
 	return enif_make_tuple2(env, atom_error, make_atom(env, reason));
 }
 
-static mdbinf* get_write_txn(int env)
+static mdbinf* lock_wtxn(int nEnv)
 {
-	while (1)
+	mdbinf *inf;
+	u32 i;
+	// while (enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0)
+	// 	continue;
+	for (i = 0; enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0; ++i)
 	{
-		usleep(10);
+		if (i > 1000000)
+			usleep(i / 100000);
 	}
+
+	inf = &g_pd->wmdb[nEnv];
+	if (inf->txn == NULL)
+	{
+		if (open_txn(inf, 0) == NULL)
+			return NULL;
+	}
+	return inf;
+}
+
+static void unlock_write_txn(mdbinf* inf, int nEnv)
+{
+	if (++inf->writesCompleted > 1000)
+	{
+		mdb_txn_commit(inf->txn);
+		inf->txn = NULL;
+		inf->writesCompleted = 0;
+	}
+
+	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
 }
 
 static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
@@ -101,7 +126,7 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 	{
 		return;
 	}
-	conn->nSent = conn->failFlags = 0;
+	// conn->nSent = conn->failFlags = 0;
 
 	completeSize = buffUsed+2+headersize+1+conn->packetPrefixSize+2+conn->packetVarPrefix.size+2;
 	put2byte(lenPage,buffUsed);
@@ -173,15 +198,15 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 #endif
 			if (rt != completeSize+4)
 			{
-				conn->failFlags |= (1 << i);
+				// conn->failFlags |= (1 << i);
 				close(thread->sockets[i]);
 				thread->sockets[i] = 0;
 				fail_send(i,g_pd);
 			}
-			else
-			{
-				conn->nSent++;
-			}
+			// else
+			// {
+			// 	conn->nSent++;
+			// }
 		}
 	}
 
@@ -646,7 +671,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 
 	if (filename[0] != ':' && db)
 	{
-		conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
+		// conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
 		// PRAGMA locking_mode=EXCLUSIVE
 		sqlite3_exec(cmd->conn->db,"PRAGMA synchronous=0;PRAGMA journal_mode=wal;",NULL,NULL,NULL);
@@ -1253,7 +1278,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 	DBG("evterm = %llu, evnum=%llu",pWal->lastCompleteTerm, pWal->lastCompleteEvnum);
 	// no dirty pages, but will write info
 	sqlite3WalFrames(pWal, SQLITE_DEFAULT_PAGE_SIZE, NULL, pWal->mxPage, 1, 0);
-	pWal->changed = 1;
+	cmd->conn->changed = 1;
 
 	if (cmd->arg1 && limitEvnum == 0)
 	{
@@ -1506,16 +1531,18 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	mdbinf* const mdb = &thread->mdb;
+	u64 curSync = atomic_load(&g_pd->syncNumbers[thread->nEnv]);
+	
+	if (cmd->conn && cmd->conn->syncNum >= curSync)
+		return atom_ok;
 
-	enif_mutex_lock(g_pd->thrMutexes[thread->nEnv]);
-	if (!cmd->conn || cmd->conn->syncNum >= g_pd->syncNumbers[thread->nEnv])
-	{
-		g_pd->syncNumbers[thread->nEnv]++;
-		mdb_txn_commit(mdb->txn);
-		mdb->txn = NULL;
-		mdb_env_sync(mdb->env,1);
-	}
-	enif_mutex_unlock(g_pd->thrMutexes[thread->nEnv]);
+	enif_mutex_lock(g_pd->wthrMutexes[thread->nEnv]);
+	mdb_txn_commit(mdb->txn);
+	mdb->txn = NULL;
+	mdb_env_sync(mdb->env,1);
+	enif_mutex_unlock(g_pd->wthrMutexes[thread->nEnv]);
+
+	atomic_fetch_add(&g_pd->syncNumbers[thread->nEnv], 1);
 
 	return atom_ok;
 }
@@ -1590,7 +1617,7 @@ static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread, ErlNifEnv
 	pWal->readSafeEvnum = cmd->conn->wal.lastCompleteEvnum;
 	pWal->readSafeMxPage = cmd->conn->wal.mxPage;
 	enif_mutex_unlock(pWal->mtx);
-	pWal->changed = 1;
+	cmd->conn->changed = 1;
 	return atom_ok;
 }
 
@@ -1692,9 +1719,6 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 	int skip = 0;
 	u32 mxPage = cmd->conn->wal.mxPage;
 	char dofinalize = 1;
-
-	if (!cmd->conn->wal_configured && cmd->conn->db)
-		cmd->conn->wal_configured = SQLITE_OK == sqlite3_wal_data(cmd->conn->db,(void*)thread);
 
 	if (cmd->arg1)
 	{
@@ -2240,7 +2264,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 	{
 		if (pagesPre != thread->pagesChanged)
 		{
-			cmd->conn->syncNum = g_pd->syncNumbers[thread->nEnv];
+			// cmd->conn->syncNum = g_pd->syncNumbers[thread->nEnv];
+			cmd->conn->syncNum = atomic_load_explicit(&g_pd->syncNumbers[thread->nEnv],memory_order_relaxed);
 		}
 		track_time(13,thread);
 		return make_ok_tuple(env,results);
@@ -2538,6 +2563,7 @@ static void thread_ex(db_thread *data, qitem *item)
 
 	if (cmd->conn != NULL)
 	{
+		cmd->conn->dirty = 0;
 		enif_release_resource(cmd->conn);
 	}
 
@@ -3007,10 +3033,13 @@ static ERL_NIF_TERM replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
 	if (bin.size > 0)
 	{
-		if (!enif_get_int(env,argv[2],&(res->doReplicate)))
+		int dorepl;
+		if (!enif_get_int(env,argv[2],&(dorepl)))
 			return make_error_tuple(env, "repltype_not_int");
 		if (!res->packetPrefix)
 			res->packetPrefix = malloc(bin.size);
+
+		res->doReplicate = dorepl;
 		memcpy(res->packetPrefix,bin.data,bin.size);
 		res->packetPrefixSize = bin.size;
 	}
@@ -3446,7 +3475,6 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	ErlNifPid pid;
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
-	u8 doit = 1;
 	db_command *cmd = NULL;
 
 	DBG("db_sync");
@@ -3457,6 +3485,7 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	if (argc == 3)
 	{
 		int nEnv;
+		u64 curSync;
 		if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
 			return enif_make_badarg(env);
 		if(!enif_is_ref(env, argv[1]))
@@ -3465,20 +3494,21 @@ static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 			return make_error_tuple(env, "invalid_pid");
 
 		nEnv = res->wthreadind / pd->nWriteThreads;
-		if (enif_mutex_trylock(pd->thrMutexes[nEnv]) == 0)
-		{
-			if (res->syncNum < pd->syncNumbers[nEnv])
-			{
-				doit = 0;
-			}
-			enif_mutex_unlock(pd->thrMutexes[nEnv]);
-		}
-		else
-		{
-			return enif_make_atom(env,"again");
-		}
+		// if (enif_mutex_trylock(pd->thrMutexes[nEnv]) == 0)
+		// {
+		// 	if (res->syncNum < pd->syncNumbers[nEnv])
+		// 	{
+		// 		doit = 0;
+		// 	}
+		// 	enif_mutex_unlock(pd->thrMutexes[nEnv]);
+		// }
+		// else
+		// {
+		// 	return enif_make_atom(env,"again");
+		// }
+		curSync = atomic_load_explicit(&pd->syncNumbers[nEnv],memory_order_relaxed);
 
-		if (doit)
+		if (curSync > res->syncNum)
 		{
 			item = command_create(res->wthreadind, -1, pd);
 			cmd = (db_command*)item->cmd;
@@ -3910,9 +3940,9 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	controlThread->nThread = -1;
 	controlThread->tasks = queue_create();
 	priv->wtasks[priv->nEnvs*priv->nWriteThreads] = controlThread->tasks;
-	priv->syncNumbers = malloc(sizeof(u64)*priv->nEnvs);
-	priv->thrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
-	memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nEnvs));
+	priv->syncNumbers = malloc(sizeof(atomic_ullong)*priv->nEnvs);
+	priv->wthrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
+	// memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nEnvs));
 
 	if(enif_thread_create("db_connection", &(priv->tids[priv->nEnvs*priv->nWriteThreads]),
 		thread_func, controlThread, NULL) != 0)
@@ -3934,6 +3964,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		MDB_dbi actorsdb;
 		int j,k;
 
+		atomic_init(&priv->syncNumbers[i],0);
 		// priv->writeBufs[i] = (u8*)wbuf_init(2496);
 		for (k = 0; k < priv->nReadThreads+priv->nWriteThreads; k++)
 		{
@@ -3992,7 +4023,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			}
 
 			if (k == 0)
-				priv->thrMutexes[i] = enif_mutex_create("envmutex");
+				priv->wthrMutexes[i] = enif_mutex_create("envmutex");
 			curThread->mdb.env = menv;
 			curThread->nEnv = i;
 			if (k < priv->nWriteThreads)
@@ -4068,7 +4099,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 		for (k = 0; k < priv->nWriteThreads; k++)
 			enif_thread_join((ErlNifTid)priv->tids[i*priv->nWriteThreads+k],NULL);
 		
-		enif_mutex_destroy(priv->thrMutexes[i]);
+		enif_mutex_destroy(priv->wthrMutexes[i]);
 		// free(priv->writeBufs[i]);
 	}
 	enif_thread_join((ErlNifTid)priv->tids[priv->nEnvs * priv->nWriteThreads],NULL);
@@ -4086,10 +4117,11 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->rtasks);
 	free(priv->tids);
 	free(priv->rtids);
-	free(priv->thrMutexes);
+	free(priv->wthrMutexes);
 	free(priv->syncNumbers);
 	free(priv->sqlite_scratch);
 	free(priv->actorIndexes);
+	free(priv->wmdb);
 	// free(priv->writeBufs);
 	// free(priv->sqlite_pgcache);
 	free(pd);

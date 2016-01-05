@@ -58,6 +58,7 @@ struct mdbinf
 	MDB_cursor *cursorLog;
 	MDB_cursor *cursorPages;
 	MDB_cursor *cursorInfo;
+	u32 writesCompleted;
 };
 
 struct priv_data
@@ -67,12 +68,12 @@ struct priv_data
 	int nWriteThreads;
 	queue **wtasks;      // array of queues for every write thread + control thread
 	queue **rtasks;      // every environment has nReadThreads
-	u64 *syncNumbers;
+	atomic_ullong *syncNumbers;
 	mdbinf *wmdb;
 
 	#ifndef _TESTAPP_
 	ErlNifMutex *prepMutex;
-	ErlNifMutex **thrMutexes;
+	ErlNifMutex **wthrMutexes;
 	ErlNifTid *tids;    // tids for every write thread + control
 	ErlNifTid *rtids;    // tids for every read thread
 	#endif
@@ -117,7 +118,6 @@ struct Wal {
 	Pgno readSafeMxPage;
 	Pgno mxPage;
 	u32 allPages; // mxPage + unused pages
-	u8 changed;
 };
 
 
@@ -182,6 +182,20 @@ struct db_thread
 
 struct db_connection
 {
+	// Write thread index
+	u8 wthreadind;
+	// Read thread index
+	u8 rthreadind;
+	// On rewind/inject or wal open.
+	// Signals that sqlite should flush cache.
+	u8 dirty;
+	// Can we do checkpoint or not
+	u8 checkpointLock;
+	// 0   - do not replicate
+	// > 0 - replicate to socket types that match number
+	u8 doReplicate;
+	u8 changed;
+
 	struct Wal wal;
 	sqlite3 *db;
 	sqlite3_stmt **staticPrepared;
@@ -196,20 +210,7 @@ struct db_connection
 	// Variable part of packet prefix
 	ErlNifBinary packetVarPrefix;
 	#endif
-	// 0   - do not replicate
-	// > 0 - replicate to socket types that match number
-	int doReplicate;
-	char checkpointLock;
-	char wal_configured;
-	// For every write:
-	// over how many connections data has been sent
-	u8 nSent;
-	// Set bit for every failed attempt to write to socket of connection
-	u8 failFlags;
-	// Write thread index
-	u8 wthreadind;
-	// Read thread index
-	u8 rthreadind;
+	// char wal_configured;
 };
 
 struct iterate_resource
@@ -325,7 +326,7 @@ void fail_send(int i,priv_data *priv);
 
 int reopen_db(db_connection *conn, db_thread *thread);
 void close_prepared(db_connection *conn);
-SQLITE_API int sqlite3_wal_data(sqlite3 *db,void *pArg);
+// SQLITE_API int sqlite3_wal_data(sqlite3 *db,void *pArg);
 int checkpoint_continue(db_thread *thread);
 int read_wal_hdr(sqlite3_vfs *vfs, sqlite3_file *pWalFd, wal_file **outWalFile);
 int read_thread_wal(db_thread*);

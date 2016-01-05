@@ -153,7 +153,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		return SQLITE_ERROR;
 	}
 
-	pWal->changed = 1;
+	conn->changed = 1;
 	if (ppWal != NULL)
 		(*ppWal) = pWal;
 	return SQLITE_OK;
@@ -180,9 +180,10 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
 	DBG("Begin read trans %d",pWal->changed);
-	*pChanged = pWal->changed;
-	if (pWal->changed)
-		pWal->changed = 0;
+	db_connection* const conn = enif_tsd_get(g_tsd_conn);
+	*pChanged = conn->changed;
+	if (conn->changed)
+		conn->changed = 0;
 	return SQLITE_OK;
 }
 
@@ -1203,8 +1204,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			}
 			pWal->inProgressTerm = pWal->inProgressEvnum = 0;
 			pWal->mxPage =  pWal->mxPage > nTruncate ? pWal->mxPage : nTruncate;
-			pWal->changed = 0;
+			// pWal->changed = 0;
 			thr->forceCommit = 1;
+			pCon->dirty = 0;
 			#ifndef _TESTAPP_
 			enif_mutex_unlock(pWal->mtx);
 			#endif
@@ -1212,7 +1214,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		}
 		else
 		{
-			pWal->changed = 1;
+			// pWal->changed = 1;
+			pCon->dirty = 1;
 		}
 		thr->pagesChanged++;
 
@@ -1276,37 +1279,6 @@ int sqlite3WalHeapMemory(Wal *pWal)
 }
 
 
-
-
-
-// New function. It adds thread pointer to wal structure.
-SQLITE_API int sqlite3_wal_data(
-  sqlite3 *db,
-  void *pArg
-  ){
-
-	int rt = SQLITE_NOTFOUND;
-	int i;
-	for(i=0; i<db->nDb; i++)
-	{
-		Btree *pBt = db->aDb[i].pBt;
-		if( pBt )
-		{
-			Pager *pPager = sqlite3BtreePager(pBt);
-			if (pPager->pWal)
-			{
-				// pPager->pWal->thread = (db_thread*)pArg;
-				rt = SQLITE_OK;
-			}
-			else
-			{
-				pPager->walData = pArg;
-				rt = SQLITE_OK;
-			}
-		}
-	}
-	return rt;
-}
 
 static u64 get8byte(u8* buf)
 {
