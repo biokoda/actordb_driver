@@ -58,7 +58,7 @@ struct mdbinf
 	MDB_cursor *cursorLog;
 	MDB_cursor *cursorPages;
 	MDB_cursor *cursorInfo;
-	u32 writesCompleted;
+	u32 usageCount;
 };
 
 struct priv_data

@@ -93,11 +93,28 @@ static mdbinf* lock_wtxn(int nEnv)
 
 static void unlock_write_txn(mdbinf* inf, int nEnv)
 {
-	if (++inf->writesCompleted > 1000)
+	if (++inf->usageCount > 1000)
 	{
 		mdb_txn_commit(inf->txn);
 		inf->txn = NULL;
-		inf->writesCompleted = 0;
+		inf->usageCount = 0;
+	}
+
+	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
+}
+
+static void try_finish_write_txn(int nEnv)
+{
+	mdbinf *inf;
+	if (enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0)
+		return;
+
+	inf = &g_pd->wmdb[nEnv];
+	if (inf->txn != NULL)
+	{
+		mdb_txn_commit(inf->txn);
+		inf->txn = NULL;
+		inf->usageCount = 0;
 	}
 
 	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
