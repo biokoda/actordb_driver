@@ -687,7 +687,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	else if (!db)
 	{
 		// open wal directly
-		sqlite3WalOpen(NULL, NULL, filename, 0, 0, NULL, thread);
+		sqlite3WalOpen(NULL, NULL, filename, 0, 0, NULL);
 	}
 	track_time(23,thread);
 	DBG("opened new thread=%d name=%s mode=%s.",(int)thread->nThread,filename,mode);
@@ -1343,7 +1343,7 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv 
 		memcpy(pth, name.data, name.size);
 		// thread->curConn = &con;
 		enif_tsd_set(g_tsd_conn, &con);
-		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL, thread);
+		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL);
 		// con.wal.thread = thread;
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
 		// thread->curConn = NULL;

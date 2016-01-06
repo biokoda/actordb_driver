@@ -534,7 +534,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 			return -1;
 		}
 
-		if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL, &thr) == SQLITE_ERROR)
+		if (sqlite3WalOpen(NULL, NULL, actorpth, 0, 0, NULL) == SQLITE_ERROR)
 			continue;
 		else
 			break;

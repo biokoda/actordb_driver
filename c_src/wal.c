@@ -54,7 +54,7 @@ static MDB_txn* open_txn(mdbinf *data, int flags);
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
-int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,int bNoShm, i64 mxWalSize, Wal **ppWal, void *walData)
+int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,int bNoShm, i64 mxWalSize, Wal **ppWal)
 {
 	MDB_val key, data;
 	int rc;
