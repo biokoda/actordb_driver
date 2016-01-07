@@ -93,7 +93,7 @@ static void lock_wtxn(int nEnv)
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 }
 
-static void unlock_write_txn(int nEnv, char inform, char *commit)
+static void unlock_write_txn(int nEnv, char *commit)
 {
 	int i;
 
@@ -101,7 +101,7 @@ static void unlock_write_txn(int nEnv, char inform, char *commit)
 		return;
 
 	++g_tsd_wmdb->usageCount;
-	if (*commit || g_tsd_wmdb->usageCount > 1000)
+	if (*commit || g_tsd_wmdb->usageCount > 0)
 	{
 		DBG("COMMIT!");
 		if (mdb_txn_commit(g_tsd_wmdb->txn) != MDB_SUCCESS)
@@ -115,11 +115,10 @@ static void unlock_write_txn(int nEnv, char inform, char *commit)
 		DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
-	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
 
 	// Send a cmd_synced to all write threads if we executed commit.
 	// They must send back replies to ops.
-	if (*commit && inform)
+	if (*commit)
 	{
 		for (i = 0; i < g_pd->nWriteThreads; i++)
 		{
@@ -132,6 +131,7 @@ static void unlock_write_txn(int nEnv, char inform, char *commit)
 			push_command(thrind, -1, g_pd, item);
 		}
 	}
+	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
 }
 
 // static void try_finish_write_txn(int nEnv)
@@ -2770,6 +2770,18 @@ static void respond_cmd(db_thread *data, qitem *item)
 	queue_recycle(data->tasks,item);
 }
 
+static void respond_items(db_thread *data, qitem *itemsWaiting)
+{
+	while (itemsWaiting != NULL)
+	{
+		qitem *next = itemsWaiting->next;
+		// db_command *c = itemsWaiting->cmd;
+		// DBG("Responding item waiting %d",c->type);
+		respond_cmd(data, itemsWaiting);
+		itemsWaiting = next;
+	}
+}
+
 static void *read_thread_func(void *arg)
 {
 	db_thread* data   = (db_thread*)arg;
@@ -2852,26 +2864,21 @@ static void *read_thread_func(void *arg)
 			cmd->answer = evaluate_command(cmd,data,item->env);
 			mdb_txn_reset(mdb->txn);
 
-			if (cmd->type == cmd_synced && g_tsd_wmdb == NULL)
+			if (cmd->type == cmd_synced)
 			{
-				lock_wtxn(data->nEnv);
+				respond_items(data, itemsWaiting);
+				itemsWaiting = NULL;
 			}
 
 			if (g_tsd_wmdb != NULL)
 			{
 				char commit = queue_size(data->tasks) == 0;
-				unlock_write_txn(data->nEnv, cmd->type != cmd_synced, &commit);
+				unlock_write_txn(data->nEnv, &commit);
 
 				if (syncWaitingOn < g_tsd_cursync && itemsWaiting)
 				{
-					while (itemsWaiting != NULL)
-					{
-						qitem *next = itemsWaiting->next;
-						db_command *c = itemsWaiting->cmd;
-						DBG("Responding item waiting %d",c->type);
-						respond_cmd(data, itemsWaiting);
-						itemsWaiting = next;
-					}
+					respond_items(data, itemsWaiting);
+					itemsWaiting = NULL;
 				}
 				if (commit && !itemsWaiting)
 				{
