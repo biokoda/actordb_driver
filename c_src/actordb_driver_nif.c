@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -83,10 +83,10 @@ static void lock_wtxn(int nEnv)
 		if (i > 1000000)
 			usleep(i / 100000);
 	}
+	DBG("lock wtxn %u",i);
 	g_tsd_wmdb = &g_pd->wmdb[nEnv];
 	if (g_tsd_wmdb->txn == NULL)
 	{
-		DBG("OPEN TXN!");
 		if (open_txn(g_tsd_wmdb, 0) == NULL)
 			return;
 	}
@@ -112,7 +112,7 @@ static void unlock_write_txn(int nEnv, char inform, char *commit)
 		*commit = 1;
 	}
 	else
-		DBG("UNLOCK");
+		DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
 	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
@@ -1524,15 +1524,11 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 	enif_get_string(env,cmd->arg, name, sizeof(name), ERL_NIF_LATIN1);
 	enif_get_uint64(env,cmd->arg1,(ErlNifUInt64*)&(index));
 
-	DBG("GETTING LOCK!");
-
 	if (!g_tsd_wmdb)
 		lock_wtxn(thread->nEnv);
 	mdb = g_tsd_wmdb;
 	if (!mdb)
 		return SQLITE_ERROR;
-
-	DBG("GOT LOCK");
 
 	if (name[0] == '/')
 		offset = 1;
@@ -2761,6 +2757,7 @@ static void *thread_func(void *arg)
 static void respond_cmd(db_thread *data, qitem *item)
 {
 	db_command *cmd = (db_command*)item->cmd;
+	DBG("Respond");
 	if (cmd->ref)
 	{
 		enif_send(NULL, &cmd->pid, item->env, make_answer(item, cmd->answer));
@@ -2869,11 +2866,14 @@ static void *read_thread_func(void *arg)
 				{
 					while (itemsWaiting != NULL)
 					{
-						respond_cmd(data, item);
-						itemsWaiting = itemsWaiting->next;
+						qitem *next = itemsWaiting->next;
+						db_command *c = itemsWaiting->cmd;
+						DBG("Responding item waiting %d",c->type);
+						respond_cmd(data, itemsWaiting);
+						itemsWaiting = next;
 					}
 				}
-				else if (commit && !itemsWaiting)
+				if (commit && !itemsWaiting)
 				{
 					respond_cmd(data, item);
 				}
@@ -4095,7 +4095,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 				if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
 					return -1;
 				// Syncs are handled from erlang.
-				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|MDB_NOSYNC, 0664) != MDB_SUCCESS) //MDB_NOSYNC
 					return -1;
 
 				// Create databases if they do not exist yet
