@@ -35,11 +35,6 @@
 #define PRINT_LOG    4
 #define PRINT_ACTORS 8
 
-pthread_key_t g_tsd_thread;
-pthread_key_t g_tsd_pd;
-pthread_key_t g_tsd_conn;
-#define enif_tsd_get pthread_getspecific
-
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
 // If we were to just include "sqlite3.h" OSX would actually use /usr/lib/libsqlite3.dylib
@@ -50,11 +45,19 @@ pthread_key_t g_tsd_conn;
 
 #include "actordb_driver_nif.h"
 #include "lz4.h"
+
+static __thread db_thread *g_tsd_thread;
+static __thread priv_data *g_tsd_pd;
+static __thread db_connection *g_tsd_conn;
+static __thread mdbinf *g_tsd_wmdb;
+#define enif_tsd_get pthread_getspecific
+
+static void lock_wtxn(int env){}
+
 // wal.c code has been taken out of sqlite3.c and placed in wal.c file.
 // Every wal interface function is changed, but the wal-index code remains unchanged.
 #include "wal.c"
 
-// #include "tool_do.c"
 
 typedef struct lmdb
 {
@@ -492,8 +495,10 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 		fprintf(stderr,"Unable to open source environment\n");
 		return -1;
 	}
-	pthread_setspecific(g_tsd_thread, &thr);
-	pthread_setspecific(g_tsd_conn, &conn);
+	g_tsd_thread = &thr;
+	g_tsd_conn = &conn;
+	// pthread_setspecific(g_tsd_thread, &thr);
+	// pthread_setspecific(g_tsd_conn, &conn);
 
 	thr.mdb.env = rd.menv;
 	thr.maxvalsize = mdb_env_get_maxkeysize(rd.menv);
@@ -584,7 +589,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 int main(int argc, const char* argv[])
 {
 	g_log = stdout;
-	pthread_key_create(&g_tsd_thread, NULL);
+	// pthread_key_create(&g_tsd_thread, NULL);
 
 	if (argc >= 3 && strcmp(argv[1],"print") == 0)
 	{

@@ -58,11 +58,11 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 {
 	MDB_val key, data;
 	int rc;
-	// db_thread *thr = (db_thread*)walData;
-	// db_connection *conn = thr->curConn;
-	db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
-	db_connection* const conn = enif_tsd_get(g_tsd_conn);
-	mdbinf * const mdb 		  = &thr->mdb;
+	// db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
+	// db_connection* const conn = enif_tsd_get(g_tsd_conn);
+	db_thread *thr 		= g_tsd_thread;
+	db_connection *conn = g_tsd_conn;
+	mdbinf * const mdb 	= &thr->mdb;
 	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn = mdb->txn;
@@ -179,9 +179,10 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 */
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
-	DBG("Begin read trans %d",pWal->changed);
-	db_connection* const conn = enif_tsd_get(g_tsd_conn);
+	// db_connection* const conn = enif_tsd_get(g_tsd_conn);
+	db_connection* conn = g_tsd_conn;
 	*pChanged = conn->changed;
+	DBG("Begin read trans %d",*pChanged);
 	if (conn->changed)
 		conn->changed = 0;
 	return SQLITE_OK;
@@ -194,7 +195,8 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 /* Read a page from the write-ahead log, if it is present. */
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
-	db_thread * const thread = enif_tsd_get(g_tsd_thread);
+	// db_thread * const thread = enif_tsd_get(g_tsd_thread);
+	db_thread *thread = g_tsd_thread;
 	/*if (thr->isreadonly)
 	{
 		u64 readSafeEvnum, readSafeTerm;
@@ -224,7 +226,12 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 	int rc;
 	size_t ndupl = 0;
 	u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
-	mdbinf * const mdb = &thr->mdb;
+	mdbinf *mdb;
+
+	if (thr->pagesChanged)
+		mdb = g_tsd_wmdb;
+	else
+		mdb = &thr->mdb;
 
 	track_time(7,thr);
 	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu",
@@ -314,7 +321,8 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
 	int result 			  = 0;
-	db_thread * const thr = enif_tsd_get(g_tsd_thread);
+	// db_thread * const thr = enif_tsd_get(g_tsd_thread);
+	db_thread *thr = g_tsd_thread;
 
 	// #ifndef _WIN32
 	// if (pthread_equal(pthread_self(), pWal->rthreadId))
@@ -432,7 +440,8 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 // return number of bytes written
 static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
-	db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	db_thread *thr 		 = g_tsd_thread;
 	mdbinf* const mdb 	 = &thr->mdb;
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
@@ -644,12 +653,19 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	MDB_val logKey, logVal;
 	u8 logKeyBuf[sizeof(u64)*3];
 	u64 evnum,evterm,aindex;
+	mdbinf* mdb;
 	
-	db_thread* const thr = enif_tsd_get(g_tsd_thread);
-	mdbinf* const mdb 	 = &thr->mdb;
+	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	db_thread *thr 		 = g_tsd_thread;
 	int logop, mrc 		 = MDB_SUCCESS;
 	u8 somethingDeleted  = 0;
 	int allPagesDiff 	 = 0;
+
+	if (!g_tsd_wmdb)
+		lock_wtxn(thr->nEnv);
+	mdb = g_tsd_wmdb;
+	if (!mdb)
+		return SQLITE_ERROR;
 
 	// if (pWal->inProgressTerm == 0)
 	// 	return SQLITE_OK;
@@ -793,13 +809,20 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	MDB_val pgKey, pgVal;
 	u8 logKeyBuf[sizeof(u64)*3];
 	int logop, pgop, rc, mrc;
+	mdbinf *mdb;
 
-	db_thread* const thr = enif_tsd_get(g_tsd_thread);
-	mdbinf* const mdb	 = &thr->mdb;
-	rc 					 = SQLITE_OK;
+	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	db_thread *thr = g_tsd_thread;
+	rc  = SQLITE_OK;
 
 	if (pWal->inProgressTerm == 0)
 		return SQLITE_OK;
+
+	if (!g_tsd_wmdb)
+		lock_wtxn(thr->nEnv);
+	mdb = g_tsd_wmdb;
+	if (!mdb)
+		return SQLITE_ERROR;
 
 	logKey.mv_data = logKeyBuf;
 	logKey.mv_size = sizeof(logKeyBuf);
@@ -913,8 +936,15 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 {
 	MDB_val key = {0,NULL}, data = {0,NULL};
 	int rc;
-	db_thread* const thr = enif_tsd_get(g_tsd_thread);
-	mdbinf* const mdb    = &thr->mdb;
+	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	db_thread *thr 		 = g_tsd_thread;
+	mdbinf* mdb;
+
+	if (!g_tsd_wmdb)
+		lock_wtxn(thr->nEnv);
+	mdb = g_tsd_wmdb;
+	if (!mdb)
+		return SQLITE_ERROR;
 
 	key.mv_size = sizeof(u64);
 	key.mv_data = &pWal->index;
@@ -964,10 +994,20 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	PgHdr *p;
 	MDB_val key, data;
 	int rc;
-	db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
-	db_connection* const pCon = enif_tsd_get(g_tsd_conn);
-	mdbinf* const mdb 		  = &thr->mdb;
-	MDB_txn* const txn 		  = mdb->txn;
+	mdbinf* mdb;
+	MDB_txn* txn;
+	// db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
+	db_thread *thr      = g_tsd_thread;
+	// db_connection* const pCon = enif_tsd_get(g_tsd_conn);
+	db_connection* pCon	= g_tsd_conn;
+
+	if (!g_tsd_wmdb)
+		lock_wtxn(thr->nEnv);
+	mdb = g_tsd_wmdb;
+	txn = mdb->txn;
+
+	if (!mdb)
+		return SQLITE_ERROR;
 
 	key.mv_size = sizeof(u64);
 	key.mv_data = (void*)&pWal->index;
@@ -1370,6 +1410,14 @@ static int pagesdb_val_cmp(const MDB_val *a, const MDB_val *b)
 static MDB_txn* open_txn(mdbinf *data, int flags)
 {
 	if (mdb_txn_begin(data->env, NULL, flags, &data->txn) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->txn, "info", MDB_INTEGERKEY, &data->infodb) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->txn, "actors", 0, &data->actorsdb) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->txn, "log", MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &data->logdb) != MDB_SUCCESS)
+		return NULL;
+	if (mdb_dbi_open(data->txn, "pages", MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;

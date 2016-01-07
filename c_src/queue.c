@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "queue.h"
-#define BLOCK_SIZE 32
+#define BLOCK_SIZE 128
 
 
 // void*
@@ -168,7 +168,7 @@ queue_pop(queue *queue)
         queue->tail = NULL;
     }
 
-    queue->length -= 1;
+    queue->length--;
 
     enif_mutex_unlock(queue->lock);
 

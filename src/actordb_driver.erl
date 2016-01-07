@@ -149,7 +149,8 @@ fsync({actordb_driver, _Ref, Connection} = C) ->
 			timer:sleep(10),
 			fsync(C);
 		ok ->
-			receive_answer(Ref)
+			% receive_answer(Ref)
+			ok
 	end.
 
 iterate_close({iter,Iter}) ->

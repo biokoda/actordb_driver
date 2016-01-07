@@ -68,7 +68,8 @@ struct priv_data
 	int nWriteThreads;
 	queue **wtasks;      // array of queues for every write thread + control thread
 	queue **rtasks;      // every environment has nReadThreads
-	atomic_ullong *syncNumbers;
+	// atomic_ullong *syncNumbers;
+	u64 *syncNumbers;
 	mdbinf *wmdb;
 
 	#ifndef _TESTAPP_
@@ -253,7 +254,8 @@ typedef enum
 	cmd_sync = 23,
 	cmd_stmt_info = 24,
 	cmd_file_write = 25,
-	cmd_actorsdb_add = 26
+	cmd_actorsdb_add = 26,
+	cmd_synced = 27
 } command_type;
 
 typedef struct
@@ -268,6 +270,7 @@ typedef struct
 	ERL_NIF_TERM arg2;
 	ERL_NIF_TERM arg3;
 	ERL_NIF_TERM arg4;
+	ERL_NIF_TERM answer;
 #endif
 	// int connindex;
 	command_type type;

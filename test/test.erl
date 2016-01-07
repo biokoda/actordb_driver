@@ -14,7 +14,7 @@ run_test_() ->
 	fun modes/0,
 	fun dbcopy/0,
 	fun checkpoint/0,
-	fun checkpoint1/0,
+	{timeout, 25, fun checkpoint1/0},
 	fun bigtrans/0,
 	fun bigtrans_check/0,
 	{timeout,25,fun async/0},
