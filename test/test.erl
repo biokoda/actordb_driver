@@ -9,8 +9,8 @@
 	dbsize => ?DBSIZE, 
 	rthreads => ?READTHREADS,
 	wthreads => ?WRITETHREADS,
-	lmdbsync => 0,
-	nbatch => 0}).
+	lmdbsync => 1,
+	nbatch => 20}).
 -define(INIT,actordb_driver:init(?CFG)).
 -define(READ,actordb_driver:exec_read).
 
@@ -119,7 +119,7 @@ async() ->
 	ets:insert(ops,{w,0}),
 	ets:insert(ops,{r,0}),
 	RandBytes = [base64:encode(crypto:rand_bytes(128)) || _ <- lists:seq(1,1000)],
-	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,100)],
+	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,500)],
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
 			exit(Reason)
@@ -145,16 +145,16 @@ w(Db,Me,C,[Rand|T],L) ->
 			actordb_driver:checkpoint(Db,C-20);
 		% _ when C rem 101 == 0, Me == 1 ->
 		% 	?debugFmt("Contention situations:~p",[actordb_driver:noop(Db)]);
-		0 ->
+		_ ->
 		% _ ->
 			% Using static sql with parameterized queries cuts down on sql parsing
 			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
 			Sql = <<"#s00;">>,
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
-			ets:update_counter(ops,w,{2,1});
-		_ ->
-			{ok,_RR} = ?READ("select * from tab limit 1",Db),
-			ets:update_counter(ops,r,{2,1})
+			ets:update_counter(ops,w,{2,1})
+		% _ ->
+		% 	{ok,_RR} = ?READ("select * from tab limit 1",Db),
+		% 	ets:update_counter(ops,r,{2,1})
 	end,
 	w(Db,Me,C+1,T,[Rand|L]);
 w(Db,Me,C,[],L) ->
