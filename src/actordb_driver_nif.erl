@@ -154,14 +154,13 @@ file_write(_,_,_) ->
 % backup_pages(_) ->
 %     exit(nif_library_not_loaded).
 
-init(Threads) when tuple_size(Threads) == 2 orelse tuple_size(Threads) == 3 orelse 
-		tuple_size(Threads) == 4 orelse tuple_size(Threads) == 5 ->
+init(Info) ->
 	NifName = "actordb_driver_nif",
 	NifFileName = case code:priv_dir(actordb_driver) of
 		{error, bad_name} -> filename:join("priv", NifName);
 		Dir -> filename:join(Dir, NifName)
 	end,
-	case erlang:load_nif(NifFileName, ["drv_"++hd(string:tokens(atom_to_list(node()),"@"))++".txt",Threads]) of
+	case erlang:load_nif(NifFileName, Info#{logname => "drv_"++hd(string:tokens(atom_to_list(node()),"@"))++".txt"}) of
 		ok ->
 			ok;
 		{error,{upgrade,_}} ->

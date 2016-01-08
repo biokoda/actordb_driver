@@ -46,12 +46,33 @@ static __thread db_thread      *g_tsd_thread;
 static __thread db_connection  *g_tsd_conn;
 static __thread mdbinf         *g_tsd_wmdb;
 static __thread u64             g_tsd_cursync;
-static priv_data *g_pd;
+static priv_data               *g_pd;
+static int                      g_nbatch = 0;
 static ErlNifResourceType *db_connection_type;
 static ErlNifResourceType *iterate_type;
 
 #include "wal.c"
 #include "nullvfs.c"
+
+ERL_NIF_TERM atom_ok;
+ERL_NIF_TERM atom_false;
+ERL_NIF_TERM atom_error;
+ERL_NIF_TERM atom_rows;
+ERL_NIF_TERM atom_columns;
+ERL_NIF_TERM atom_undefined;
+ERL_NIF_TERM atom_rowid;
+ERL_NIF_TERM atom_changes;
+ERL_NIF_TERM atom_done;
+ERL_NIF_TERM atom_iter;
+ERL_NIF_TERM atom_blob;
+ERL_NIF_TERM atom_wthreads;
+ERL_NIF_TERM atom_rthreads;
+ERL_NIF_TERM atom_paths;
+ERL_NIF_TERM atom_staticsqls;
+ERL_NIF_TERM atom_dbsize;
+ERL_NIF_TERM atom_logname;
+ERL_NIF_TERM atom_nbatch;
+ERL_NIF_TERM atom_lmdbsync;
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -76,8 +97,6 @@ static ERL_NIF_TERM make_error_tuple(ErlNifEnv *env, const char *reason)
 static void lock_wtxn(int nEnv)
 {
 	u32 i;
-	// while (enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0)
-	// 	continue;
 	for (i = 0; enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0; ++i)
 	{
 		if (i > 1000000)
@@ -101,7 +120,7 @@ static void unlock_write_txn(int nEnv, char *commit)
 		return;
 
 	++g_tsd_wmdb->usageCount;
-	if (*commit || g_tsd_wmdb->usageCount > 0)
+	if (*commit || g_tsd_wmdb->usageCount > g_nbatch)
 	{
 		if (mdb_txn_commit(g_tsd_wmdb->txn) != MDB_SUCCESS)
 			mdb_txn_abort(g_tsd_wmdb->txn);
@@ -110,8 +129,8 @@ static void unlock_write_txn(int nEnv, char *commit)
 		++g_pd->syncNumbers[nEnv];
 		*commit = 1;
 	}
-	// else
-	// 	DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
+	else
+		DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
 
@@ -1523,7 +1542,7 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 	key.mv_data = (void*)(name+offset);
 	data.mv_size = sizeof(u64);
 	data.mv_data = (void*)&index;
-	DBG("Writing actors index for=%s, to=%llu",name);
+	DBG("Writing actors index for=%s",name);
 	if ((rc = mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0)) != MDB_SUCCESS)
 	{
 		DBG("Unable to write actor index!! %llu %d", index, rc);
@@ -3881,14 +3900,15 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 {
 	int i = 0;
 	const ERL_NIF_TERM *param;
-	const ERL_NIF_TERM *param1;
+	const ERL_NIF_TERM *pathtuple;
+	ERL_NIF_TERM value;
 	char nodename[128];
-	ERL_NIF_TERM head, tail;
 	priv_data *priv;
 	db_thread *controlThread = NULL;
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
-	int scratchSize;
+	int flags;
+	// int scratchSize;
 // Apple/Win get smaller max dbsize because they are both fucked when it comes to mmap.
 // They are just dev platforms anyway.
 #if defined(__APPLE__) || defined(_WIN32)
@@ -3910,17 +3930,10 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->nReadThreads = 1;
 	priv->nWriteThreads = 1;
 	memset(nodename,0,128);
-	enif_get_list_cell(env,info,&head,&info);
-	enif_get_list_cell(env,info,&info,&tail);
 
-#ifdef _TESTDBG_
-	enif_get_string(env,head,nodename,128,ERL_NIF_LATIN1);
-	g_log = fopen(nodename, "w");
-#endif
-
-	scratchSize = 1024*1024*10;
-	while (scratchSize % (SQLITE_DEFAULT_PAGE_SIZE*6) > 0)
-		scratchSize += SQLITE_DEFAULT_PAGE_SIZE;
+	// scratchSize = 1024*1024*10;
+	// while (scratchSize % (SQLITE_DEFAULT_PAGE_SIZE*6) > 0)
+	// 	scratchSize += SQLITE_DEFAULT_PAGE_SIZE;
 	// priv->sqlite_pgcache = malloc((4096+128) * 4096*6);
 	// sqlite3_config(SQLITE_CONFIG_SCRATCH, priv->sqlite_scratch, 6*SQLITE_DEFAULT_PAGE_SIZE, scratchSize / (6*SQLITE_DEFAULT_PAGE_SIZE));
 	// sqlite3_config(SQLITE_CONFIG_PAGECACHE, priv->sqlite_pgcache, 4096+128, 4096*6);
@@ -3946,56 +3959,77 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_done = enif_make_atom(env,"done");
 	atom_iter = enif_make_atom(env,"iter");
 	atom_blob = enif_make_atom(env, "blob");
+	atom_wthreads = enif_make_atom(env, "wthreads");
+	atom_rthreads = enif_make_atom(env, "rthreads");
+	atom_paths = enif_make_atom(env, "paths");
+	atom_staticsqls = enif_make_atom(env, "staticsqls");
+	atom_dbsize = enif_make_atom(env, "dbsize");
+	atom_logname = enif_make_atom(env, "logname");
+	atom_nbatch = enif_make_atom(env, "nbatch");
+	atom_lmdbsync = enif_make_atom(env, "lmdbsync");
 
-	// Paths will determine thread numbers. Every path has a thread.
-	// {{Path1,Path2,Path3,...},{StaticSql1,StaticSql2,StaticSql3,...}}
-	if (!enif_get_tuple(env,info,&i,&param))
+#ifdef _TESTDBG_
+	if (enif_get_map_value(env, info, atom_logname, &value))
 	{
-		DBG("Param not tuple");
-		return -1;
+		enif_get_string(env,value,nodename,128,ERL_NIF_LATIN1);
+		g_log = fopen(nodename, "w");
 	}
-
-	if (i != 2 && i != 3 && i != 4 && i != 5)
-		return -1;
-
-	// if (i > 2)
-	// {
-	// 	if (!enif_get_int(env,param[2],&sync))
-	// 		return -1;
-	// }
-	if (i > 2)
+#endif
+	if (enif_get_map_value(env, info, atom_dbsize, &value))
 	{
-		if (!enif_get_uint64(env,param[2],(ErlNifUInt64*)&dbsize))
+		if (!enif_get_uint64(env,value,(ErlNifUInt64*)&dbsize))
 			return -1;
 	}
-	if (i > 3)
+	if (enif_get_map_value(env, info, atom_staticsqls, &value))
 	{
-		if (!enif_get_int(env,param[3],&priv->nReadThreads))
-			return -1;
-
-		if (i > 4)
+		if (!enif_get_tuple(env, value, &i, &param))
 		{
-			if (!enif_get_int(env,param[4],&priv->nWriteThreads))
-				return -1;
+			DBG("Param not tuple");
+			return -1;
+		}
+		if (i > MAX_STATIC_SQLS)
+			return -1;
+		nstaticSqls = i;
+		for (i = 0; i < nstaticSqls; i++)
+			enif_get_string(env,param[i],staticSqls[i],256,ERL_NIF_LATIN1);
+	}
+	if (enif_get_map_value(env, info, atom_paths, &value))
+	{
+		if (!enif_get_tuple(env, value, &priv->nEnvs, &pathtuple))
+		{
+			DBG("Param not tuple");
+			return -1;
 		}
 	}
+	if (enif_get_map_value(env, info, atom_rthreads, &value))
+	{
+		if (!enif_get_int(env,value,&priv->nReadThreads))
+			return -1;
+	}
+	if (enif_get_map_value(env, info, atom_wthreads, &value))
+	{
+		if (!enif_get_int(env,value,&priv->nWriteThreads))
+			return -1;
+	}
+	if (enif_get_map_value(env, info, atom_nbatch, &value))
+	{
+		if (!enif_get_int(env,value,&g_nbatch))
+			return -1;
+	}
+	if (enif_get_map_value(env, info, atom_lmdbsync, &value))
+	{
+		if (!enif_get_int(env,value,&i))
+			return -1;
+		if (i == 0)
+			flags = MDB_NOSYNC;
+		else
+			flags = 0;
+	}
+
 	if (priv->nReadThreads > 255)
 		return -1;
 	if (priv->nWriteThreads+1 > 255)
 		return -1;
-
-	if (!enif_get_tuple(env,param[0],&priv->nEnvs,&param1))
-		return -1;
-
-	if (!enif_get_tuple(env,param[1],&i,&param))
-		return -1;
-
-	if (i > MAX_STATIC_SQLS)
-		return -1;
-
-	nstaticSqls = i;
-	for (i = 0; i < nstaticSqls; i++)
-		enif_get_string(env,param[i],staticSqls[i],256,ERL_NIF_LATIN1);
 
 	db_connection_type = enif_open_resource_type(env, NULL, "db_connection_type",
 				destruct_connection, ERL_NIF_RT_CREATE, NULL);
@@ -4056,7 +4090,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 			memset(curThread,0,sizeof(db_thread));
 
-			if (!(enif_get_string(env,param1[i],path,MAX_PATHNAME,ERL_NIF_LATIN1) < 
+			if (!(enif_get_string(env,pathtuple[i],path,MAX_PATHNAME,ERL_NIF_LATIN1) < 
 				(MAX_PATHNAME-MAX_ACTOR_NAME)))
 				return -1;
 
@@ -4077,19 +4111,17 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 				if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
 					return -1;
 				// Syncs are handled from erlang.
-				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|MDB_NOSYNC, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|flags, 0664) != MDB_SUCCESS) //MDB_NOSYNC
 					return -1;
 
 				// Create databases if they do not exist yet
 				if (mdb_txn_begin(menv, NULL, 0, &txn) != MDB_SUCCESS)
 					return -1;
-				if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != 
-					MDB_SUCCESS)
+				if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != MDB_SUCCESS)
 					return -1;
 				if (mdb_dbi_open(txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
 					return -1;
-				if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | 
-					MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
+				if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
 					return -1;
 				if (mdb_dbi_open(txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
 					return -1;

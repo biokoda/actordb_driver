@@ -302,18 +302,6 @@ void track_time(u8 id, db_thread *thr)
 #endif
 
 #ifndef _TESTAPP_
-ERL_NIF_TERM atom_ok;
-ERL_NIF_TERM atom_false;
-ERL_NIF_TERM atom_error;
-ERL_NIF_TERM atom_rows;
-ERL_NIF_TERM atom_columns;
-ERL_NIF_TERM atom_undefined;
-ERL_NIF_TERM atom_rowid;
-ERL_NIF_TERM atom_changes;
-ERL_NIF_TERM atom_done;
-ERL_NIF_TERM atom_iter;
-ERL_NIF_TERM atom_blob;
-
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
 static ERL_NIF_TERM push_command(int thread, int readThreadNum,priv_data *pd, qitem *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);

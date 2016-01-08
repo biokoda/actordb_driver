@@ -19,10 +19,10 @@
 		checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,wal_rewind/3,
 		tcp_connect_async/4,tcp_connect_async/5,tcp_reconnect/0, stmt_info/2]).
 
-% Every path is a write thread.
-% {{Path1,Path2,...},{StaticSql1,StaticSql2,...},MaxDbSize, ReadThreadsPerWriteThread}
-init(Threads) ->
-	actordb_driver_nif:init(Threads).
+% #{paths => {Path1,Path2,...}, staticsqls => {StaticSql1,StaticSql2,...}, 
+%   dbsize => MaxDbSize, rthreads => NumReadThreads, wthreads => NumWriteThreads}
+init(Info) when is_map(Info) ->
+	actordb_driver_nif:init(Info).
 
 file_write(Offset,Items,L) ->
 	actordb_driver_nif:file_write(Offset,Items,L).

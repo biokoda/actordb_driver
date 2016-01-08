@@ -3,7 +3,15 @@
 -define(READTHREADS,2).
 -define(WRITETHREADS,1).
 -define(DBSIZE,4096*1024*128).
--define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
+% -define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
+-define(CFG,#{paths => {"."}, 
+	staticsqls => {"INSERT INTO tab VALUES (?1,?2);"}, 
+	dbsize => ?DBSIZE, 
+	rthreads => ?READTHREADS,
+	wthreads => ?WRITETHREADS,
+	lmdbsync => 0,
+	nbatch => 0}).
+-define(INIT,actordb_driver:init(?CFG)).
 -define(READ,actordb_driver:exec_read).
 
 run_test_() ->
