@@ -24,7 +24,6 @@
 #endif
 
 #include "lz4.h"
-#include "wbuf.h"
 
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
