@@ -103,7 +103,6 @@ static void unlock_write_txn(int nEnv, char *commit)
 	++g_tsd_wmdb->usageCount;
 	if (*commit || g_tsd_wmdb->usageCount > 0)
 	{
-		DBG("COMMIT!");
 		if (mdb_txn_commit(g_tsd_wmdb->txn) != MDB_SUCCESS)
 			mdb_txn_abort(g_tsd_wmdb->txn);
 		g_tsd_wmdb->txn = NULL;
@@ -111,8 +110,8 @@ static void unlock_write_txn(int nEnv, char *commit)
 		++g_pd->syncNumbers[nEnv];
 		*commit = 1;
 	}
-	else
-		DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
+	// else
+	// 	DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
 
@@ -133,23 +132,6 @@ static void unlock_write_txn(int nEnv, char *commit)
 	}
 	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
 }
-
-// static void try_finish_write_txn(int nEnv)
-// {
-// 	mdbinf *inf;
-// 	if (enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0)
-// 		return;
-
-// 	inf = &g_pd->wmdb[nEnv];
-// 	if (inf->txn != NULL)
-// 	{
-// 		mdb_txn_commit(inf->txn);
-// 		inf->txn = NULL;
-// 		inf->usageCount = 0;
-// 	}
-
-// 	enif_mutex_unlock(g_pd->wthrMutexes[nEnv]);
-// }
 
 static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 {
@@ -2775,8 +2757,6 @@ static void respond_items(db_thread *data, qitem *itemsWaiting)
 	while (itemsWaiting != NULL)
 	{
 		qitem *next = itemsWaiting->next;
-		// db_command *c = itemsWaiting->cmd;
-		// DBG("Responding item waiting %d",c->type);
 		respond_cmd(data, itemsWaiting);
 		itemsWaiting = next;
 	}
@@ -3941,9 +3921,8 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	scratchSize = 1024*1024*10;
 	while (scratchSize % (SQLITE_DEFAULT_PAGE_SIZE*6) > 0)
 		scratchSize += SQLITE_DEFAULT_PAGE_SIZE;
-	priv->sqlite_scratch = malloc(scratchSize);
 	// priv->sqlite_pgcache = malloc((4096+128) * 4096*6);
-	sqlite3_config(SQLITE_CONFIG_SCRATCH, priv->sqlite_scratch, 6*SQLITE_DEFAULT_PAGE_SIZE, scratchSize / (6*SQLITE_DEFAULT_PAGE_SIZE));
+	// sqlite3_config(SQLITE_CONFIG_SCRATCH, priv->sqlite_scratch, 6*SQLITE_DEFAULT_PAGE_SIZE, scratchSize / (6*SQLITE_DEFAULT_PAGE_SIZE));
 	// sqlite3_config(SQLITE_CONFIG_PAGECACHE, priv->sqlite_pgcache, 4096+128, 4096*6);
 	// sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
 	sqlite3_initialize();
@@ -3994,20 +3973,16 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		if (!enif_get_int(env,param[3],&priv->nReadThreads))
 			return -1;
 
-		// if (i > 4)
-		// {
-		// 	if (!enif_get_int(env,param[4],&priv->nWriteThreads))
-		// 		return -1;
-		// }
+		if (i > 4)
+		{
+			if (!enif_get_int(env,param[4],&priv->nWriteThreads))
+				return -1;
+		}
 	}
 	if (priv->nReadThreads > 255)
 		return -1;
 	if (priv->nWriteThreads+1 > 255)
 		return -1;
-	// if (sync)
-	// 	sync = 0;
-	// else
-	// sync = MDB_NOSYNC;
 
 	if (!enif_get_tuple(env,param[0],&priv->nEnvs,&param1))
 		return -1;
@@ -4235,8 +4210,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->tids);
 	free(priv->rtids);
 	free(priv->wthrMutexes);
-	// free(priv->syncNumbers);
-	free(priv->sqlite_scratch);
+	free(priv->syncNumbers);
 	free(priv->actorIndexes);
 	free(priv->wmdb);
 	// free(priv->writeBufs);

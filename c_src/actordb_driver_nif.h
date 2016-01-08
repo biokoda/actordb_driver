@@ -87,7 +87,6 @@ struct priv_data
 	int prepSize;
 	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
 	char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
-	void *sqlite_scratch;
 };
 
 struct Wal {
