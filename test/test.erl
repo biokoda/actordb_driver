@@ -146,7 +146,6 @@ w(Db,Me,C,[Rand|T],L) ->
 		% _ when C rem 101 == 0, Me == 1 ->
 		% 	?debugFmt("Contention situations:~p",[actordb_driver:noop(Db)]);
 		_ ->
-		% _ ->
 			% Using static sql with parameterized queries cuts down on sql parsing
 			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
 			Sql = <<"#s00;">>,

@@ -27,7 +27,7 @@
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
-# define DBG(X, ...)  fprintf(g_log,"thr=%lld: " X "\r\n",(i64)pthread_self(),##__VA_ARGS__) ;fflush(g_log);
+# define DBG(X, ...)  fprintf(g_log,"thr=%lld: " X "\r\n",(i64)pthread_self(),##__VA_ARGS__) ;//fflush(g_log);
 #else
 # define DBG(X, ...)
 #endif

@@ -3906,7 +3906,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	db_thread *controlThread = NULL;
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
-	int flags;
+	int flags = 0;
 	// int scratchSize;
 // Apple/Win get smaller max dbsize because they are both fucked when it comes to mmap.
 // They are just dev platforms anyway.
@@ -4235,6 +4235,9 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			priv->prepSqls[i][j] = NULL;
 		}
 	}
+#ifdef _TESTDBG_
+	fclose(g_log);
+#endif
 	enif_mutex_destroy(priv->prepMutex);
 	free(priv->wtasks);
 	free(priv->rtasks);
