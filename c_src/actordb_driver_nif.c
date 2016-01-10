@@ -46,7 +46,8 @@ static __thread db_connection  *g_tsd_conn;
 static __thread mdbinf         *g_tsd_wmdb;
 static __thread u64             g_tsd_cursync;
 static priv_data               *g_pd;
-static int                      g_nbatch = 0;
+static int                      g_nbatch = 0;  // how many writes to batch together
+static u8                       g_transsync;   // if every transaction is a sync to disk
 static ErlNifResourceType *db_connection_type;
 static ErlNifResourceType *iterate_type;
 
@@ -101,7 +102,7 @@ static void lock_wtxn(int nEnv)
 		if (i > 1000000)
 			usleep(i / 100000);
 	}
-	DBG("lock wtxn %u",i);
+	// DBG("lock wtxn %u",i);
 	g_tsd_wmdb = &g_pd->wmdb[nEnv];
 	if (g_tsd_wmdb->txn == NULL)
 	{
@@ -111,7 +112,7 @@ static void lock_wtxn(int nEnv)
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 }
 
-static void unlock_write_txn(int nEnv, char *commit)
+static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 {
 	int i;
 
@@ -119,23 +120,28 @@ static void unlock_write_txn(int nEnv, char *commit)
 		return;
 
 	++g_tsd_wmdb->usageCount;
-	if (*commit || g_tsd_wmdb->usageCount > g_nbatch)
+	if (*commit || syncForce || g_tsd_wmdb->usageCount > g_nbatch)
 	{
 		if (mdb_txn_commit(g_tsd_wmdb->txn) != MDB_SUCCESS)
 			mdb_txn_abort(g_tsd_wmdb->txn);
 		g_tsd_wmdb->txn = NULL;
 		g_tsd_wmdb->usageCount = 0;
-		++g_pd->syncNumbers[nEnv];
+		
+		if (syncForce)
+			mdb_env_sync(g_tsd_wmdb->env,1);
+
+		if (g_transsync || syncForce)
+			++g_pd->syncNumbers[nEnv];
 		*commit = 1;
 	}
-	else
-		DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
+	// else
+	// 	DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
 
 	// Send a cmd_synced to all write threads if we executed commit.
 	// They must send back replies to ops.
-	if (*commit)
+	if (*commit && g_nbatch)
 	{
 		for (i = 0; i < g_pd->nWriteThreads; i++)
 		{
@@ -1578,21 +1584,13 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 
 static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
-	// mdbinf* const mdb = &thread->mdb;
-	// u64 curSync = atomic_load(&g_pd->syncNumbers[thread->nEnv]);
-	
-	// if (cmd->conn && cmd->conn->syncNum >= curSync)
-	// 	return atom_ok;
+	if (g_transsync || (cmd->conn && cmd->conn->syncNum < g_tsd_cursync))
+		return atom_ok;
 
-	// enif_mutex_lock(g_pd->wthrMutexes[thread->nEnv]);
-	// mdb_txn_commit(mdb->txn);
-	// mdb->txn = NULL;
-	// mdb_env_sync(mdb->env,1);
-	// enif_mutex_unlock(g_pd->wthrMutexes[thread->nEnv]);
+	if (!g_tsd_wmdb)
+		lock_wtxn(thread->nEnv);
 
-	// atomic_fetch_add(&g_pd->syncNumbers[thread->nEnv], 1);
-
-	return atom_ok;
+	return atom_false;
 }
 
 static ERL_NIF_TERM do_inject_page(db_command *cmd, db_thread *thread, ErlNifEnv *env)
@@ -2312,11 +2310,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 	}
 	else
 	{
-		// if (pagesPre != thread->pagesChanged)
-		// {
-		// 	// cmd->conn->syncNum = g_pd->syncNumbers[thread->nEnv];
-		// 	cmd->conn->syncNum = atomic_load_explicit(&g_pd->syncNumbers[thread->nEnv],memory_order_relaxed);
-		// }
+		if (pagesPre != thread->pagesChanged)
+		{
+			// cmd->conn->syncNum = g_pd->syncNumbers[thread->nEnv];
+			cmd->conn->syncNum = g_tsd_cursync;
+		}
 		track_time(13,thread);
 		return make_ok_tuple(env,results);
 	}
@@ -2784,7 +2782,6 @@ static void *read_thread_func(void *arg)
 {
 	db_thread* data   = (db_thread*)arg;
 	mdbinf* mdb 	  = &data->mdb;
-	u64 syncWaitingOn = 0;
 	qitem *itemsWaiting = NULL;
 	int rc;
 	g_tsd_cursync = 0;
@@ -2870,10 +2867,14 @@ static void *read_thread_func(void *arg)
 
 			if (g_tsd_wmdb != NULL)
 			{
+				char syncForce = (cmd->type == cmd_sync && cmd->answer == atom_false);
 				char commit = queue_size(data->tasks) == 0;
-				unlock_write_txn(data->nEnv, &commit);
+				unlock_write_txn(data->nEnv, syncForce, &commit);
 
-				if (syncWaitingOn < g_tsd_cursync && itemsWaiting)
+				if (syncForce)
+					cmd->answer = atom_ok;
+
+				if (commit && itemsWaiting)
 				{
 					respond_items(data, itemsWaiting);
 					itemsWaiting = NULL;
@@ -2886,7 +2887,6 @@ static void *read_thread_func(void *arg)
 				{
 					item->next = NULL;
 					itemsWaiting = item;
-					syncWaitingOn = g_tsd_cursync;
 				}
 				else
 				{
@@ -2901,6 +2901,12 @@ static void *read_thread_func(void *arg)
 
 			DBG("rthread=%d command done 2.",data->nThread);
 		}
+	}
+	if (!data->isreadonly)
+	{
+		char commit = 1;
+		lock_wtxn(data->nEnv);
+		unlock_write_txn(data->nEnv, 1, &commit);
 	}
 	DBG("rthread=%d stopping.",data->nThread);
 
@@ -3577,76 +3583,50 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 
 static ERL_NIF_TERM db_sync(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-	// db_connection *res;
-	// ErlNifPid pid;
-	// qitem *item;
-	// priv_data *pd = (priv_data*)enif_priv_data(env);
-	// db_command *cmd = NULL;
+	db_connection *res;
+	ErlNifPid pid;
+	qitem *item;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+	db_command *cmd = NULL;
 
 	DBG("db_sync");
 
 	if(argc != 3 && argc != 0)
 		return enif_make_badarg(env);
 
-	// if (argc == 3)
-	// {
-	// 	int nEnv;
-	// 	u64 curSync;
-	// 	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
-	// 		return enif_make_badarg(env);
-		// if(!enif_is_ref(env, argv[1]))
-		// 	return make_error_tuple(env, "invalid_ref");
-		// if(!enif_get_local_pid(env, argv[2], &pid))
-		// 	return make_error_tuple(env, "invalid_pid");
+	if (argc == 3)
+	{
+		if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+			return enif_make_badarg(env);
+		if(!enif_is_ref(env, argv[1]))
+			return make_error_tuple(env, "invalid_ref");
+		if(!enif_get_local_pid(env, argv[2], &pid))
+			return make_error_tuple(env, "invalid_pid");
 
-	// 	nEnv = res->wthreadind / pd->nWriteThreads;
-	// 	// if (enif_mutex_trylock(pd->thrMutexes[nEnv]) == 0)
-	// 	// {
-	// 	// 	if (res->syncNum < pd->syncNumbers[nEnv])
-	// 	// 	{
-	// 	// 		doit = 0;
-	// 	// 	}
-	// 	// 	enif_mutex_unlock(pd->thrMutexes[nEnv]);
-	// 	// }
-	// 	// else
-	// 	// {
-	// 	// 	return enif_make_atom(env,"again");
-	// 	// }
-	// 	curSync = atomic_load_explicit(&pd->syncNumbers[nEnv],memory_order_relaxed);
+		item = command_create(res->wthreadind, -1, pd);
+		cmd = (db_command*)item->cmd;
+		cmd->type = cmd_sync;
+		cmd->ref = enif_make_copy(item->env, argv[1]);
+		cmd->pid = pid;
+		cmd->conn = res;
+		enif_keep_resource(res);
 
-	// 	if (curSync > res->syncNum)
-	// 	{
-	// 		item = command_create(res->wthreadind, -1, pd);
-	// 		cmd = (db_command*)item->cmd;
-	// 		cmd->type = cmd_sync;
-	// 		cmd->ref = enif_make_copy(item->env, argv[1]);
-	// 		cmd->pid = pid;
-	// 		cmd->conn = res;
-	// 		enif_keep_resource(res);
+		enif_consume_timeslice(env,90);
+		return push_command(res->wthreadind, -1, pd, item);
+	}
+	else
+	{
+		int i;
+		for (i = 0; i < pd->nEnvs; i++)
+		{
+			item = command_create(i*pd->nWriteThreads,-1,pd);
+			cmd = (db_command*)item->cmd;
+			cmd->type = cmd_sync;
+			push_command(i*pd->nWriteThreads, -1, pd, item);
+		}
 
-	// 		enif_consume_timeslice(env,90);
-	// 		return push_command(res->wthreadind, -1, pd, item);
-	// 	}
-	// 	else
-	// 	{
-			// ERL_NIF_TERM answer = enif_make_tuple2(env, argv[1], atom_ok);
-			// enif_send(NULL, &pid, env, answer);
-			return atom_ok;
-	// 	}
-	// }
-	// else
-	// {
-	// 	int i;
-	// 	for (i = 0; i < pd->nEnvs; i++)
-	// 	{
-	// 		item = command_create(i*pd->nWriteThreads,-1,pd);
-	// 		cmd = (db_command*)item->cmd;
-	// 		cmd->type = cmd_sync;
-	// 		push_command(i*pd->nWriteThreads, -1, pd, item);
-	// 	}
-
-	// 	return atom_ok;
-	// }
+		return atom_ok;
+	}
 }
 
 static ERL_NIF_TERM checkpoint_lock(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -4020,9 +4000,15 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		if (!enif_get_int(env,value,&i))
 			return -1;
 		if (i == 0)
+		{
+			g_transsync = 0;
 			flags = MDB_NOSYNC;
+		}
 		else
+		{
 			flags = 0;
+			g_transsync = 1;
+		}
 	}
 
 	if (priv->nReadThreads > 255)

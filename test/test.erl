@@ -10,7 +10,7 @@
 	rthreads => ?READTHREADS,
 	wthreads => ?WRITETHREADS,
 	lmdbsync => 1,
-	nbatch => 20}).
+	nbatch => 10}).
 -define(INIT,actordb_driver:init(?CFG)).
 -define(READ,actordb_driver:exec_read).
 
@@ -18,16 +18,16 @@ run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
 	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
 	[
-	% fun lz4/0,
-	% fun modes/0,
-	% fun dbcopy/0,
-	% fun checkpoint/0,
-	% {timeout, 25, fun checkpoint1/0},
-	% fun bigtrans/0,
-	% fun bigtrans_check/0,
-	{timeout,25,fun async/0}
-	% fun problem_checkpoint/0,
-	% fun problem_rewind/0
+	fun lz4/0,
+	fun modes/0,
+	fun dbcopy/0,
+	fun checkpoint/0,
+	{timeout, 25, fun checkpoint1/0},
+	fun bigtrans/0,
+	fun bigtrans_check/0,
+	{timeout,25,fun async/0},
+	fun problem_checkpoint/0,
+	fun problem_rewind/0
 	% {timeout,25,fun open_test/0}
 	].
 
@@ -222,9 +222,14 @@ dbcopy() ->
 	ok = actordb_driver:term_store("original",10,<<"abcdef1">>,0),
 	EN = 100,
 	[ {ok,_} = actordb_driver:exec_script(["INSERT INTO tab VALUES (",integer_to_list(N+100),",'aaa',2)"],Db,infinity,1,N,<<>>) || N <- lists:seq(2,EN)],
-	0 = actordb_driver:fsync_num(Db),
-	ok = actordb_driver:fsync(Db),
-	0 = actordb_driver:fsync_num(Db),
+	case ?CFG of
+		#{lmdbsync := 1} ->
+			ok;
+		_ ->
+			0 = actordb_driver:fsync_num(Db),
+			ok = actordb_driver:fsync(Db),
+			0 = actordb_driver:fsync_num(Db)
+	end,
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (2,'bbb',3)",Db,infinity,1,EN+1,<<>>),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (3,'ccc',4)",Db,infinity,1,EN+2,<<>>),
 	ok = actordb_driver:replication_done(Db),
