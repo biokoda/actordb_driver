@@ -155,6 +155,7 @@ int main(int argc, const char* argv[])
 	char *lmpath = "lmdb";
 	MDB_txn *txn;
 	MDB_val key = {1,(void*)"?"}, data = {0,NULL};
+	MDB_envinfo stat;
 
 	sqlite3_initialize();
 	sqlite3_vfs_register(sqlite3_nullvfs(), 1);
@@ -211,6 +212,7 @@ int main(int argc, const char* argv[])
 	thr.mdb.pagesdb = pd.wmdb[0].pagesdb;
 	thr.maxvalsize = mdb_env_get_maxkeysize(mdb->env);
 	thr.resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/thr.maxvalsize + 1)*sizeof(MDB_val));
+	open_txn(&thr.mdb, MDB_RDONLY);
 
 	for (i = 0; i < NCONS; i++)
 	{
@@ -221,7 +223,6 @@ int main(int argc, const char* argv[])
 
 		pthread_mutex_init(&cons[i].wal.mtx, NULL);
 
-		open_txn(&thr.mdb, MDB_RDONLY);
 		thr.pagesChanged = 0;
 
 		rc = sqlite3_open(filename,&(cons[i].db));
@@ -248,6 +249,7 @@ int main(int argc, const char* argv[])
 		unlock_write_txn(thr.nEnv, 0, &commit);
 
 		mdb_txn_reset(thr.mdb.txn);
+
 		rc = mdb_txn_renew(thr.mdb.txn);
 		if (rc != MDB_SUCCESS)
 			break;
@@ -261,10 +263,11 @@ int main(int argc, const char* argv[])
 		if (rc != MDB_SUCCESS)
 			break;
 	}
-	mdb_cursor_close(thr.mdb.cursorLog);
-	mdb_cursor_close(thr.mdb.cursorPages);
-	mdb_cursor_close(thr.mdb.cursorInfo);
-	mdb_txn_abort(thr.mdb.txn);
+	// mdb_cursor_close(thr.mdb.cursorLog);
+	// mdb_cursor_close(thr.mdb.cursorPages);
+	// mdb_cursor_close(thr.mdb.cursorInfo);
+	// mdb_txn_abort(thr.mdb.txn);
+
 
 	// for (i = 0; i < RTHREADS; i++)
 	// {
@@ -296,7 +299,7 @@ int main(int argc, const char* argv[])
 			printf("%d\n",i);
 		g_tsd_conn = con;
 		lock_wtxn(thr.nEnv);
-		open_txn(&thr.mdb, MDB_RDONLY);
+
 		thr.pagesChanged = 0;
 
 		if (con->wal.firstCompleteEvnum+10 < con->wal.lastCompleteEvnum)
