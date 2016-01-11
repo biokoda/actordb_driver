@@ -265,6 +265,7 @@ int main(int argc, const char* argv[])
 	mdb_cursor_close(thr.mdb.cursorPages);
 	mdb_cursor_close(thr.mdb.cursorInfo);
 	mdb_txn_abort(thr.mdb.txn);
+
 	// for (i = 0; i < RTHREADS; i++)
 	// {
 	// 	threads[i].nEnv = 0;
@@ -298,9 +299,14 @@ int main(int argc, const char* argv[])
 		open_txn(&thr.mdb, MDB_RDONLY);
 		thr.pagesChanged = 0;
 
-		if (con->wal.firstCompleteEvnum < con->wal.lastCompleteEvnum-10)
+		if (con->wal.firstCompleteEvnum+10 < con->wal.lastCompleteEvnum)
 		{
-			checkpoint(&con->wal, con->wal.lastCompleteEvnum-10);
+			// printf("CHECKPOINT? %llu %llu\n",con->wal.firstCompleteEvnum,con->wal.lastCompleteEvnum);
+			if (checkpoint(&con->wal, con->wal.lastCompleteEvnum-10) != SQLITE_OK)
+			{
+				printf("Checkpoint failed\n");
+				break;
+			}
 		}
 		con->wal.inProgressTerm = 1;
 		con->wal.inProgressEvnum = con->wal.lastCompleteEvnum+1;
