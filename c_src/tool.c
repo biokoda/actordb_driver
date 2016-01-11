@@ -50,6 +50,7 @@ static __thread db_thread *g_tsd_thread;
 static __thread priv_data *g_tsd_pd;
 static __thread db_connection *g_tsd_conn;
 static __thread mdbinf *g_tsd_wmdb;
+priv_data *g_pd;
 #define enif_tsd_get pthread_getspecific
 
 static void lock_wtxn(int env){}
@@ -511,6 +512,7 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	thr.mdb.cursorLog = rd.cursorLog;
 	thr.mdb.cursorPages = rd.cursorPages;
 	thr.mdb.cursorInfo = rd.cursorInfo;
+	thr.isreadonly = 1;
 
 	// conn.wal.thread = &thr;
 	// conn.wal.rthread = &thr;
@@ -589,6 +591,10 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 int main(int argc, const char* argv[])
 {
 	g_log = stdout;
+	priv_data pd;
+	g_pd = &pd;
+
+	memset(&pd, 0,sizeof(priv_data));
 	// pthread_key_create(&g_tsd_thread, NULL);
 
 	if (argc >= 3 && strcmp(argv[1],"print") == 0)

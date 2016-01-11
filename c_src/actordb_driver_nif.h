@@ -95,6 +95,8 @@ struct Wal {
 	// on read thread.
 	#ifndef _TESTAPP_
 	ErlNifMutex *mtx;
+	#else
+	pthread_mutex_t mtx;
 	#endif
 	// #ifndef _WIN32
 	// pthread_t rthreadId;

@@ -1517,67 +1517,14 @@ static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread, ErlNifEnv 
 
 static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
-	MDB_val key = {0,NULL}, data = {0, NULL};
-	// priv_data *pd = thread->pd;
 	u64 index;
-	u64 topIndex;
 	char name[MAX_PATHNAME];
-	int offset = 0, cutoff = 0;
-	size_t nmLen;
-	mdbinf *mdb;
-	int rc;
 
 	enif_get_string(env,cmd->arg, name, sizeof(name), ERL_NIF_LATIN1);
 	enif_get_uint64(env,cmd->arg1,(ErlNifUInt64*)&(index));
 
-	if (!g_tsd_wmdb)
-		lock_wtxn(thread->nEnv);
-	mdb = g_tsd_wmdb;
-	if (!mdb)
-		return SQLITE_ERROR;
-
-	if (name[0] == '/')
-		offset = 1;
-	nmLen = strlen(name+offset);
-	if (name[offset+nmLen-1] == 'l' && name[offset+nmLen-2] == 'a' && 
-		name[offset+nmLen-3] == 'w' && name[offset+nmLen-4] == '-')
-		cutoff = 4;
-	
-	key.mv_size = nmLen-cutoff;
-	key.mv_data = (void*)(name+offset);
-	data.mv_size = sizeof(u64);
-	data.mv_data = (void*)&index;
-	DBG("Writing actors index for=%s",name);
-	if ((rc = mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0)) != MDB_SUCCESS)
-	{
-		DBG("Unable to write actor index!! %llu %d", index, rc);
+	if (register_actor(index, name) == SQLITE_ERROR)
 		return atom_false;
-	}
-
-	key.mv_size = 1;
-	key.mv_data = (void*)"?";
-
-	if (mdb_get(mdb->txn,mdb->actorsdb,&key,&data) == MDB_SUCCESS)
-		memcpy(&topIndex,data.mv_data,sizeof(u64));
-	else
-		topIndex = 0;
-
-	index++;
-	if (topIndex < index)
-	{
-		data.mv_size = sizeof(u64);
-		data.mv_data = (void*)&index;
-		
-		DBG("Writing ? index %lld",index);
-		if (mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0) != MDB_SUCCESS)
-		{
-			DBG("Unable to write ? index!! %llu", index);
-			return atom_false;
-		}
-	}
-
-	// thr->forceCommit = 1;
-	thread->pagesChanged++;
 
 	return atom_ok;
 }

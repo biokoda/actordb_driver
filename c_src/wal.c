@@ -51,6 +51,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 static u64 get8byte(u8* buf);
 static void put8byte(u8* buf, u64 num);
 static MDB_txn* open_txn(mdbinf *data, int flags);
+static int register_actor(u64 index, char *name);
 
 // 1. Figure out actor index, create one if it does not exist
 // 2. check info for evnum/evterm data
@@ -66,8 +67,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
 	MDB_txn *txn = mdb->txn;
-	int offset = 0, cutoff = 0;
-	size_t nmLen;
+	int offset = 0, cutoff = 0, nmLen = 0;
 
 	actorsdb = mdb->actorsdb;
 	infodb = mdb->infodb;
@@ -79,7 +79,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		zWalName[offset+nmLen-3] == 'w' && zWalName[offset+nmLen-4] == '-')
 		cutoff = 4;
 
-	DBG("Wal name=%s",zWalName);
+	DBG("Wal name=%s %lld",zWalName,(i64)txn);
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = nmLen-cutoff;
@@ -107,7 +107,19 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		push_command(conn->wthreadind, -1, g_pd, item);
 		
 		#else
-		return SQLITE_ERROR;
+		if (thr->isreadonly)
+		{
+			return SQLITE_ERROR;
+		}
+		else
+		{
+			char filename[MAX_PATHNAME];
+			sprintf(filename,"%.*s",(int)(nmLen-cutoff),zWalName+offset);
+			index = atomic_fetch_add_explicit(&g_pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
+			pWal->index = index;
+			if (register_actor(index, filename) != SQLITE_OK)
+				return SQLITE_ERROR;
+		}
 		#endif
 	}
 	// Actor exists, read evnum/evterm info
@@ -149,6 +161,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	}
 	else
 	{
+		DBG("Error open=%d",rc);
 		thr->forceCommit = 2;
 		return SQLITE_ERROR;
 	}
@@ -156,6 +169,67 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	conn->changed = 1;
 	if (ppWal != NULL)
 		(*ppWal) = pWal;
+	return SQLITE_OK;
+}
+
+int register_actor(u64 index, char *name)
+{
+	MDB_val key = {0,NULL}, data = {0, NULL};
+	int offset = 0, cutoff = 0, rc;
+	mdbinf *mdb;
+	size_t nmLen;
+	u64 topIndex;
+	db_thread *thread = g_tsd_thread;
+
+	DBG("REGISTER ACTOR");
+
+	if (!g_tsd_wmdb)
+		lock_wtxn(thread->nEnv);
+	mdb = g_tsd_wmdb;
+	if (!mdb)
+		return SQLITE_ERROR;
+
+	if (name[0] == '/')
+		offset = 1;
+	nmLen = strlen(name+offset);
+	if (name[offset+nmLen-1] == 'l' && name[offset+nmLen-2] == 'a' && 
+		name[offset+nmLen-3] == 'w' && name[offset+nmLen-4] == '-')
+		cutoff = 4;
+	
+	key.mv_size = nmLen-cutoff;
+	key.mv_data = (void*)(name+offset);
+	data.mv_size = sizeof(u64);
+	data.mv_data = (void*)&index;
+	DBG("Writing actors index for=%s",name);
+	if ((rc = mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0)) != MDB_SUCCESS)
+	{
+		DBG("Unable to write actor index!! %llu %d", index, rc);
+		return SQLITE_ERROR;
+	}
+
+	key.mv_size = 1;
+	key.mv_data = (void*)"?";
+
+	if (mdb_get(mdb->txn,mdb->actorsdb,&key,&data) == MDB_SUCCESS)
+		memcpy(&topIndex,data.mv_data,sizeof(u64));
+	else
+		topIndex = 0;
+
+	index++;
+	if (topIndex < index)
+	{
+		data.mv_size = sizeof(u64);
+		data.mv_data = (void*)&index;
+		
+		DBG("Writing ? index %lld",index);
+		if (mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0) != MDB_SUCCESS)
+		{
+			DBG("Unable to write ? index!! %llu", index);
+			return SQLITE_ERROR;
+		}
+	}
+
+	thread->pagesChanged++;
 	return SQLITE_OK;
 }
 
@@ -1411,14 +1485,14 @@ static MDB_txn* open_txn(mdbinf *data, int flags)
 {
 	if (mdb_txn_begin(data->env, NULL, flags, &data->txn) != MDB_SUCCESS)
 		return NULL;
-	if (mdb_dbi_open(data->txn, "info", MDB_INTEGERKEY, &data->infodb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "actors", 0, &data->actorsdb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "log", MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &data->logdb) != MDB_SUCCESS)
-		return NULL;
-	if (mdb_dbi_open(data->txn, "pages", MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
-		return NULL;
+	// if (mdb_dbi_open(data->txn, "info", MDB_INTEGERKEY, &data->infodb) != MDB_SUCCESS)
+	// 	return NULL;
+	// if (mdb_dbi_open(data->txn, "actors", 0, &data->actorsdb) != MDB_SUCCESS)
+	// 	return NULL;
+	// if (mdb_dbi_open(data->txn, "log", MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &data->logdb) != MDB_SUCCESS)
+	// 	return NULL;
+	// if (mdb_dbi_open(data->txn, "pages", MDB_DUPSORT, &data->pagesdb) != MDB_SUCCESS)
+	// 	return NULL;
 	if (mdb_set_compare(data->txn, data->logdb, logdb_cmp) != MDB_SUCCESS)
 		return NULL;
 	if (mdb_set_compare(data->txn, data->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
