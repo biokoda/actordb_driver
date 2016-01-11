@@ -68,7 +68,6 @@ struct priv_data
 	int nWriteThreads;
 	queue **wtasks;      // array of queues for every write thread + control thread
 	queue **rtasks;      // every environment has nReadThreads
-	// atomic_ullong *syncNumbers;
 	u64 *syncNumbers;
 	mdbinf *wmdb;
 

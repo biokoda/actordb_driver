@@ -2574,181 +2574,72 @@ static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 	return enif_make_tuple2(item->env, cmd->ref, answer);
 }
 
-
-static void thread_ex(db_thread *data, qitem *item)
+static void *ctrl_thread_func(void *arg)
 {
-	ERL_NIF_TERM res;
-	db_command *cmd = (db_command*)item->cmd;
-	mdbinf *mdb = &data->mdb;
-	DBG("thread=%d command=%d.",data->nThread,cmd->type);
-
-	res = evaluate_command(cmd,data,item->env);
-
-	DBG("thread=%d command done 1. pagesChanged=%d",data->nThread,data->pagesChanged);
-
-	if (data->forceCommit == 2)
-	{
-		DBG("Aborting transaction due to error!");
-		mdb_txn_abort(mdb->txn);
-		mdb->txn = NULL;
-		// if (open_txn(data,0) == NULL)
-		// 	break;
-		data->forceCommit = 0;
-	}
-	track_time(14,data);
-	if (data->forceCommit)
-	{
-		DBG("Commit transaction");
-		data->forceCommit = 0;
-		if (mdb_txn_commit(mdb->txn) != MDB_SUCCESS)
-			mdb_txn_abort(mdb->txn);
-		mdb->txn = NULL;
-	}
-	track_time(11,data);
-
-	if (cmd->ref != 0)
-	{
-		enif_send(NULL, &cmd->pid, item->env, make_answer(item, res));
-	}
-	enif_clear_env(item->env);
-
-	if (cmd->conn != NULL)
-	{
-		cmd->conn->dirty = 0;
-		enif_release_resource(cmd->conn);
-	}
-
-	DBG("thread=%d command done 2.",data->nThread);
-}
-
-static void *thread_func(void *arg)
-{
-	int chkCounter = 0, syncListSize = 0;
 	db_thread* data = (db_thread*)arg;
-	qitem *syncList = NULL;
-	mdbinf* mdb = &data->mdb;
-
 	// enif_tsd_set(g_tsd_thread, data);
 	g_tsd_thread = data;
-
 	data->isopen = 1;
-
-	if (mdb->env)
-	{
-		data->maxvalsize = mdb_env_get_maxkeysize(mdb->env);
-		DBG("Maxvalsize=%d",data->maxvalsize);
-		data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
-	}
 
 	while(1)
 	{
 		db_command *cmd;
+		ERL_NIF_TERM res;
 		qitem *item = queue_pop(data->tasks);
 		cmd = (db_command*)item->cmd;
-		track_flag(data,1);
-		track_time(0,data);
-		// track_time(100+queue_size(data->tasks),data);
+		// track_flag(data,1);
+		// track_time(0,data);
+
 		if (cmd->type == cmd_stop)
 		{
 			queue_recycle(data->tasks,item);
-			if (mdb->txn)
-			{
-				mdb_txn_commit(mdb->txn);
-				mdb_env_sync(mdb->env,1);
-				mdb_env_close(mdb->env);
-			}
 			break;
 		}
-		if (cmd->type == cmd_sync)
+
+		res = evaluate_command(cmd,data,item->env);
+
+		if (cmd->ref != 0)
 		{
-			if (syncList == NULL)
-				chkCounter = 0;
-
-			// Sync only when nothing else to do.
-			// So if sync item, check if there is anything else we could do first and put sync task in a list.
-			if (queue_size(data->tasks) != 0)
-			{
-				item->next = syncList;
-				syncList = item;
-				syncListSize++;
-				continue;
-			}
+			enif_send(NULL, &cmd->pid, item->env, make_answer(item, res));
 		}
-		chkCounter++;
-
-		if (mdb->env && mdb->txn == NULL)
+		enif_clear_env(item->env);
+		if (cmd->conn != NULL)
 		{
-			if (open_txn(mdb,0) == NULL)
-				break;
+			cmd->conn->dirty = 0;
+			enif_release_resource(cmd->conn);
 		}
-
-		thread_ex(data, item);
-		track_time(10,data);
-		track_flag(data,0);
-
-		// Execute list of syncs if:
-		// - we just did a sync
-		// - more than 100 requests went by since we started list
-		// - sync list size over 10 items
-		if (syncList != NULL &&
-			(queue_size(data->tasks) == 0 || chkCounter > 100 || syncListSize > 10 || cmd->type == cmd_sync))
-		{
-			if (mdb->txn == NULL)
-				open_txn(mdb,0);
-
-			while (syncList != NULL)
-			{
-				qitem *tmpItem;
-				thread_ex(data, syncList);
-				if (mdb->txn == NULL)
-					open_txn(mdb,0);
-
-				tmpItem = syncList->next;
-				queue_recycle(data->tasks,syncList);
-				syncList = tmpItem;
-			}
-			chkCounter = 0;
-			syncListSize = 0;
-		}
-		queue_recycle(data->tasks,item);
+		// thread_ex(data, item);
 	}
 	queue_destroy(data->tasks);
 	data->isopen = 0;
 
 	DBG("thread=%d stopping.",data->nThread);
 
-	if (data->fd)
-		close(data->fd);
-
 	if (data->control)
 	{
 		enif_free(data->control);
 		data->control = NULL;
 	}
-
 	if (data->columnSpace)
 		free(data->columnSpace);
+// #ifdef TRACK_TIME
+// 	{
+// 		mach_timebase_info_data_t info;
+// 		if (mach_timebase_info (&info) == KERN_SUCCESS)
+// 		{
+// 			u64 n;
+// 			FILE *tm = fopen("time.bin","wb");
 
-#ifdef TRACK_TIME
-	{
-		mach_timebase_info_data_t info;
-		if (mach_timebase_info (&info) == KERN_SUCCESS)
-		{
-			u64 n;
-			FILE *tm = fopen("time.bin","wb");
-
-			n = info.numer;
-			fwrite(&n,sizeof(n),1,tm);
-			n = info.denom;
-			fwrite(&n,sizeof(n),1,tm);
-			fwrite(data->timeBuf,data->timeBufPos, 1, tm);
-			fclose(tm);
-		}
-	}
-#endif
-
+// 			n = info.numer;
+// 			fwrite(&n,sizeof(n),1,tm);
+// 			n = info.denom;
+// 			fwrite(&n,sizeof(n),1,tm);
+// 			fwrite(data->timeBuf,data->timeBufPos, 1, tm);
+// 			fclose(tm);
+// 		}
+// 	}
+// #endif
 	free(data);
-
 	return NULL;
 }
 
@@ -2778,7 +2669,7 @@ static void respond_items(db_thread *data, qitem *itemsWaiting)
 	}
 }
 
-static void *read_thread_func(void *arg)
+static void *processing_thread_func(void *arg)
 {
 	db_thread* data   = (db_thread*)arg;
 	mdbinf* mdb 	  = &data->mdb;
@@ -4046,7 +3937,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nEnvs));
 
 	if(enif_thread_create("db_connection", &(priv->tids[priv->nEnvs*priv->nWriteThreads]),
-		thread_func, controlThread, NULL) != 0)
+		ctrl_thread_func, controlThread, NULL) != 0)
 	{
 		return -1;
 	}
@@ -4155,7 +4046,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 			if (k < priv->nWriteThreads)
 			{
-				if (enif_thread_create("wthr", &(priv->tids[i*priv->nWriteThreads+k]), read_thread_func, curThread, NULL) != 0)
+				if (enif_thread_create("wthr", &(priv->tids[i*priv->nWriteThreads+k]), processing_thread_func, curThread, NULL) != 0)
 				{
 					return -1;
 				}
@@ -4163,7 +4054,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			else
 			{
 				if (enif_thread_create("rthr", &(priv->rtids[i*priv->nReadThreads + (k - priv->nWriteThreads)]), 
-					read_thread_func, curThread, NULL) != 0)
+					processing_thread_func, curThread, NULL) != 0)
 				{
 					return -1;
 				}
