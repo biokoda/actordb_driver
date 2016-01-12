@@ -148,6 +148,8 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 			qitem *item;
 			db_command *cmd;
 			int thrind = nEnv*g_pd->nWriteThreads + i;
+			if (g_pd->wtasks[thrind] == NULL)
+				break;
 			item = command_create(thrind,-1, g_pd);
 			cmd = (db_command*)item->cmd;
 			cmd->type = cmd_synced;
@@ -2740,7 +2742,7 @@ static void *processing_thread_func(void *arg)
 			DBG("rthread=%d command done 2.",data->nThread);
 		}
 	}
-	if (!data->isreadonly)
+	if (!data->isreadonly && data->finish)
 	{
 		char commit = 1;
 		lock_wtxn(data->nEnv);
@@ -2757,9 +2759,7 @@ static void *processing_thread_func(void *arg)
 		data->control = NULL;
 	}
 
-	queue_destroy(data->tasks);
 	free(data);
-
 	return NULL;
 }
 
@@ -3966,7 +3966,11 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 			}
 
 			if (k == 0)
+			{
 				priv->wthrMutexes[i] = enif_mutex_create("envmutex");
+				curThread->finish = 1;
+			}
+
 			curThread->nEnv = i;
 			if (k < priv->nWriteThreads)
 				curThread->nThread = k;
@@ -4034,7 +4038,11 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			push_command(-1, i*priv->nEnvs + k, priv, item);
 		}
 		for (k = 0; k < priv->nReadThreads; k++)
+		{
 			enif_thread_join((ErlNifTid)priv->rtids[i*priv->nReadThreads + k],NULL);
+			queue_destroy(priv->rtasks[i*priv->nEnvs+k]);
+			priv->rtasks[i*priv->nEnvs+k] = NULL;
+		}
 
 		for (k = 0; k < priv->nWriteThreads; k++)
 		{
@@ -4044,8 +4052,12 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			push_command(i*priv->nEnvs + k,-1, priv, item);
 		}
 		for (k = 0; k < priv->nWriteThreads; k++)
+		{
 			enif_thread_join((ErlNifTid)priv->tids[i*priv->nWriteThreads+k],NULL);
-		
+			queue_destroy(priv->wtasks[i*priv->nEnvs+k]);
+			priv->wtasks[i*priv->nEnvs+k] = NULL;
+		}
+
 		enif_mutex_destroy(priv->wthrMutexes[i]);
 		// free(priv->writeBufs[i]);
 	}

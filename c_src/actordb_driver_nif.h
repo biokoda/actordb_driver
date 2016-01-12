@@ -175,6 +175,7 @@ struct db_thread
 	u8 forceCommit;
 	u8 isopen;
 	u8 isreadonly;
+	u8 finish;
 
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
