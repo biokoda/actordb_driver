@@ -105,19 +105,27 @@ static void *perform(void *arg)
 	mdbinf* mdb = &thr->mdb;
 
 	srand((u32)pthread_self());
-
+	open_txn(mdb, MDB_RDONLY);
 	thr->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/thr->maxvalsize + 1)*sizeof(MDB_val));
+	
 	for (i = 0; i < 1000*100; i++)
 	{
 		int j = rand() % NCONS;
+
+		if (i % 1000 == 0)
+			printf("r %lld %d\n",(i64)pthread_self(),i);
 
 		if (pthread_mutex_trylock(&g_cons[j].wal.mtx) != 0)
 			continue;
 
 		g_tsd_conn = &g_cons[j];
-		open_txn(&thr->mdb, MDB_RDONLY);
 
-		sqlite3_exec(g_cons[j].db,"SELECT max(id) FROM tab;",NULL,NULL,NULL);
+		rc = sqlite3_exec(g_cons[j].db,"SELECT max(id) FROM tab;",NULL,NULL,NULL);
+		if (rc != SQLITE_OK)
+		{
+			printf("Error select");
+			break;
+		}
 
 		pthread_mutex_unlock(&g_cons[j].wal.mtx);
 
@@ -125,16 +133,20 @@ static void *perform(void *arg)
 		rc = mdb_txn_renew(thr->mdb.txn);
 		if (rc != MDB_SUCCESS)
 			break;
-		rc = mdb_cursor_renew(thr->mdb.txn, mdb->cursorLog);
+		rc = mdb_cursor_renew(mdb->txn, mdb->cursorLog);
 		if (rc != MDB_SUCCESS)
 			break;
-		rc = mdb_cursor_renew(thr->mdb.txn, mdb->cursorPages);
+		rc = mdb_cursor_renew(mdb->txn, mdb->cursorPages);
 		if (rc != MDB_SUCCESS)
 			break;
-		rc = mdb_cursor_renew(thr->mdb.txn, mdb->cursorInfo);
+		rc = mdb_cursor_renew(mdb->txn, mdb->cursorInfo);
 		if (rc != MDB_SUCCESS)
 			break;
 	}
+	mdb_cursor_close(mdb->cursorLog);
+	mdb_cursor_close(mdb->cursorPages);
+	mdb_cursor_close(mdb->cursorInfo);
+	mdb_txn_abort(mdb->txn);
 	return NULL;
 }
 
@@ -269,18 +281,18 @@ int main(int argc, const char* argv[])
 	// mdb_txn_abort(thr.mdb.txn);
 
 
-	// for (i = 0; i < RTHREADS; i++)
-	// {
-	// 	threads[i].nEnv = 0;
-	// 	threads[i].isreadonly = 0;
-	// 	threads[i].mdb.env = menv;
-	// 	threads[i].mdb.infodb = pd.wmdb[0].infodb;
-	// 	threads[i].mdb.actorsdb = pd.wmdb[0].actorsdb;
-	// 	threads[i].mdb.logdb = pd.wmdb[0].logdb;
-	// 	threads[i].mdb.pagesdb = pd.wmdb[0].pagesdb;
-	// 	threads[i].maxvalsize = mdb_env_get_maxkeysize(mdb->env);
-	// 	pthread_create(&tids[i], NULL, perform, (void *)&threads[i]);
-	// }
+	for (i = 0; i < RTHREADS; i++)
+	{
+		threads[i].nEnv = 0;
+		threads[i].isreadonly = 0;
+		threads[i].mdb.env = menv;
+		threads[i].mdb.infodb = pd.wmdb[0].infodb;
+		threads[i].mdb.actorsdb = pd.wmdb[0].actorsdb;
+		threads[i].mdb.logdb = pd.wmdb[0].logdb;
+		threads[i].mdb.pagesdb = pd.wmdb[0].pagesdb;
+		threads[i].maxvalsize = mdb_env_get_maxkeysize(mdb->env);
+		pthread_create(&tids[i], NULL, perform, (void *)&threads[i]);
+	}
 
 	srand((u32)pthread_self() + time(NULL));
 	for (i = 0; i < 1000*200; i++)
@@ -296,7 +308,7 @@ int main(int argc, const char* argv[])
 		}
 
 		if (i % 1000 == 0)
-			printf("%d\n",i);
+			printf("w %d\n",i);
 		g_tsd_conn = con;
 		lock_wtxn(thr.nEnv);
 
