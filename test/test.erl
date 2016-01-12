@@ -119,7 +119,7 @@ async() ->
 	ets:insert(ops,{w,0}),
 	ets:insert(ops,{r,0}),
 	RandBytes = [base64:encode(crypto:rand_bytes(128)) || _ <- lists:seq(1,1000)],
-	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,100)],
+	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,200)],
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
 			exit(Reason)

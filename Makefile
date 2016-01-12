@@ -5,9 +5,9 @@ else
 endif
 
 ifeq ($(uname_S),Darwin)
-	NOERLCMD = gcc c_src/noerl.c c_src/mdb.c c_src/midl.c c_src/lz4.c  -D_TESTAPP_=1 -DMDB_MAXKEYSIZE=0 -DSQLITE_DEFAULT_PAGE_SIZE=4096 -DSQLITE_DEFAULT_WAL_AUTOCHECKPOINT=0 -g -o noerl
+	NOERLCMD = gcc c_src/noerl.c c_src/mdb.c c_src/midl.c c_src/lz4.c  -D_TESTAPP_=1 -DMDB_MAXKEYSIZE=0 -DSQLITE_DEFAULT_PAGE_SIZE=4096 -DSQLITE_DEFAULT_WAL_AUTOCHECKPOINT=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -g -o noerl
 else
-	NOERLCMD = gcc c_src/noerl.c c_src/mdb.c c_src/midl.c c_src/lz4.c  -D_TESTAPP_=1 -DMDB_MAXKEYSIZE=0 -DSQLITE_DEFAULT_PAGE_SIZE=4096 -DSQLITE_DEFAULT_WAL_AUTOCHECKPOINT=0 -g -lpthread -ldl -o noerl
+	NOERLCMD = gcc c_src/noerl.c c_src/mdb.c c_src/midl.c c_src/lz4.c  -D_TESTAPP_=1 -DMDB_MAXKEYSIZE=0 -DSQLITE_DEFAULT_PAGE_SIZE=4096 -DSQLITE_DEFAULT_WAL_AUTOCHECKPOINT=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -g -lpthread -ldl -o noerl
 endif
 
 all:
