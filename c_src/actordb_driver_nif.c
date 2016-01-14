@@ -109,8 +109,12 @@ static void lock_wtxn(int nEnv)
 
 	for (i = 0; enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0; ++i)
 	{
+		#ifdef _WIN32
+		Sleep(1);
+		#else
 		if (i > 1000000)
 			usleep(i / 100000);
+		#endif
 	}
 	// DBG("lock wtxn %u",i);
 	#if ATOMIC
