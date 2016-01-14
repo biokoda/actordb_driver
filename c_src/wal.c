@@ -59,10 +59,14 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 {
 	MDB_val key, data;
 	int rc;
-	// db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
-	// db_connection* const conn = enif_tsd_get(g_tsd_conn);
+
+	#if ATOMIC
 	db_thread *thr 		= g_tsd_thread;
 	db_connection *conn = g_tsd_conn;
+	#else
+	db_thread* thr 	  = enif_tsd_get(g_tsd_thread);
+	db_connection* conn = enif_tsd_get(g_tsd_conn);
+	#endif
 	mdbinf * const mdb 	= &thr->mdb;
 	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
@@ -99,7 +103,13 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		cmd = (db_command*)item->cmd;
 		cmd->type = cmd_actorsdb_add;
 
+		#if ATOMIC
 		index = atomic_fetch_add_explicit(&g_pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
+		#else
+		enif_mutex_lock(g_pd->actorIndexesMtx[thr->nEnv]);
+		index = g_pd->actorIndexes[thr->nEnv]++;
+		enif_mutex_unlock(g_pd->actorIndexesMtx[thr->nEnv]);
+		#endif
 		pWal->index = index;
 
 		cmd->arg = enif_make_string(item->env,zWalName,ERL_NIF_LATIN1);
@@ -113,12 +123,16 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		}
 		else
 		{
+			#if ATOMIC
 			char filename[MAX_PATHNAME];
 			sprintf(filename,"%.*s",(int)(nmLen-cutoff),zWalName+offset);
 			index = atomic_fetch_add_explicit(&g_pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
 			pWal->index = index;
 			if (register_actor(index, filename) != SQLITE_OK)
 				return SQLITE_ERROR;
+			#else
+			return SQLITE_ERROR;
+			#endif
 		}
 		#endif
 	}
@@ -179,13 +193,21 @@ int register_actor(u64 index, char *name)
 	mdbinf *mdb;
 	size_t nmLen;
 	u64 topIndex;
+	#if ATOMIC
 	db_thread *thread = g_tsd_thread;
+	#else
+	db_thread* thread = enif_tsd_get(g_tsd_thread);
+	#endif
 
 	DBG("REGISTER ACTOR");
 
 	if (!g_tsd_wmdb)
 		lock_wtxn(thread->nEnv);
+	#if ATOMIC
 	mdb = g_tsd_wmdb;
+	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -254,7 +276,11 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
 	// db_connection* const conn = enif_tsd_get(g_tsd_conn);
+	#if ATOMIC
 	db_connection* conn = g_tsd_conn;
+	#else
+	db_connection* conn = enif_tsd_get(g_tsd_conn);
+	#endif
 	*pChanged = conn->changed;
 	DBG("Begin read trans %d",*pChanged);
 	if (conn->changed)
@@ -270,7 +296,11 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
 	// db_thread * const thread = enif_tsd_get(g_tsd_thread);
+	#if ATOMIC
 	db_thread *thread = g_tsd_thread;
+	#else
+	db_thread* thread = enif_tsd_get(g_tsd_thread);
+	#endif
 	/*if (thr->isreadonly)
 	{
 		u64 readSafeEvnum, readSafeTerm;
@@ -303,7 +333,13 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 	mdbinf *mdb;
 
 	if (thr->pagesChanged)
+	{
+		#if ATOMIC
 		mdb = g_tsd_wmdb;
+		#else
+		mdb = enif_tsd_get(g_tsd_wmdb);
+		#endif
+	}
 	else
 		mdb = &thr->mdb;
 
@@ -396,7 +432,11 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
 	int result 			  = 0;
 	// db_thread * const thr = enif_tsd_get(g_tsd_thread);
+	#if ATOMIC
 	db_thread *thr = g_tsd_thread;
+	#else
+	db_thread* thr = enif_tsd_get(g_tsd_thread);
+	#endif
 
 	// #ifndef _WIN32
 	// if (pthread_equal(pthread_self(), pWal->rthreadId))
@@ -515,7 +555,11 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	#if ATOMIC
 	db_thread *thr 		 = g_tsd_thread;
+	#else
+	db_thread* thr = enif_tsd_get(g_tsd_thread);
+	#endif
 	mdbinf* const mdb 	 = &thr->mdb;
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
@@ -730,14 +774,22 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	mdbinf* mdb;
 	
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	#if ATOMIC
 	db_thread *thr 		 = g_tsd_thread;
+	#else
+	db_thread* thr = enif_tsd_get(g_tsd_thread);
+	#endif
 	int logop, mrc 		 = MDB_SUCCESS;
 	u8 somethingDeleted  = 0;
 	int allPagesDiff 	 = 0;
 
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
+	#if ATOMIC
 	mdb = g_tsd_wmdb;
+	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -887,7 +939,11 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	mdbinf *mdb;
 
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
+	#if ATOMIC
 	db_thread *thr = g_tsd_thread;
+	#else
+	db_thread* thr = enif_tsd_get(g_tsd_thread);
+	#endif
 	rc  = SQLITE_OK;
 
 	if (pWal->inProgressTerm == 0)
@@ -895,7 +951,11 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
+	#if ATOMIC
 	mdb = g_tsd_wmdb;
+	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -1011,13 +1071,20 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 {
 	MDB_val key = {0,NULL}, data = {0,NULL};
 	int rc;
-	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
-	db_thread *thr 		 = g_tsd_thread;
+	#if ATOMIC
+	db_thread *thr = g_tsd_thread;
+	#else
+	db_thread* thr = enif_tsd_get(g_tsd_thread);
+	#endif
 	mdbinf* mdb;
 
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
+	#if ATOMIC
 	mdb = g_tsd_wmdb;
+	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -1071,14 +1138,21 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	int rc;
 	mdbinf* mdb;
 	MDB_txn* txn;
-	// db_thread* const thr 	  = enif_tsd_get(g_tsd_thread);
+	#if ATOMIC
 	db_thread *thr      = g_tsd_thread;
-	// db_connection* const pCon = enif_tsd_get(g_tsd_conn);
 	db_connection* pCon	= g_tsd_conn;
+	#else
+	db_thread* thr = enif_tsd_get(g_tsd_thread);
+	db_connection* pCon = enif_tsd_get(g_tsd_conn);
+	#endif
 
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
+	#if ATOMIC
 	mdb = g_tsd_wmdb;
+	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	#endif
 	txn = mdb->txn;
 
 	if (!mdb)

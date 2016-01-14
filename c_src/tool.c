@@ -46,12 +46,21 @@
 #include "actordb_driver_nif.h"
 #include "lz4.h"
 
+#define enif_tsd_get pthread_getspecific
+#define ErlNifTSDKey pthread_key_t
+
+#if ATOMIC
 static __thread db_thread *g_tsd_thread;
 static __thread priv_data *g_tsd_pd;
 static __thread db_connection *g_tsd_conn;
 static __thread mdbinf *g_tsd_wmdb;
+#else
+static ErlNifTSDKey g_tsd_thread;
+static ErlNifTSDKey g_tsd_conn;
+static ErlNifTSDKey g_tsd_wmdb;
+static ErlNifTSDKey g_tsd_cursync;
+#endif
 priv_data *g_pd;
-#define enif_tsd_get pthread_getspecific
 
 static void lock_wtxn(int env){}
 
@@ -496,10 +505,13 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 		fprintf(stderr,"Unable to open source environment\n");
 		return -1;
 	}
+	#if ATOMIC
 	g_tsd_thread = &thr;
 	g_tsd_conn = &conn;
-	// pthread_setspecific(g_tsd_thread, &thr);
-	// pthread_setspecific(g_tsd_conn, &conn);
+	#else
+	pthread_setspecific(g_tsd_thread, &thr);
+	pthread_setspecific(g_tsd_conn, &conn);
+	#endif
 
 	thr.mdb.env = rd.menv;
 	thr.maxvalsize = mdb_env_get_maxkeysize(rd.menv);

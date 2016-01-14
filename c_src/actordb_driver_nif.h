@@ -93,8 +93,14 @@ struct priv_data
 	// For actorsdb, when opening a new actor
 	// do an atomic increment to get a unique index. Then send a write
 	// to write thread for it.
-	atomic_llong *actorIndexes;
-
+	#if ATOMIC
+	atomic_ullong *actorIndexes;
+	#else
+	#if  !_TESTAPP_
+	u64 *actorIndexes;
+	ErlNifMutex **actorIndexesMtx;
+	#endif
+	#endif
 	int prepSize;
 	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
 	char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];

@@ -39,12 +39,20 @@ static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p
 static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_data *pd, qitem *item);
 static void lock_wtxn(int env);
 
-// static ErlNifTSDKey g_tsd_thread;
+
 // static ErlNifTSDKey g_tsd_conn;
+#if ATOMIC
 static __thread db_thread      *g_tsd_thread;
 static __thread db_connection  *g_tsd_conn;
 static __thread mdbinf         *g_tsd_wmdb;
 static __thread u64             g_tsd_cursync;
+#else
+static ErlNifTSDKey g_tsd_thread;
+static ErlNifTSDKey g_tsd_conn;
+static ErlNifTSDKey g_tsd_wmdb;
+static ErlNifTSDKey g_tsd_cursync;
+#endif
+
 static priv_data               *g_pd;
 static int                      g_nbatch = 0;  // how many writes to batch together
 static u8                       g_transsync;   // if every transaction is a sync to disk
@@ -97,38 +105,62 @@ static ERL_NIF_TERM make_error_tuple(ErlNifEnv *env, const char *reason)
 static void lock_wtxn(int nEnv)
 {
 	u32 i;
+	mdbinf *wmdb = NULL;
+
 	for (i = 0; enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0; ++i)
 	{
 		if (i > 1000000)
 			usleep(i / 100000);
 	}
 	// DBG("lock wtxn %u",i);
+	#if ATOMIC
 	g_tsd_wmdb = &g_pd->wmdb[nEnv];
-	if (g_tsd_wmdb->txn == NULL)
+	#else
+	enif_tsd_set(g_tsd_wmdb, &g_pd->wmdb[nEnv]);
+	wmdb = &g_pd->wmdb[nEnv];
+	#endif
+	
+	if (wmdb->txn == NULL)
 	{
-		if (open_txn(g_tsd_wmdb, 0) == NULL)
+		if (open_txn(wmdb, 0) == NULL)
 			return;
 	}
+
+	#if ATOMIC
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
+	#else
+	{
+		u64 *cs = enif_tsd_get(g_tsd_cursync);
+		*cs = g_pd->syncNumbers[nEnv];
+	}
+	#endif
 }
 
 static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 {
 	int i;
+	mdbinf *wmdb = NULL;
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
 		return;
+	wmdb = g_tsd_wmdb;
+	#else
+	wmdb = enif_tsd_get(g_tsd_wmdb);
+	if (!wmdb)
+		return;
+	#endif
 
-	++g_tsd_wmdb->usageCount;
-	if (*commit || syncForce || g_tsd_wmdb->usageCount > g_nbatch)
+	++wmdb->usageCount;
+	if (*commit || syncForce || wmdb->usageCount > g_nbatch)
 	{
-		if (mdb_txn_commit(g_tsd_wmdb->txn) != MDB_SUCCESS)
-			mdb_txn_abort(g_tsd_wmdb->txn);
-		g_tsd_wmdb->txn = NULL;
-		g_tsd_wmdb->usageCount = 0;
+		if (mdb_txn_commit(wmdb->txn) != MDB_SUCCESS)
+			mdb_txn_abort(wmdb->txn);
+		wmdb->txn = NULL;
+		wmdb->usageCount = 0;
 		
 		if (syncForce)
-			mdb_env_sync(g_tsd_wmdb->env,1);
+			mdb_env_sync(wmdb->env,1);
 
 		if (g_transsync || syncForce)
 			++g_pd->syncNumbers[nEnv];
@@ -136,8 +168,16 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 	}
 	// else
 	// 	DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
+	#if ATOMIC
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
+	#else
+	{
+		u64 *cs = enif_tsd_get(g_tsd_cursync);
+		*cs = g_pd->syncNumbers[nEnv];
+		enif_tsd_set(g_tsd_wmdb, NULL);
+	}
+	#endif
 
 	// Send a cmd_synced to all write threads if we executed commit.
 	// They must send back replies to ops.
@@ -162,8 +202,11 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 {
 	db_thread *thread = (db_thread *) data;
-	// db_connection *conn = enif_tsd_get(g_tsd_conn);
+	#if ATOMIC
 	db_connection *conn = g_tsd_conn;
+	#else
+	db_connection *conn = enif_tsd_get(g_tsd_conn);
+	#endif
 	int i = 0;
 	int completeSize = 0;
 #ifndef  _WIN32
@@ -704,8 +747,13 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	track_time(22,thread);
 	cmd->conn = conn;
 	// thread->curConn = cmd->conn;
-	// enif_tsd_set(g_tsd_conn, cmd->conn);
+	
+	#if ATOMIC
 	g_tsd_conn = cmd->conn;
+	#else
+	enif_tsd_set(g_tsd_conn, cmd->conn);
+	#endif
+
 	conn->db = db;
 	if (thread->isreadonly)
 	{
@@ -1141,7 +1189,11 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
+	#if ATOMIC
 	mdb = g_tsd_wmdb;
+	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -1388,15 +1440,20 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv 
 		memset(&con, 0, sizeof(db_connection));
 		memset(pth, 0, MAX_PATHNAME);
 		memcpy(pth, name.data, name.size);
-		// thread->curConn = &con;
-		// enif_tsd_set(g_tsd_conn, &con);
+		#if ATOMIC
 		g_tsd_conn = &con;
+		#else
+		enif_tsd_set(g_tsd_conn, &con);
+		#endif
 		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL);
 		// con.wal.thread = thread;
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
 		// thread->curConn = NULL;
-		// enif_tsd_set(g_tsd_conn, NULL);
+		#if ATOMIC
 		g_tsd_conn = NULL;
+		#else
+		enif_tsd_set(g_tsd_conn, NULL);
+		#endif
 	}
 	return atom_ok;
 }
@@ -2392,8 +2449,11 @@ static ERL_NIF_TERM do_checkpoint_lock(db_command *cmd,db_thread *thread, ErlNif
 static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	// thread->curConn = cmd->conn;
-	// enif_tsd_set(g_tsd_conn, cmd->conn);
+	#if ATOMIC
 	g_tsd_conn = cmd->conn;
+	#else
+	enif_tsd_set(g_tsd_conn, cmd->conn);
+	#endif
 
 	switch(cmd->type)
 	{
@@ -2526,8 +2586,11 @@ static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 static void *ctrl_thread_func(void *arg)
 {
 	db_thread* data = (db_thread*)arg;
-	// enif_tsd_set(g_tsd_thread, data);
+	#if ATOMIC
 	g_tsd_thread = data;
+	#else
+	enif_tsd_set(g_tsd_thread, data);
+	#endif
 	data->isopen = 1;
 
 	while(1)
@@ -2624,13 +2687,20 @@ static void *processing_thread_func(void *arg)
 	mdbinf* mdb 	  = &data->mdb;
 	qitem *itemsWaiting = NULL;
 	int rc;
+	#if ATOMIC
 	g_tsd_cursync = 0;
 	g_tsd_conn    = NULL;
 	g_tsd_wmdb    = NULL;
 	g_tsd_thread  = data;
+	#else
+	u64 cursync = 0;
+	enif_tsd_set(g_tsd_thread, data);
+	enif_tsd_set(g_tsd_cursync, &cursync);
+	enif_tsd_set(g_tsd_conn, NULL);
+	enif_tsd_set(g_tsd_wmdb, NULL);
+	#endif
 
 	data->isopen = 1;
-	// enif_tsd_set(g_tsd_thread, data);
 
 	data->maxvalsize = mdb_env_get_maxkeysize(mdb->env);
 	data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
@@ -2705,7 +2775,11 @@ static void *processing_thread_func(void *arg)
 				itemsWaiting = NULL;
 			}
 
+			#if ATOMIC
 			if (g_tsd_wmdb != NULL)
+			#else
+			if (enif_tsd_get(g_tsd_wmdb) != NULL)
+			#endif
 			{
 				char syncForce = (cmd->type == cmd_sync && cmd->answer == atom_false);
 				char commit = queue_size(data->tasks) == 0;
@@ -3864,7 +3938,12 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	if(!iterate_type)
 		return -1;
 
-	priv->actorIndexes = malloc(sizeof(atomic_llong)*priv->nEnvs);
+	#if ATOMIC
+	priv->actorIndexes = malloc(sizeof(atomic_ullong)*priv->nEnvs);
+	#else
+	priv->actorIndexes = malloc(sizeof(u64)*priv->nEnvs);
+	priv->actorIndexesMtx = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
+	#endif
 	priv->wtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nWriteThreads+1));
 	priv->rtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nReadThreads));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nWriteThreads+1));
@@ -3953,7 +4032,12 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 				if (rc == MDB_SUCCESS)
 					memcpy(&index,data.mv_data,sizeof(u64));
 
+				#if ATOMIC
 				atomic_init(&priv->actorIndexes[i],index);
+				#else
+				priv->actorIndexes[i] = index;
+				priv->actorIndexesMtx[i] = enif_mutex_create("aindexes");
+				#endif
 
 				if (mdb_txn_commit(txn) != MDB_SUCCESS)
 					return -1;
@@ -4059,6 +4143,9 @@ static void on_unload(ErlNifEnv* env, void* pd)
 		}
 
 		enif_mutex_destroy(priv->wthrMutexes[i]);
+		#if !ATOMIC
+		enif_mutex_destroy(priv->actorIndexesMtx[i]);
+		#endif
 		// free(priv->writeBufs[i]);
 	}
 	enif_thread_join((ErlNifTid)priv->tids[priv->nEnvs * priv->nWriteThreads],NULL);
@@ -4082,6 +4169,9 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->wthrMutexes);
 	free(priv->syncNumbers);
 	free(priv->actorIndexes);
+	#if !ATOMIC
+	free(priv->actorIndexesMtx);
+	#endif
 	free(priv->wmdb);
 	// free(priv->writeBufs);
 	// free(priv->sqlite_pgcache);
