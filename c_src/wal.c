@@ -1509,3 +1509,8 @@ static MDB_txn* open_txn(mdbinf *data, int flags)
 
 	return data->txn;
 }
+
+sqlite3_file *sqlite3WalFile(Wal *pWal)
+{
+	return NULL;
+}
