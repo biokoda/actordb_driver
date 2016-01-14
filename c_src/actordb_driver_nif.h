@@ -7,6 +7,17 @@
 #ifndef _TESTAPP_
 #include "erl_nif.h"
 #endif
+
+#if defined(_WIN32)
+#define ATOMIC 0
+#else
+#if !__has_extension(c_atomic)
+#define ATOMIC 0
+#else
+#define ATOMIC 1
+#endif
+#endif
+
 #define MAX_ATOM_LENGTH 255
 #define MAX_PATHNAME 512
 #define PAGE_BUFF_SIZE 4300
@@ -17,13 +28,14 @@
 #define MAX_ACTOR_NAME 92
 
 #include "queue.h"
-#include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <fcntl.h>
 // #define TRACK_TIME 1
-
+#if ATOMIC
+#include <stdatomic.h>
+#endif
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
