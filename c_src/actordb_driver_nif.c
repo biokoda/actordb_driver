@@ -118,7 +118,7 @@ static void lock_wtxn(int nEnv)
 	}
 	// DBG("lock wtxn %u",i);
 	#if ATOMIC
-	g_tsd_wmdb = &g_pd->wmdb[nEnv];
+	wmdb = g_tsd_wmdb = &g_pd->wmdb[nEnv];
 	#else
 	enif_tsd_set(g_tsd_wmdb, &g_pd->wmdb[nEnv]);
 	wmdb = &g_pd->wmdb[nEnv];
@@ -3974,8 +3974,8 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 
 	priv->prepMutex = enif_mutex_create("prepmutex");
 
-	DBG("Driver starting, paths=%d, threads (w=%d, r=%d). Dbsize %llu, nbatch=%d, tsy=%d",
-		priv->nEnvs,priv->nWriteThreads,priv->nReadThreads,dbsize,g_nbatch,(int)g_transsync);
+	DBG("Driver starting, paths=%d, threads (w=%d, r=%d). Dbsize %llu, nbatch=%d, tsy=%d, atomic=%d",
+		priv->nEnvs,priv->nWriteThreads,priv->nReadThreads,dbsize,g_nbatch,(int)g_transsync,ATOMIC);
 
 	for (i = 0; i < priv->nEnvs; i++)
 	{
