@@ -743,7 +743,7 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 			return result;
 		}
 	}
-	
+
 	conn = enif_alloc_resource(db_connection_type, sizeof(db_connection));
 	if(!conn)
 	{
@@ -1195,11 +1195,14 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 	if (limitEvnum > pWal->lastCompleteEvnum)
 		return atom_ok;
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
-	#if ATOMIC
 	mdb = g_tsd_wmdb;
 	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	if (!mdb)
+		lock_wtxn(thr->nEnv);
 	mdb = enif_tsd_get(g_tsd_wmdb);
 	#endif
 	if (!mdb)
@@ -1598,10 +1601,19 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 
 static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
+	#if !ATOMIC
+	u64 *cs = enif_tsd_get(g_tsd_cursync);
+	if (g_transsync || (cmd->conn && cmd->conn->syncNum < *cs))
+	#else
 	if (g_transsync || (cmd->conn && cmd->conn->syncNum < g_tsd_cursync))
+	#endif
 		return atom_ok;
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
+	#else
+	if (!enif_tsd_get(g_tsd_wmdb))
+	#endif
 		lock_wtxn(thread->nEnv);
 
 	return atom_false;
@@ -2327,7 +2339,11 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 		if (pagesPre != thread->pagesChanged)
 		{
 			// cmd->conn->syncNum = g_pd->syncNumbers[thread->nEnv];
+			#if !ATOMIC
+				cmd->conn->syncNum = *(u64*)enif_tsd_get(g_tsd_cursync);
+			#else
 			cmd->conn->syncNum = g_tsd_cursync;
+			#endif
 		}
 		track_time(13,thread);
 		return make_ok_tuple(env,results);
@@ -2733,7 +2749,7 @@ static void *processing_thread_func(void *arg)
 		{
 			if (!mdb->txn)
 			{
-				DBG("Open read transaction");
+				DBG("Open read transaction %u",mdb->actorsdb);
 				if (open_txn(mdb, MDB_RDONLY) == NULL)
 				{
 					ERL_NIF_TERM errterm;
@@ -3844,8 +3860,12 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	// second will crash the server because it will try to access a Wal structure that is dealocated.
 	// There is no reason to have more than 1 connection per actor.
 	// sqlite3_enable_shared_cache(1);
-	// enif_tsd_key_create("threaddata",&g_tsd_thread);
-	// enif_tsd_key_create("curconn",&g_tsd_conn);
+	#if !ATOMIC
+	enif_tsd_key_create("threaddata",&g_tsd_thread);
+	enif_tsd_key_create("curconn",&g_tsd_conn);
+	enif_tsd_key_create("wmdb",&g_tsd_wmdb);
+	enif_tsd_key_create("cursync",&g_tsd_cursync);
+	#endif
 
 	atom_false = enif_make_atom(env,"false");
 	atom_ok = enif_make_atom(env,"ok");
@@ -4178,6 +4198,10 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->syncNumbers);
 	free(priv->actorIndexes);
 	#if !ATOMIC
+	enif_tsd_key_destroy(g_tsd_thread);
+	enif_tsd_key_destroy(g_tsd_conn);
+	enif_tsd_key_destroy(g_tsd_wmdb);
+	enif_tsd_key_destroy(g_tsd_cursync);
 	free(priv->actorIndexesMtx);
 	#endif
 	free(priv->wmdb);

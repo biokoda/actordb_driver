@@ -83,7 +83,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		zWalName[offset+nmLen-3] == 'w' && zWalName[offset+nmLen-4] == '-')
 		cutoff = 4;
 
-	DBG("Wal name=%s %lld",zWalName,(i64)txn);
+	DBG("Wal name=%s %lld %u",zWalName,(i64)txn,(u32)actorsdb);
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = nmLen-cutoff;
@@ -201,11 +201,14 @@ int register_actor(u64 index, char *name)
 
 	DBG("REGISTER ACTOR");
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thread->nEnv);
-	#if ATOMIC
 	mdb = g_tsd_wmdb;
 	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	if (!mdb)
+		lock_wtxn(thread->nEnv);
 	mdb = enif_tsd_get(g_tsd_wmdb);
 	#endif
 	if (!mdb)
@@ -783,11 +786,14 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	u8 somethingDeleted  = 0;
 	int allPagesDiff 	 = 0;
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
-	#if ATOMIC
 	mdb = g_tsd_wmdb;
 	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	if (!mdb)
+		lock_wtxn(thr->nEnv);
 	mdb = enif_tsd_get(g_tsd_wmdb);
 	#endif
 	if (!mdb)
@@ -949,11 +955,14 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	if (pWal->inProgressTerm == 0)
 		return SQLITE_OK;
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
-	#if ATOMIC
 	mdb = g_tsd_wmdb;
 	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	if (!mdb)
+		lock_wtxn(thr->nEnv);
 	mdb = enif_tsd_get(g_tsd_wmdb);
 	#endif
 	if (!mdb)
@@ -1078,11 +1087,14 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 	#endif
 	mdbinf* mdb;
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
-	#if ATOMIC
 	mdb = g_tsd_wmdb;
 	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	if (!mdb)
+		lock_wtxn(thr->nEnv);
 	mdb = enif_tsd_get(g_tsd_wmdb);
 	#endif
 	if (!mdb)
@@ -1146,11 +1158,14 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	db_connection* pCon = enif_tsd_get(g_tsd_conn);
 	#endif
 
+	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
-	#if ATOMIC
 	mdb = g_tsd_wmdb;
 	#else
+	mdb = enif_tsd_get(g_tsd_wmdb);
+	if (!mdb)
+		lock_wtxn(thr->nEnv);
 	mdb = enif_tsd_get(g_tsd_wmdb);
 	#endif
 	txn = mdb->txn;
