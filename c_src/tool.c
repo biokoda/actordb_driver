@@ -46,8 +46,13 @@
 #include "actordb_driver_nif.h"
 #include "lz4.h"
 
+#ifdef _WIN32
+#define enif_tsd_get TlsGetValue
+#define ErlNifTSDKey DWORD
+#else
 #define enif_tsd_get pthread_getspecific
 #define ErlNifTSDKey pthread_key_t
+#endif
 
 #if ATOMIC
 static __thread db_thread *g_tsd_thread;
@@ -190,8 +195,8 @@ static int do_print(const char *pth, int what)
 		{
 			u64 index, term, num;
 			memcpy(&index, key.mv_data,                 sizeof(u64));
-			memcpy(&term,  key.mv_data + sizeof(u64),   sizeof(u64));
-			memcpy(&num,   key.mv_data + sizeof(u64)*2, sizeof(u64));
+			memcpy(&term,  (u8*)key.mv_data + sizeof(u64),   sizeof(u64));
+			memcpy(&num,   (u8*)key.mv_data + sizeof(u64)*2, sizeof(u64));
 			printf("logdb: actor=%llu, term=%llu, evnum=%llu\n",index, term,num);
 
 			op = MDB_FIRST_DUP;
@@ -217,7 +222,7 @@ static int do_print(const char *pth, int what)
 			size_t ndupl;
 
 			memcpy(&index, key.mv_data, sizeof(u64));
-			memcpy(&pgno, key.mv_data + sizeof(u64), sizeof(u32));
+			memcpy(&pgno, (u8*)key.mv_data + sizeof(u64), sizeof(u32));
 
 			printf("pagesdb: actor=%llu, pgno=%u\n",index, pgno);
 
@@ -229,8 +234,8 @@ static int do_print(const char *pth, int what)
 				u64 term,num;
 				u8 frag;
 				memcpy(&term, data.mv_data,               sizeof(u64));
-				memcpy(&num,  data.mv_data + sizeof(u64), sizeof(u64));
-				frag = *(u8*)(data.mv_data + sizeof(u64)*2);
+				memcpy(&num,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
+				frag = *(u8*)((u8*)data.mv_data + sizeof(u64)*2);
 				printf("  evterm=%lld, evnum=%lld, frag=%d, pgsize=%ld\n",term,num,(int)frag,data.mv_size-sizeof(u64)*2-1);
 
 				op = MDB_NEXT_DUP;
@@ -254,14 +259,14 @@ static int do_print(const char *pth, int what)
 
 			memcpy(&index, key.mv_data, sizeof(u64));
 			v = *(u8*)(data.mv_data);
-			memcpy(&fTerm,  data.mv_data+1,               sizeof(u64));
-			memcpy(&fEvnum, data.mv_data+1+sizeof(u64),   sizeof(u64));
-			memcpy(&lTerm,  data.mv_data+1+sizeof(u64)*2, sizeof(u64));
-			memcpy(&lEvnum, data.mv_data+1+sizeof(u64)*3, sizeof(u64));
-			memcpy(&iTerm,  data.mv_data+1+sizeof(u64)*4, sizeof(u64));
-			memcpy(&iEvnum, data.mv_data+1+sizeof(u64)*5, sizeof(u64));
-			memcpy(&mxPage, data.mv_data+1+sizeof(u64)*6, sizeof(u32));
-			memcpy(&allPages, data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
+			memcpy(&fTerm,  (u8*)data.mv_data+1,               sizeof(u64));
+			memcpy(&fEvnum, (u8*)data.mv_data+1+sizeof(u64),   sizeof(u64));
+			memcpy(&lTerm,  (u8*)data.mv_data+1+sizeof(u64)*2, sizeof(u64));
+			memcpy(&lEvnum, (u8*)data.mv_data+1+sizeof(u64)*3, sizeof(u64));
+			memcpy(&iTerm,  (u8*)data.mv_data+1+sizeof(u64)*4, sizeof(u64));
+			memcpy(&iEvnum, (u8*)data.mv_data+1+sizeof(u64)*5, sizeof(u64));
+			memcpy(&mxPage, (u8*)data.mv_data+1+sizeof(u64)*6, sizeof(u32));
+			memcpy(&allPages, (u8*)data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
 
 			printf("actor=%llu, firstTerm=%llu, firstEvnum=%llu, lastTerm=%llu, lastEvnum=%llu,"
 			"inprogTerm=%llu, inprogEvnum=%llu, mxPage=%u, allPages=%u\n",
@@ -283,7 +288,11 @@ static int do_backup(const char *src, const char *dst)
 	MDB_val key, data;
 	lmdb rd, wr;
 	int rc;
+	int flags = 0;
 
+	#ifdef _WIN32
+	flags = MDB_CP_COMPACT;
+	#endif
 // #ifdef SIGPIPE
 // 	signal(SIGPIPE, sighandle);
 // #endif
@@ -309,7 +318,7 @@ static int do_backup(const char *src, const char *dst)
 		if (strcmp(dst, "-") == 0)
 			rc = mdb_env_copyfd(rd.menv, 1);
 		else
-			rc = mdb_env_copy2(rd.menv, dst, 0);
+			rc = mdb_env_copy2(rd.menv, dst, flags);
 		if (rc != 0)
 			fprintf(stderr,"Backup failed %s\n",strerror(rc));
 		// goto bckp_done;
@@ -509,8 +518,13 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	g_tsd_thread = &thr;
 	g_tsd_conn = &conn;
 	#else
+	#ifdef _WIN32
+	TlsSetValue(g_tsd_thread, &thr);
+	TlsSetValue(g_tsd_thread, &conn);
+	#else
 	pthread_setspecific(g_tsd_thread, &thr);
 	pthread_setspecific(g_tsd_conn, &conn);
+	#endif
 	#endif
 
 	thr.mdb.env = rd.menv;
@@ -602,8 +616,8 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 
 int main(int argc, const char* argv[])
 {
-	g_log = stdout;
 	priv_data pd;
+	g_log = stdout;
 	g_pd = &pd;
 
 	memset(&pd, 0,sizeof(priv_data));

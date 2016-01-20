@@ -171,7 +171,7 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 		*commit = 1;
 	}
 	// else
-	// 	DBG("UNLOCK %u",g_tsd_wmdb->usageCount);
+	// 	DBG("UNLOCK %u",wmdb->usageCount);
 	#if ATOMIC
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
@@ -746,10 +746,14 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	
 	conn = enif_alloc_resource(db_connection_type, sizeof(db_connection));
 	if(!conn)
+	{
 		return make_error_tuple(env, "no_memory");
+	}
 	memset(conn,0,sizeof(db_connection));
+
 	track_time(22,thread);
 	cmd->conn = conn;
+
 	// thread->curConn = cmd->conn;
 	
 	#if ATOMIC

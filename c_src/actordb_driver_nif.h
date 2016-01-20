@@ -39,7 +39,11 @@
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
+#ifndef _WIN32
 # define DBG(X, ...)  fprintf(g_log,"thr=%lld: " X "\r\n",(i64)pthread_self(),##__VA_ARGS__) ;//fflush(g_log);
+#else
+# define DBG(X, ...)  fprintf(g_log, X "\r\n",##__VA_ARGS__) ;fflush(g_log);
+#endif
 #else
 # define DBG(X, ...)
 #endif
@@ -112,9 +116,7 @@ struct Wal {
 	// for access to readSafeXXX values. They are set on write/scheduler thread and read
 	// on read thread.
 	#ifndef _TESTAPP_
-	ErlNifMutex *mtx;
-	#else
-	pthread_mutex_t mtx;
+	ErlNifMutex* mtx;
 	#endif
 	// #ifndef _WIN32
 	// pthread_t rthreadId;
