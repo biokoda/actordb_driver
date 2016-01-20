@@ -2749,7 +2749,7 @@ static void *processing_thread_func(void *arg)
 		{
 			if (!mdb->txn)
 			{
-				DBG("Open read transaction %u",mdb->actorsdb);
+				DBG("Open read transaction");
 				if (open_txn(mdb, MDB_RDONLY) == NULL)
 				{
 					ERL_NIF_TERM errterm;

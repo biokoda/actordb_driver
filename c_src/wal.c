@@ -83,7 +83,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		zWalName[offset+nmLen-3] == 'w' && zWalName[offset+nmLen-4] == '-')
 		cutoff = 4;
 
-	DBG("Wal name=%s %lld %u",zWalName,(i64)txn,(u32)actorsdb);
+	DBG("Wal name=%s %lld",zWalName,(i64)txn);
 
 	// shorten size to ignore "-wal" at the end
 	key.mv_size = nmLen-cutoff;
