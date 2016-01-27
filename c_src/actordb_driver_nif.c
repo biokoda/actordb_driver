@@ -3843,10 +3843,10 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 // Apple/Win get smaller max dbsize because they are both fucked when it comes to mmap.
 // They are just dev platforms anyway.
 #if defined(__APPLE__) || defined(_WIN32)
-	u64 dbsize = 4096*1024*1024LL;
+	u64 dbsize = 4096LL*1024LL*1024LL;
 #else
 	// 1TB def size on linux
-	u64 dbsize = 4096*1024*1024*128*2LL;
+	u64 dbsize = 1099511627776LL;
 #endif
 
 #ifdef _WIN32
