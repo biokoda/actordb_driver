@@ -783,7 +783,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	db_thread* thr = enif_tsd_get(g_tsd_thread);
 	#endif
 	int logop, mrc 		 = MDB_SUCCESS;
-	u8 somethingDeleted  = 0;
+	// u8 somethingDeleted  = 0;
 	int allPagesDiff 	 = 0;
 
 	#if ATOMIC
@@ -828,7 +828,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		while ((mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
 		{
 			u32 pgno;
-			size_t ndupl, nduplorig;
+			size_t ndupl;
 			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 			MDB_val pgKey = {0,NULL}, pgVal = {0,NULL};
 			u64 pgnoLimitEvnum;
@@ -848,7 +848,6 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 				continue;
 			}
 			mdb_cursor_count(mdb->cursorPages,&ndupl);
-			nduplorig = ndupl;
 
 			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) == MDB_SUCCESS)
 				memcpy(&pgnoLimitEvnum,  (u8*)pgVal.mv_data+sizeof(u64),sizeof(u64));
@@ -881,11 +880,11 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 						DBG("Unable to delete page on cursor!.");
 						break;
 					}
-					else
-					{
-						DBG("Deleted page!");
-						somethingDeleted = 1;
-					}
+					// else
+					// {
+					// 	DBG("Deleted page!");
+					// 	// somethingDeleted = 1;
+					// }
 					if (frag == 0)
 						allPagesDiff++;
 				}

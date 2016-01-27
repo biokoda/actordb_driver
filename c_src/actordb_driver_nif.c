@@ -1265,7 +1265,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 	else
 	{
 		int allPagesDiff = 0;
-		u8 somethingDeleted = 0;
+		// u8 somethingDeleted = 0;
 		memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
@@ -1291,7 +1291,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 				// u8 rewrite = 0;
 				u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
 				MDB_val pgKey, pgVal;
-				size_t ndupl, nduplorig;
+				size_t ndupl;
 				// size_t rewritePos = 0;
 				int pgop;
 
@@ -1311,7 +1311,6 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 				mdb_cursor_count(mdb->cursorPages,&ndupl);
 				if (ndupl == 0)
 					continue;
-				nduplorig = ndupl;
 				if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) != MDB_SUCCESS)
 					continue;
 				pgop = MDB_PREV_DUP;
@@ -1334,13 +1333,13 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 							DBG("Unable to delete rewind page!!!");
 							break;
 						}
-						else
-						{
-							// This is normal operation. Delete page and set flag
-							// that something is deleted.
-							DBG("Rewind page deleted!");
-							somethingDeleted = 1;
-						}
+						// else
+						// {
+						// 	// This is normal operation. Delete page and set flag
+						// 	// that something is deleted.
+						// 	DBG("Rewind page deleted!");
+						// 	somethingDeleted = 1;
+						// }
 						if (frag == 0)
 							allPagesDiff++;
 					}
