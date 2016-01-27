@@ -11,7 +11,7 @@
 #if defined(_WIN32)
 #define ATOMIC 0
 #else
-#if !__has_extension(c_atomic)
+#if defined(__STDC_NO_ATOMICS__)
 #define ATOMIC 0
 #else
 #define ATOMIC 1
