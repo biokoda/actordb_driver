@@ -308,7 +308,7 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 			}
 			// else
 			// {
-			// 	conn->nSent++;
+			// 	// conn->nSent++;
 			// }
 		}
 	}
@@ -2835,6 +2835,22 @@ static void *processing_thread_func(void *arg)
 			else
 			{
 				respond_cmd(data, item);
+				if (itemsWaiting && !data->isreadonly)
+				{
+					char commit = queue_size(data->tasks) == 0;
+					if (commit)
+					{
+						#if ATOMIC
+						if (!g_tsd_wmdb)
+							lock_wtxn(data->nEnv);
+						#else
+						if (!enif_tsd_get(g_tsd_wmdb))
+							lock_wtxn(data->nEnv);
+						#endif
+
+						unlock_write_txn(data->nEnv, 0, &commit);
+					}
+				}
 			}
 
 			DBG("rthread=%d command done 2.",data->nThread);
