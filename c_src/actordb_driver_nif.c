@@ -2795,7 +2795,6 @@ static void *processing_thread_func(void *arg)
 			if (cmd->type == cmd_synced)
 			{
 				respond_items(data, itemsWaiting);
-				respond_cmd(data, item);
 				itemsWaiting = NULL;
 			}
 
