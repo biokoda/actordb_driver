@@ -2795,6 +2795,7 @@ static void *processing_thread_func(void *arg)
 			if (cmd->type == cmd_synced)
 			{
 				respond_items(data, itemsWaiting);
+				respond_cmd(data, item);
 				itemsWaiting = NULL;
 			}
 
@@ -2820,11 +2821,6 @@ static void *processing_thread_func(void *arg)
 				{
 					respond_cmd(data, item);
 				}
-				else if (!itemsWaiting)
-				{
-					item->next = NULL;
-					itemsWaiting = item;
-				}
 				else
 				{
 					item->next = itemsWaiting;
@@ -2834,7 +2830,7 @@ static void *processing_thread_func(void *arg)
 			else
 			{
 				respond_cmd(data, item);
-				if (itemsWaiting && !data->isreadonly)
+				if (itemsWaiting)
 				{
 					char commit = queue_size(data->tasks) == 0;
 					if (commit)
