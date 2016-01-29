@@ -160,7 +160,8 @@ init(Info) ->
 		{error, bad_name} -> filename:join("priv", NifName);
 		Dir -> filename:join(Dir, NifName)
 	end,
-	case erlang:load_nif(NifFileName, Info#{logname => "drv_"++hd(string:tokens(atom_to_list(node()),"@"))++".txt"}) of
+	S = integer_to_list(calendar:datetime_to_gregorian_seconds(erlang:localtime())),
+	case erlang:load_nif(NifFileName, Info#{logname => "drv_"++hd(string:tokens(atom_to_list(node()),"@"))++"_"++S++".txt"}) of
 		ok ->
 			ok;
 		{error,{upgrade,_}} ->

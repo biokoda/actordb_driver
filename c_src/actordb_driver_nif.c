@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -1613,7 +1613,8 @@ static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	#else
 	if (!enif_tsd_get(g_tsd_wmdb))
 	#endif
-		lock_wtxn(thread->nEnv);
+
+	lock_wtxn(thread->nEnv);
 
 	return atom_false;
 }
@@ -2843,11 +2844,16 @@ static void *processing_thread_func(void *arg)
 						#endif
 
 						unlock_write_txn(data->nEnv, 0, &commit);
+						if (commit)
+						{
+							respond_items(data, itemsWaiting);
+							itemsWaiting = NULL;
+						}
 					}
 				}
 			}
 
-			DBG("rthread=%d command done 2.",data->nThread);
+			DBG("rthread=%d command done 2. haveWaiting=%d.",data->nThread,(int)itemsWaiting != 0);
 		}
 	}
 	if (!data->isreadonly && data->finish)
