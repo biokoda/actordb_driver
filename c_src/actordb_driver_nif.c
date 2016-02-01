@@ -106,7 +106,7 @@ static void lock_wtxn(int nEnv)
 {
 	u32 i;
 	mdbinf *wmdb = NULL;
-
+	DBG("Trying to lock wmtx");
 	for (i = 0; enif_mutex_trylock(g_pd->wthrMutexes[nEnv]) != 0; ++i)
 	{
 		#ifdef _WIN32
@@ -116,7 +116,7 @@ static void lock_wtxn(int nEnv)
 			usleep(i / 100000);
 		#endif
 	}
-	// DBG("lock wtxn %u",i);
+	DBG("lock wtxn %u",i);
 	#if ATOMIC
 	wmdb = g_tsd_wmdb = &g_pd->wmdb[nEnv];
 	#else
@@ -1613,8 +1613,7 @@ static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	#else
 	if (!enif_tsd_get(g_tsd_wmdb))
 	#endif
-
-	lock_wtxn(thread->nEnv);
+		lock_wtxn(thread->nEnv);
 
 	return atom_false;
 }
