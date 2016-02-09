@@ -140,7 +140,7 @@ static void lock_wtxn(int nEnv)
 	#endif
 }
 
-static void unlock_write_txn(int nEnv, char syncForce, char *commit)
+static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWritten)
 {
 	int i;
 	mdbinf *wmdb = NULL;
@@ -155,19 +155,23 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 		return;
 	#endif
 
-	++wmdb->usageCount;
-	if (*commit || syncForce || wmdb->usageCount > g_nbatch)
+	++wmdb->batchCounter;
+	wmdb->hasWritten |= hasWritten;
+	if (*commit || syncForce || wmdb->batchCounter > g_nbatch)
 	{
 		if (mdb_txn_commit(wmdb->txn) != MDB_SUCCESS)
 			mdb_txn_abort(wmdb->txn);
 		wmdb->txn = NULL;
-		wmdb->usageCount = 0;
+		wmdb->batchCounter = 0;
 
-		if (syncForce)
+		if (syncForce && wmdb->hasWritten)
 			mdb_env_sync(wmdb->env,1);
 
 		if (g_transsync || syncForce)
+		{
 			++g_pd->syncNumbers[nEnv];
+			wmdb->hasWritten = 0;
+		}
 		*commit = 1;
 	}
 	// else
@@ -1435,6 +1439,7 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv 
 	if (cmd->conn)
 	{
 		storeinfo(&cmd->conn->wal, currentTerm, (u8)votedFor.size, votedFor.data);
+		thread->pagesChanged++;
 	}
 	else
 	{
@@ -1458,6 +1463,7 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv 
 		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL);
 		// con.wal.thread = thread;
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
+		thread->pagesChanged++;
 		// thread->curConn = NULL;
 		#if ATOMIC
 		g_tsd_conn = NULL;
@@ -2806,7 +2812,7 @@ static void *processing_thread_func(void *arg)
 			{
 				char syncForce = (cmd->type == cmd_sync && cmd->answer == atom_false);
 				char commit = queue_size(data->tasks) == 0;
-				unlock_write_txn(data->nEnv, syncForce, &commit);
+				unlock_write_txn(data->nEnv, syncForce, &commit, data->pagesChanged > 0);
 
 				if (syncForce)
 					cmd->answer = atom_ok;
@@ -2842,7 +2848,7 @@ static void *processing_thread_func(void *arg)
 							lock_wtxn(data->nEnv);
 						#endif
 
-						unlock_write_txn(data->nEnv, 0, &commit);
+						unlock_write_txn(data->nEnv, 0, &commit, data->pagesChanged > 0);
 						if (commit)
 						{
 							respond_items(data, itemsWaiting);
@@ -2859,7 +2865,7 @@ static void *processing_thread_func(void *arg)
 	{
 		char commit = 1;
 		lock_wtxn(data->nEnv);
-		unlock_write_txn(data->nEnv, 1, &commit);
+		unlock_write_txn(data->nEnv, 1, &commit, 1);
 	}
 	DBG("rthread=%d stopping.",data->nThread);
 
