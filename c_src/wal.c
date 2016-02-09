@@ -60,13 +60,8 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	MDB_val key, data;
 	int rc;
 
-	#if ATOMIC
 	db_thread *thr 		= g_tsd_thread;
 	db_connection *conn = g_tsd_conn;
-	#else
-	db_thread* thr 	  = enif_tsd_get(g_tsd_thread);
-	db_connection* conn = enif_tsd_get(g_tsd_conn);
-	#endif
 	mdbinf * const mdb 	= &thr->mdb;
 	Wal *pWal = &conn->wal;
 	MDB_dbi actorsdb, infodb;
@@ -193,24 +188,13 @@ int register_actor(u64 index, char *name)
 	mdbinf *mdb;
 	size_t nmLen;
 	u64 topIndex;
-	#if ATOMIC
 	db_thread *thread = g_tsd_thread;
-	#else
-	db_thread* thread = enif_tsd_get(g_tsd_thread);
-	#endif
 
 	DBG("REGISTER ACTOR");
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thread->nEnv);
 	mdb = g_tsd_wmdb;
-	#else
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	if (!mdb)
-		lock_wtxn(thread->nEnv);
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -279,11 +263,7 @@ void sqlite3WalLimit(Wal* wal, i64 size)
 int sqlite3WalBeginReadTransaction(Wal *pWal, int *pChanged)
 {
 	// db_connection* const conn = enif_tsd_get(g_tsd_conn);
-	#if ATOMIC
 	db_connection* conn = g_tsd_conn;
-	#else
-	db_connection* conn = enif_tsd_get(g_tsd_conn);
-	#endif
 	*pChanged = conn->changed;
 	DBG("Begin read trans %d",*pChanged);
 	if (conn->changed)
@@ -299,11 +279,7 @@ void sqlite3WalEndReadTransaction(Wal *pWal)
 int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
 	// db_thread * const thread = enif_tsd_get(g_tsd_thread);
-	#if ATOMIC
 	db_thread *thread = g_tsd_thread;
-	#else
-	db_thread* thread = enif_tsd_get(g_tsd_thread);
-	#endif
 	/*if (thr->isreadonly)
 	{
 		u64 readSafeEvnum, readSafeTerm;
@@ -337,11 +313,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 
 	if (thr->pagesChanged)
 	{
-		#if ATOMIC
 		mdb = g_tsd_wmdb;
-		#else
-		mdb = enif_tsd_get(g_tsd_wmdb);
-		#endif
 	}
 	else
 		mdb = &thr->mdb;
@@ -435,11 +407,7 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 {
 	int result 			  = 0;
 	// db_thread * const thr = enif_tsd_get(g_tsd_thread);
-	#if ATOMIC
 	db_thread *thr = g_tsd_thread;
-	#else
-	db_thread* thr = enif_tsd_get(g_tsd_thread);
-	#endif
 
 	// #ifndef _WIN32
 	// if (pthread_equal(pthread_self(), pWal->rthreadId))
@@ -558,11 +526,7 @@ static int fillbuff(db_thread *thr, Wal *pWal, iterate_resource *iter, u8* buf, 
 static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, u8 *hdr, u32 *done)
 {
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
-	#if ATOMIC
 	db_thread *thr 		 = g_tsd_thread;
-	#else
-	db_thread* thr = enif_tsd_get(g_tsd_thread);
-	#endif
 	mdbinf* const mdb 	 = &thr->mdb;
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
@@ -777,25 +741,14 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	mdbinf* mdb;
 	
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
-	#if ATOMIC
 	db_thread *thr 		 = g_tsd_thread;
-	#else
-	db_thread* thr = enif_tsd_get(g_tsd_thread);
-	#endif
 	int logop, mrc 		 = MDB_SUCCESS;
 	// u8 somethingDeleted  = 0;
 	int allPagesDiff 	 = 0;
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
 	mdb = g_tsd_wmdb;
-	#else
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	if (!mdb)
-		lock_wtxn(thr->nEnv);
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -944,26 +897,15 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	mdbinf *mdb;
 
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
-	#if ATOMIC
 	db_thread *thr = g_tsd_thread;
-	#else
-	db_thread* thr = enif_tsd_get(g_tsd_thread);
-	#endif
 	rc  = SQLITE_OK;
 
 	if (pWal->inProgressTerm == 0)
 		return SQLITE_OK;
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
 	mdb = g_tsd_wmdb;
-	#else
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	if (!mdb)
-		lock_wtxn(thr->nEnv);
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -1079,23 +1021,12 @@ static int storeinfo(Wal *pWal, u64 currentTerm, u8 votedForSize, u8 *votedFor)
 {
 	MDB_val key = {0,NULL}, data = {0,NULL};
 	int rc;
-	#if ATOMIC
 	db_thread *thr = g_tsd_thread;
-	#else
-	db_thread* thr = enif_tsd_get(g_tsd_thread);
-	#endif
 	mdbinf* mdb;
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
 	mdb = g_tsd_wmdb;
-	#else
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	if (!mdb)
-		lock_wtxn(thr->nEnv);
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -1149,24 +1080,12 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	int rc;
 	mdbinf* mdb;
 	MDB_txn* txn;
-	#if ATOMIC
 	db_thread *thr      = g_tsd_thread;
 	db_connection* pCon	= g_tsd_conn;
-	#else
-	db_thread* thr = enif_tsd_get(g_tsd_thread);
-	db_connection* pCon = enif_tsd_get(g_tsd_conn);
-	#endif
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
 	mdb = g_tsd_wmdb;
-	#else
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	if (!mdb)
-		lock_wtxn(thr->nEnv);
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	#endif
 	txn = mdb->txn;
 
 	if (!mdb)

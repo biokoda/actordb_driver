@@ -16,18 +16,18 @@
 
 run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("wal.*")],
-	[file:delete(Fn) || Fn <- [filelib:wildcard("*.db"),"lmdb","lmdb-lock"]],
+	[file:delete(Fn) || Fn <- filelib:wildcard("*.txt")++filelib:wildcard("*.db")++["lmdb","lmdb-lock"]],
 	[
 	fun lz4/0,
-	fun modes/0,
-	fun dbcopy/0,
-	fun checkpoint/0,
-	{timeout, 25, fun checkpoint1/0},
-	fun bigtrans/0,
-	fun bigtrans_check/0,
-	{timeout,25,fun async/0},
-	fun problem_checkpoint/0,
-	fun problem_rewind/0
+	fun modes/0
+	% fun dbcopy/0,
+	% fun checkpoint/0,
+	% {timeout, 25, fun checkpoint1/0},
+	% fun bigtrans/0,
+	% fun bigtrans_check/0,
+	% {timeout,25,fun async/0},
+	% fun problem_checkpoint/0,
+	% fun problem_rewind/0
 	% {timeout,25,fun open_test/0}
 	].
 
@@ -58,8 +58,18 @@ modes() ->
 	% ?debugFmt("Tuple exec ~p", [R]).
 
 	{ok,Blob} = actordb_driver:open("myfile",0,blob),
-	{ok,{[],[]}} = actordb_driver:exec_script({1,2},{<<"page12">>,<<"page">>},Blob),
-	{ok,{[<<"page12">>],[<<"page">>],[]}} = actordb_driver:exec_script({1,2,3},Blob),
+	[begin
+		Bin1 = iolist_to_binary([<<"page_1_">>,integer_to_list(N)]),
+		Bin2 = iolist_to_binary([<<"page_2_">>,integer_to_list(N)]),
+		{ok,{[],[]}} = actordb_driver:exec_script({1,2},{Bin1,Bin2},Blob),
+		case actordb_driver:exec_script({1,2,3},Blob) of
+			{ok,{[Bin1],[Bin2],[]}} ->
+				ok;
+			_BM ->
+				?debugFmt("Match failed on ~p: ~p",[N,_BM]),
+				throw(badmatch)
+		end
+	end || N <- lists:seq(1,1000)],
 
 	{ok,2,0} = actordb_driver:stmt_info(Db,"insert into tab values (?1,?2,3);"),
 	{ok,1,3} = actordb_driver:stmt_info(Db,"select * from tab where id=?1;"),

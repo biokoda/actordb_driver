@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-// #define _TESTDBG_ 1
+#define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -39,19 +39,16 @@ static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p
 static ERL_NIF_TERM push_command(int writeThreadNum, int readThreadNum, priv_data *pd, qitem *item);
 static void lock_wtxn(int env);
 
+#ifdef _WIN32
+#define __thread __declspec( thread )
+#endif
+
 
 // static ErlNifTSDKey g_tsd_conn;
-#if ATOMIC
 static __thread db_thread      *g_tsd_thread;
 static __thread db_connection  *g_tsd_conn;
 static __thread mdbinf         *g_tsd_wmdb;
 static __thread u64             g_tsd_cursync;
-#else
-static ErlNifTSDKey g_tsd_thread;
-static ErlNifTSDKey g_tsd_conn;
-static ErlNifTSDKey g_tsd_wmdb;
-static ErlNifTSDKey g_tsd_cursync;
-#endif
 
 static priv_data               *g_pd;
 static int                      g_nbatch = 0;  // how many writes to batch together
@@ -117,12 +114,7 @@ static void lock_wtxn(int nEnv)
 		#endif
 	}
 	DBG("lock wtxn %u",i);
-	#if ATOMIC
 	wmdb = g_tsd_wmdb = &g_pd->wmdb[nEnv];
-	#else
-	enif_tsd_set(g_tsd_wmdb, &g_pd->wmdb[nEnv]);
-	wmdb = &g_pd->wmdb[nEnv];
-	#endif
 	
 	if (wmdb->txn == NULL)
 	{
@@ -130,14 +122,7 @@ static void lock_wtxn(int nEnv)
 			return;
 	}
 
-	#if ATOMIC
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
-	#else
-	{
-		u64 *cs = enif_tsd_get(g_tsd_cursync);
-		*cs = g_pd->syncNumbers[nEnv];
-	}
-	#endif
 }
 
 static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWritten)
@@ -145,15 +130,9 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWri
 	int i;
 	mdbinf *wmdb = NULL;
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
 		return;
 	wmdb = g_tsd_wmdb;
-	#else
-	wmdb = enif_tsd_get(g_tsd_wmdb);
-	if (!wmdb)
-		return;
-	#endif
 
 	++wmdb->batchCounter;
 	wmdb->hasWritten |= hasWritten;
@@ -174,18 +153,8 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWri
 		}
 		*commit = 1;
 	}
-	// else
-	// 	DBG("UNLOCK %u",wmdb->usageCount);
-	#if ATOMIC
 	g_tsd_cursync = g_pd->syncNumbers[nEnv];
 	g_tsd_wmdb = NULL;
-	#else
-	{
-		u64 *cs = enif_tsd_get(g_tsd_cursync);
-		*cs = g_pd->syncNumbers[nEnv];
-		enif_tsd_set(g_tsd_wmdb, NULL);
-	}
-	#endif
 
 	// Send a cmd_synced to all write threads if we executed commit.
 	// They must send back replies to ops.
@@ -210,11 +179,7 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWri
 static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int headersize)
 {
 	db_thread *thread = (db_thread *) data;
-	#if ATOMIC
 	db_connection *conn = g_tsd_conn;
-	#else
-	db_connection *conn = enif_tsd_get(g_tsd_conn);
-	#endif
 	int i = 0;
 	int completeSize = 0;
 #ifndef  _WIN32
@@ -759,12 +724,8 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	cmd->conn = conn;
 
 	// thread->curConn = cmd->conn;
-	
-	#if ATOMIC
+
 	g_tsd_conn = cmd->conn;
-	#else
-	enif_tsd_set(g_tsd_conn, cmd->conn);
-	#endif
 
 	conn->db = db;
 	if (thread->isreadonly)
@@ -1199,16 +1160,9 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 	if (limitEvnum > pWal->lastCompleteEvnum)
 		return atom_ok;
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
 	mdb = g_tsd_wmdb;
-	#else
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	if (!mdb)
-		lock_wtxn(thr->nEnv);
-	mdb = enif_tsd_get(g_tsd_wmdb);
-	#endif
 	if (!mdb)
 		return SQLITE_ERROR;
 
@@ -1455,21 +1409,13 @@ static ERL_NIF_TERM do_term_store(db_command *cmd, db_thread *thread, ErlNifEnv 
 		memset(&con, 0, sizeof(db_connection));
 		memset(pth, 0, MAX_PATHNAME);
 		memcpy(pth, name.data, name.size);
-		#if ATOMIC
 		g_tsd_conn = &con;
-		#else
-		enif_tsd_set(g_tsd_conn, &con);
-		#endif
 		sqlite3WalOpen(NULL, NULL, pth, 0, 0, NULL);
 		// con.wal.thread = thread;
 		storeinfo(&con.wal, currentTerm, (u8)votedFor.size, votedFor.data);
 		thread->pagesChanged++;
 		// thread->curConn = NULL;
-		#if ATOMIC
 		g_tsd_conn = NULL;
-		#else
-		enif_tsd_set(g_tsd_conn, NULL);
-		#endif
 	}
 	return atom_ok;
 }
@@ -1606,19 +1552,10 @@ static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEn
 
 static ERL_NIF_TERM do_sync(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
-	#if !ATOMIC
-	u64 *cs = enif_tsd_get(g_tsd_cursync);
-	if (g_transsync || (cmd->conn && cmd->conn->syncNum < *cs))
-	#else
 	if (g_transsync || (cmd->conn && cmd->conn->syncNum < g_tsd_cursync))
-	#endif
 		return atom_ok;
 
-	#if ATOMIC
 	if (!g_tsd_wmdb)
-	#else
-	if (!enif_tsd_get(g_tsd_wmdb))
-	#endif
 		lock_wtxn(thread->nEnv);
 
 	return atom_false;
@@ -2344,11 +2281,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 		if (pagesPre != thread->pagesChanged)
 		{
 			// cmd->conn->syncNum = g_pd->syncNumbers[thread->nEnv];
-			#if !ATOMIC
-				cmd->conn->syncNum = *(u64*)enif_tsd_get(g_tsd_cursync);
-			#else
 			cmd->conn->syncNum = g_tsd_cursync;
-			#endif
 		}
 		track_time(13,thread);
 		return make_ok_tuple(env,results);
@@ -2478,11 +2411,7 @@ static ERL_NIF_TERM do_checkpoint_lock(db_command *cmd,db_thread *thread, ErlNif
 static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 {
 	// thread->curConn = cmd->conn;
-	#if ATOMIC
 	g_tsd_conn = cmd->conn;
-	#else
-	enif_tsd_set(g_tsd_conn, cmd->conn);
-	#endif
 
 	switch(cmd->type)
 	{
@@ -2615,11 +2544,7 @@ static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 static void *ctrl_thread_func(void *arg)
 {
 	db_thread* data = (db_thread*)arg;
-	#if ATOMIC
 	g_tsd_thread = data;
-	#else
-	enif_tsd_set(g_tsd_thread, data);
-	#endif
 	data->isopen = 1;
 
 	while(1)
@@ -2716,18 +2641,10 @@ static void *processing_thread_func(void *arg)
 	mdbinf* mdb 	  = &data->mdb;
 	qitem *itemsWaiting = NULL;
 	int rc;
-	#if ATOMIC
 	g_tsd_cursync = 0;
 	g_tsd_conn    = NULL;
 	g_tsd_wmdb    = NULL;
 	g_tsd_thread  = data;
-	#else
-	u64 cursync = 0;
-	enif_tsd_set(g_tsd_thread, data);
-	enif_tsd_set(g_tsd_cursync, &cursync);
-	enif_tsd_set(g_tsd_conn, NULL);
-	enif_tsd_set(g_tsd_wmdb, NULL);
-	#endif
 
 	data->isopen = 1;
 
@@ -2740,7 +2657,6 @@ static void *processing_thread_func(void *arg)
 		qitem *item = queue_pop(data->tasks);
 		cmd 		= (db_command*)item->cmd;
 		data->pagesChanged = 0;
-		// curSync 	= atomic_load(&g_pd->syncNumbers[thread->nEnv]);
 		
 		DBG("rthread=%d command=%d.",data->nThread,cmd->type);
 
@@ -2796,7 +2712,8 @@ static void *processing_thread_func(void *arg)
 				}
 			}
 			cmd->answer = evaluate_command(cmd,data,item->env);
-			mdb_txn_reset(mdb->txn);
+			mdb_txn_abort(mdb->txn);
+			mdb->txn = NULL;
 
 			if (cmd->type == cmd_synced)
 			{
@@ -2804,11 +2721,7 @@ static void *processing_thread_func(void *arg)
 				itemsWaiting = NULL;
 			}
 
-			#if ATOMIC
 			if (g_tsd_wmdb != NULL)
-			#else
-			if (enif_tsd_get(g_tsd_wmdb) != NULL)
-			#endif
 			{
 				char syncForce = (cmd->type == cmd_sync && cmd->answer == atom_false);
 				char commit = queue_size(data->tasks) == 0;
@@ -2840,13 +2753,8 @@ static void *processing_thread_func(void *arg)
 					char commit = queue_size(data->tasks) == 0;
 					if (commit)
 					{
-						#if ATOMIC
 						if (!g_tsd_wmdb)
 							lock_wtxn(data->nEnv);
-						#else
-						if (!enif_tsd_get(g_tsd_wmdb))
-							lock_wtxn(data->nEnv);
-						#endif
 
 						unlock_write_txn(data->nEnv, 0, &commit, data->pagesChanged > 0);
 						if (commit)
@@ -3881,12 +3789,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	// second will crash the server because it will try to access a Wal structure that is dealocated.
 	// There is no reason to have more than 1 connection per actor.
 	// sqlite3_enable_shared_cache(1);
-	#if !ATOMIC
-	enif_tsd_key_create("threaddata",&g_tsd_thread);
-	enif_tsd_key_create("curconn",&g_tsd_conn);
-	enif_tsd_key_create("wmdb",&g_tsd_wmdb);
-	enif_tsd_key_create("cursync",&g_tsd_cursync);
-	#endif
 
 	atom_false = enif_make_atom(env,"false");
 	atom_ok = enif_make_atom(env,"ok");
@@ -4219,10 +4121,6 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->syncNumbers);
 	free(priv->actorIndexes);
 	#if !ATOMIC
-	enif_tsd_key_destroy(g_tsd_thread);
-	enif_tsd_key_destroy(g_tsd_conn);
-	enif_tsd_key_destroy(g_tsd_wmdb);
-	enif_tsd_key_destroy(g_tsd_cursync);
 	free(priv->actorIndexesMtx);
 	#endif
 	free(priv->wmdb);
