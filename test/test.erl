@@ -19,15 +19,15 @@ run_test_() ->
 	[file:delete(Fn) || Fn <- filelib:wildcard("*.txt")++filelib:wildcard("*.db")++["lmdb","lmdb-lock"]],
 	[
 	fun lz4/0,
-	fun modes/0
-	% fun dbcopy/0,
-	% fun checkpoint/0,
-	% {timeout, 25, fun checkpoint1/0},
-	% fun bigtrans/0,
-	% fun bigtrans_check/0,
-	% {timeout,25,fun async/0},
-	% fun problem_checkpoint/0,
-	% fun problem_rewind/0
+	fun modes/0,
+	fun dbcopy/0,
+	fun checkpoint/0,
+	{timeout, 25, fun checkpoint1/0},
+	fun bigtrans/0,
+	fun bigtrans_check/0,
+	{timeout,25,fun async/0},
+	fun problem_checkpoint/0,
+	fun problem_rewind/0
 	% {timeout,25,fun open_test/0}
 	].
 

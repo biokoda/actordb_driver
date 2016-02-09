@@ -1,7 +1,7 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#define _TESTDBG_ 1
+// #define _TESTDBG_ 1
 #ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
@@ -43,8 +43,6 @@ static void lock_wtxn(int env);
 #define __thread __declspec( thread )
 #endif
 
-
-// static ErlNifTSDKey g_tsd_conn;
 static __thread db_thread      *g_tsd_thread;
 static __thread db_connection  *g_tsd_conn;
 static __thread mdbinf         *g_tsd_wmdb;
@@ -142,6 +140,7 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWri
 			mdb_txn_abort(wmdb->txn);
 		wmdb->txn = NULL;
 		wmdb->batchCounter = 0;
+		wmdb->commitCount++;
 
 		if (syncForce && wmdb->hasWritten)
 			mdb_env_sync(wmdb->env,1);
@@ -2640,6 +2639,7 @@ static void *processing_thread_func(void *arg)
 	db_thread* data   = (db_thread*)arg;
 	mdbinf* mdb 	  = &data->mdb;
 	qitem *itemsWaiting = NULL;
+	u64 waitingCommit = 0;
 	int rc;
 	g_tsd_cursync = 0;
 	g_tsd_conn    = NULL;
@@ -2715,16 +2715,11 @@ static void *processing_thread_func(void *arg)
 			mdb_txn_abort(mdb->txn);
 			mdb->txn = NULL;
 
-			if (cmd->type == cmd_synced)
-			{
-				respond_items(data, itemsWaiting);
-				itemsWaiting = NULL;
-			}
-
 			if (g_tsd_wmdb != NULL)
 			{
 				char syncForce = (cmd->type == cmd_sync && cmd->answer == atom_false);
 				char commit = queue_size(data->tasks) == 0;
+				u64 curCommit = g_tsd_wmdb->commitCount;
 				unlock_write_txn(data->nEnv, syncForce, &commit, data->pagesChanged > 0);
 
 				if (syncForce)
@@ -2734,13 +2729,23 @@ static void *processing_thread_func(void *arg)
 				{
 					respond_items(data, itemsWaiting);
 					itemsWaiting = NULL;
+					waitingCommit = 0;
 				}
 				if (commit && !itemsWaiting)
 				{
 					respond_cmd(data, item);
+					waitingCommit = 0;
 				}
 				else
 				{
+					if (!waitingCommit)
+						waitingCommit = curCommit;
+					else if (waitingCommit < curCommit)
+					{
+						respond_items(data, itemsWaiting);
+						itemsWaiting = NULL;
+						waitingCommit = curCommit;
+					}
 					item->next = itemsWaiting;
 					itemsWaiting = item;
 				}
@@ -2753,14 +2758,18 @@ static void *processing_thread_func(void *arg)
 					char commit = queue_size(data->tasks) == 0;
 					if (commit)
 					{
+						u64 curCommit;
 						if (!g_tsd_wmdb)
 							lock_wtxn(data->nEnv);
 
+						curCommit = g_tsd_wmdb->commitCount;
+
 						unlock_write_txn(data->nEnv, 0, &commit, data->pagesChanged > 0);
-						if (commit)
+						if (commit || waitingCommit < curCommit)
 						{
 							respond_items(data, itemsWaiting);
 							itemsWaiting = NULL;
+							waitingCommit = 0;
 						}
 					}
 				}

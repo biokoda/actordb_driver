@@ -75,6 +75,7 @@ struct mdbinf
 	MDB_cursor *cursorPages;
 	MDB_cursor *cursorInfo;
 	u32 batchCounter;
+	u64 commitCount;
 	char hasWritten;
 };
 
