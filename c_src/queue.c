@@ -65,12 +65,12 @@ queue *queue_create()
     return ret;
 
 error:
-    if(ret && ret->lock)
-        enif_mutex_destroy(ret->lock);
-    if(ret && ret->cond)
-        cond_destroy(ret->cond);
     if(ret)
+    {
+        enif_mutex_destroy(ret->lock);
+        cond_destroy(ret->cond);
         enif_free(ret);
+    }
     return NULL;
 }
 
@@ -79,7 +79,6 @@ queue_destroy(queue *queue)
 {
     ErlNifMutex *lock;
     COND_T cond;
-    int length;
     qitem *blocks = NULL;
 
     enif_mutex_lock(queue->lock);
@@ -87,11 +86,6 @@ queue_destroy(queue *queue)
     cond = queue->cond;
     length = queue->length;
 
-    queue->lock = NULL;
-    queue->cond = NULL;
-    queue->head = NULL;
-    queue->tail = NULL;
-    queue->length = -1;
     while(queue->reuseq != NULL)
     {
         qitem *tmp = queue->reuseq->next;
