@@ -10,10 +10,11 @@
 #include "erl_nif.h"
 #endif
 
+// don't use it it's slower (on linux).
 #ifdef _WIN32
 #define USE_SEM 0
 #else
-#define USE_SEM 1
+#define USE_SEM 0
 #endif
 
 #if USE_SEM
