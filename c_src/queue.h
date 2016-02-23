@@ -13,7 +13,7 @@
 #ifdef _WIN32
 #define USE_SEM 0
 #else
-#define USE_SEM 0
+#define USE_SEM 1
 #endif
 
 #if USE_SEM
