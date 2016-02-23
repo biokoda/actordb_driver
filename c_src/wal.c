@@ -767,7 +767,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
 		if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
-			printf("Key not found in log for checkpoint %llu %llu\n",
+			DBG("Key not found in log for checkpoint %llu %llu",
 				pWal->firstCompleteTerm, pWal->firstCompleteEvnum);
 			return SQLITE_OK;
 		}
