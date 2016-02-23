@@ -99,26 +99,26 @@ static int open_env(lmdb *lm, const char *pth, int flags)
 	// #endif
 	int rc;
 
-	if (mdb_env_create(&lm->menv) != MDB_SUCCESS)
-		return -1;
-	if (mdb_env_set_maxdbs(lm->menv,5) != MDB_SUCCESS)
-		return -1;
+	if ((rc = mdb_env_create(&lm->menv)) != MDB_SUCCESS)
+		return rc;
+	if ((rc = mdb_env_set_maxdbs(lm->menv,5)) != MDB_SUCCESS)
+		return rc;
 	// if (mdb_env_set_mapsize(lm->menv,dbsize) != MDB_SUCCESS)
 	// 	return -1;
-	if (mdb_env_open(lm->menv, pth, MDB_NOSUBDIR | flags, 0664) != MDB_SUCCESS)
-		return -1;
+	if ((rc = mdb_env_open(lm->menv, pth, MDB_NOSUBDIR | flags, 0664)) != MDB_SUCCESS)
+		return rc;
 
-	if (mdb_txn_begin(lm->menv, NULL, flags, &lm->txn) != MDB_SUCCESS)
-		return -1;
+	if ((rc = mdb_txn_begin(lm->menv, NULL, flags, &lm->txn)) != MDB_SUCCESS)
+		return rc;
 
-	if (mdb_dbi_open(lm->txn, "info", MDB_INTEGERKEY, &lm->infodb) != MDB_SUCCESS)
-		return -1;
-	if (mdb_dbi_open(lm->txn, "actors", MDB_CREATE, &lm->actorsdb) != MDB_SUCCESS)
-		return -1;
-	if (mdb_dbi_open(lm->txn, "log", MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &lm->logdb) != MDB_SUCCESS)
-		return -1;
-	if (mdb_dbi_open(lm->txn, "pages", MDB_DUPSORT, &lm->pagesdb) != MDB_SUCCESS)
-		return -1;
+	if ((rc = mdb_dbi_open(lm->txn, "info", MDB_INTEGERKEY, &lm->infodb)) != MDB_SUCCESS)
+		return rc;
+	if ((rc = mdb_dbi_open(lm->txn, "actors", MDB_CREATE, &lm->actorsdb)) != MDB_SUCCESS)
+		return rc;
+	if ((rc = mdb_dbi_open(lm->txn, "log", MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &lm->logdb)) != MDB_SUCCESS)
+		return rc;
+	if ((rc = mdb_dbi_open(lm->txn, "pages", MDB_DUPSORT, &lm->pagesdb)) != MDB_SUCCESS)
+		return rc;
 	if (mdb_set_compare(lm->txn, lm->logdb, logdb_cmp) != MDB_SUCCESS)
 		return -1;
 	if (mdb_set_compare(lm->txn, lm->pagesdb, pagesdb_cmp) != MDB_SUCCESS)
@@ -167,9 +167,9 @@ static int do_print(const char *pth, int what)
 	MDB_val key, data;
 	int rc, op;
 
-	if (open_env(&lm, pth, MDB_RDONLY) == -1)
+	if ((rc = open_env(&lm, pth, MDB_RDONLY)) != 0)
 	{
-		printf("Unable to open lmdb environment\n");
+		printf("Unable to open lmdb environment %d\n",rc);
 		return -1;
 	}
 	
@@ -326,14 +326,17 @@ static int do_backup(const char *src, const char *dst)
 	mdb_txn_commit(rd.txn);
 	close_env(&rd);
 
+	#ifdef _WIN32
+	goto bckp_done;
+	#endif
 	// if (open_env(&rd, src, MDB_RDONLY) == -1)
 	// {
 	// 	printf("Unable to open source environment\n");
 	// 	return -1;
 	// }
-	if (open_env(&wr, dst, 0) == -1)
+	if ((rc = open_env(&wr, dst, 0)) != 0)
 	{
-		printf("Unable to open destination environment\n");
+		printf("Unable to open destination environment %d\n",rc);
 		return -1;
 	}
 
@@ -415,13 +418,13 @@ static int do_backup(const char *src, const char *dst)
 		{
 			u64 aindex;
 
-			mdb_cursor_del(wr.cursorLog, MDB_NODUPDATA);
+			rc = mdb_cursor_del(wr.cursorLog, MDB_NODUPDATA);
 			while ((mdb_cursor_get(wr.cursorLog,&logKey,&logVal,MDB_NEXT_NODUP)) == MDB_SUCCESS)
 			{
 				memcpy(&aindex, logKey.mv_data, sizeof(u64));
 				if (index != aindex)
 					break;
-				mdb_cursor_del(wr.cursorLog, MDB_NODUPDATA);
+				rc = mdb_cursor_del(wr.cursorLog, MDB_NODUPDATA);
 			}
 		}
 
@@ -503,13 +506,13 @@ static int do_extract(const char *pth, const char *actor, const char *type, cons
 	int nfilled;
 	db_thread thr;
 	char actorpth[512];
-	int i;
+	int i, rc;
 
 	memset(&iter,0,sizeof(iterate_resource));
 	memset(&thr,0,sizeof(db_thread));
 	memset(&conn,0,sizeof(db_connection));
 
-	if (open_env(&rd, pth, MDB_RDONLY) == -1)
+	if ((rc = open_env(&rd, pth, MDB_RDONLY)) != 0)
 	{
 		fprintf(stderr,"Unable to open source environment\n");
 		return -1;
