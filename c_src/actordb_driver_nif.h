@@ -110,6 +110,10 @@ struct priv_data
 	int prepSize;
 	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
 	char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
+	char **paths;
+	u64 dbsize;
+	char staticSqls[MAX_STATIC_SQLS][256];
+	int nstaticSqls;
 };
 
 struct Wal {

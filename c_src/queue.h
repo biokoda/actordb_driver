@@ -10,6 +10,36 @@
 #include "erl_nif.h"
 #endif
 
+#ifdef _WIN32
+#define USE_SEM 0
+#else
+#define USE_SEM 0
+#endif
+
+#if USE_SEM
+    #if defined(__APPLE__)
+        #include <dispatch/dispatch.h>
+        #define COND_T dispatch_semaphore_t
+        #define cond_destroy(X) dispatch_release(X)
+        #define cond_init(X)  X = dispatch_semaphore_create(0)
+        #define cond_signal(X) dispatch_semaphore_signal(X)
+        #define cond_wait(X,MTX) dispatch_semaphore_wait(X, DISPATCH_TIME_FOREVER)
+    #else
+        #include <semaphore.h>
+        #define COND_T sem_t
+        #define cond_destroy(X) sem_destroy(&X)
+        #define cond_init(X) sem_init(&X, 0, 0)
+        #define cond_signal(X) sem_post(&X)
+        #define cond_wait(X,MTX) sem_wait(&X)
+    #endif
+#else
+    #define COND_T ErlNifCond*
+    #define cond_destroy enif_cond_destroy
+    #define cond_init(X) X = enif_cond_create("queue_cond")
+    #define cond_signal(X) enif_cond_signal(X)
+    #define cond_wait(C,MTX) enif_cond_wait(C, MTX)
+#endif
+
 typedef struct queue_t queue;
 typedef struct qitem_t qitem;
 
@@ -25,10 +55,10 @@ struct qitem_t
 
 struct queue_t
 {
-	#ifndef _TESTAPP_
+#ifndef _TESTAPP_
     ErlNifMutex *lock;
-    ErlNifCond *cond;
-    #endif
+    COND_T cond;
+#endif
     qitem *head;
     qitem *tail;
     qitem *reuseq;

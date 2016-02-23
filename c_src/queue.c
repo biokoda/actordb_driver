@@ -25,6 +25,28 @@
 //     it->data = data;
 // }
 
+#ifndef _TESTAPP_
+    #if USE_SEM
+        static void qwait(queue *q)
+        {
+            while (q->head == NULL)
+            {
+                enif_mutex_unlock(q->lock);
+                cond_wait(q->cond, q->lock);
+                while (enif_mutex_trylock(q->lock) != 0)
+                {
+                }
+            }
+        }
+    #else
+        static void qwait(queue *q)
+        {
+            while (q->head == NULL)
+                cond_wait(q->cond, q->lock);
+        }
+    #endif
+#endif
+
 queue *queue_create()
 {
     queue *ret;
@@ -33,30 +55,21 @@ queue *queue_create()
 
     ret = (queue *) enif_alloc(sizeof(struct queue_t));
     if(ret == NULL) goto error;
-
-    // ret->freeitem = freecb;
-    ret->lock = NULL;
-    ret->cond = NULL;
-    ret->head = NULL;
-    ret->tail = NULL;
-    ret->length = 0;
-
-    ret->reuseq = NULL;
+    memset(ret, 0, sizeof(struct queue_t));
 
     ret->lock = enif_mutex_create("queue_lock");
     if(ret->lock == NULL) goto error;
 
-    ret->cond = enif_cond_create("queue_cond");
-    if(ret->cond == NULL) goto error;
+    cond_init(ret->cond);
 
     return ret;
 
 error:
-    if(ret->lock != NULL)
+    if(ret && ret->lock)
         enif_mutex_destroy(ret->lock);
-    if(ret->cond != NULL)
-        enif_cond_destroy(ret->cond);
-    if(ret != NULL)
+    if(ret && ret->cond)
+        cond_destroy(ret->cond);
+    if(ret)
         enif_free(ret);
     return NULL;
 }
@@ -65,7 +78,7 @@ void
 queue_destroy(queue *queue)
 {
     ErlNifMutex *lock;
-    ErlNifCond *cond;
+    COND_T cond;
     int length;
     qitem *blocks = NULL;
 
@@ -83,7 +96,7 @@ queue_destroy(queue *queue)
     {
         qitem *tmp = queue->reuseq->next;
         if(tmp != NULL && tmp->env != NULL)
-           enif_free_env(tmp->env);
+            enif_free_env(tmp->env);
         if (tmp != NULL && tmp->cmd != NULL)
             enif_free(tmp->cmd);
         if (queue->reuseq->blockStart)
@@ -102,7 +115,7 @@ queue_destroy(queue *queue)
     enif_mutex_unlock(lock);
 
     assert(length == 0 && "Attempting to destroy a non-empty queue.");
-    enif_cond_destroy(cond);
+    cond_destroy(cond);
     enif_mutex_destroy(lock);
     enif_free(queue);
 }
@@ -126,8 +139,8 @@ queue_push(queue *queue, qitem *entry)
         queue->head = queue->tail;
 
     queue->length += 1;
+    cond_signal(queue->cond);
     enif_mutex_unlock(queue->lock);
-    enif_cond_signal(queue->cond);
 
     return 1;
 }
@@ -151,8 +164,7 @@ queue_pop(queue *queue)
     while (enif_mutex_trylock(queue->lock) != 0)
     {
     }
-    while(queue->head == NULL)
-        enif_cond_wait(queue->cond, queue->lock);
+    qwait(queue);
 
     assert(queue->length >= 0 && "Invalid queue size at pop.");
 

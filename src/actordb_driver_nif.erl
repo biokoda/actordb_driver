@@ -142,6 +142,9 @@ lz4_decompress(_,_,_) ->
 file_write(_,_,_) ->
 	exit(nif_library_not_loaded).
 
+start_threads() ->
+	exit(nif_library_not_loaded).
+
 % backup_init(_,_,_,_) ->
 %     exit(nif_library_not_loaded).
 
@@ -163,7 +166,7 @@ init(Info) ->
 	S = integer_to_list(calendar:datetime_to_gregorian_seconds(erlang:localtime())),
 	case erlang:load_nif(NifFileName, Info#{logname => "drv_"++hd(string:tokens(atom_to_list(node()),"@"))++"_"++S++".txt"}) of
 		ok ->
-			ok;
+			start_threads();
 		{error,{upgrade,_}} ->
 			ok;
 		{error,{reload,_}} ->

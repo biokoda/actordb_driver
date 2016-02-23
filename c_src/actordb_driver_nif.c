@@ -3739,6 +3739,161 @@ static ERL_NIF_TERM noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 
+static ERL_NIF_TERM start_threads(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	db_thread *controlThread = NULL;
+	int i,flags = 0;
+	priv_data *priv = (priv_data*)enif_priv_data(env);
+
+	if (g_transsync == 0)
+		flags = MDB_NOSYNC;
+	else
+		flags = 0;
+
+	controlThread = malloc(sizeof(db_thread));
+	memset(controlThread,0,sizeof(db_thread));
+	controlThread->nThread = -1;
+	controlThread->tasks = queue_create();
+	priv->wtasks[priv->nEnvs*priv->nWriteThreads] = controlThread->tasks;
+	priv->syncNumbers = malloc(sizeof(u64)*priv->nEnvs);
+	priv->wthrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
+	memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nEnvs));
+
+	if(enif_thread_create("db_connection", &(priv->tids[priv->nEnvs*priv->nWriteThreads]),
+		ctrl_thread_func, controlThread, NULL) != 0)
+	{
+		return atom_false;
+	}
+
+	priv->prepMutex = enif_mutex_create("prepmutex");
+
+	DBG("Driver starting, paths=%d, threads (w=%d, r=%d). Dbsize %llu, nbatch=%d, tsy=%d, atomic=%d",
+		priv->nEnvs,priv->nWriteThreads,priv->nReadThreads,priv->dbsize,g_nbatch,(int)g_transsync,ATOMIC);
+
+	for (i = 0; i < priv->nEnvs; i++)
+	{
+		MDB_env *menv = NULL;
+		MDB_dbi infodb;
+		MDB_dbi logdb;
+		MDB_dbi pagesdb;
+		MDB_dbi actorsdb;
+		int j,k;
+
+		// atomic_init(&priv->syncNumbers[i],0);
+		// priv->writeBufs[i] = (u8*)wbuf_init(2496);
+		for (k = 0; k < priv->nReadThreads+priv->nWriteThreads; k++)
+		{
+			char lmpath[MAX_PATHNAME];
+			db_thread *curThread = malloc(sizeof(db_thread));
+
+			memset(curThread,0,sizeof(db_thread));
+
+			sprintf(lmpath,"%s/lmdb",priv->paths[i]);
+
+			if (k == 0)
+			{
+				MDB_val key = {1,(void*)"?"}, data = {0,NULL};
+				u64 index = 0;
+				int rc;
+				MDB_txn *txn;
+
+				// MDB INIT
+				if (mdb_env_create(&menv) != MDB_SUCCESS)
+					return atom_false;
+				if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
+					return atom_false;
+				if (mdb_env_set_mapsize(menv,priv->dbsize) != MDB_SUCCESS)
+					return atom_false;
+				// Syncs are handled from erlang.
+				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|flags, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+					return atom_false;
+
+				// Create databases if they do not exist yet
+				if (mdb_txn_begin(menv, NULL, 0, &txn) != MDB_SUCCESS)
+					return atom_false;
+				if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != MDB_SUCCESS)
+					return atom_false;
+				if (mdb_dbi_open(txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
+					return atom_false;
+				if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
+					return atom_false;
+				if (mdb_dbi_open(txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
+					return atom_false;
+
+				rc = mdb_get(txn,actorsdb,&key,&data);
+				if (rc == MDB_SUCCESS)
+					memcpy(&index,data.mv_data,sizeof(u64));
+
+				#if ATOMIC
+				atomic_init(&priv->actorIndexes[i],index);
+				#else
+				priv->actorIndexes[i] = index;
+				priv->actorIndexesMtx[i] = enif_mutex_create("aindexes");
+				#endif
+
+				if (mdb_txn_commit(txn) != MDB_SUCCESS)
+					return atom_false;
+
+				priv->wmdb[i].env = menv;
+				priv->wmdb[i].infodb = infodb;
+				priv->wmdb[i].actorsdb = actorsdb;
+				priv->wmdb[i].logdb = logdb;
+				priv->wmdb[i].pagesdb = pagesdb;
+			}
+
+			if (k == 0)
+			{
+				priv->wthrMutexes[i] = enif_mutex_create("envmutex");
+				curThread->finish = 1;
+			}
+
+			curThread->nEnv = i;
+			if (k < priv->nWriteThreads)
+				curThread->nThread = k;
+			else
+			{
+				curThread->isreadonly = 1;
+				curThread->nThread = k - priv->nWriteThreads;
+			}
+
+			curThread->tasks = queue_create();
+			curThread->mdb.env = menv;
+			curThread->mdb.infodb = infodb;
+			curThread->mdb.actorsdb = actorsdb;
+			curThread->mdb.logdb = logdb;
+			curThread->mdb.pagesdb = pagesdb;
+			if (k < priv->nWriteThreads)
+				priv->wtasks[i*priv->nWriteThreads + k] = curThread->tasks;
+			else
+				priv->rtasks[i*priv->nReadThreads + (k - priv->nWriteThreads)] = curThread->tasks;
+
+			curThread->nstaticSqls = priv->nstaticSqls;
+			for (j = 0; j < priv->nstaticSqls; j++)
+				memcpy(curThread->staticSqls[j], priv->staticSqls[j], 256);
+
+			if (k < priv->nWriteThreads)
+			{
+				if (enif_thread_create("wthr", &(priv->tids[i*priv->nWriteThreads+k]), processing_thread_func, curThread, NULL) != 0)
+				{
+					return atom_false;
+				}
+			}
+			else
+			{
+				if (enif_thread_create("rthr", &(priv->rtids[i*priv->nReadThreads + (k - priv->nWriteThreads)]), 
+					processing_thread_func, curThread, NULL) != 0)
+				{
+					return atom_false;
+				}
+			}
+		}
+	}
+	enif_consume_timeslice(env,99);
+
+	return atom_ok;
+}
+
+
 static ERL_NIF_TERM db_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	return atom_ok;
@@ -3757,19 +3912,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	ERL_NIF_TERM value;
 	char nodename[128];
 	priv_data *priv;
-	db_thread *controlThread = NULL;
-	char staticSqls[MAX_STATIC_SQLS][256];
-	int nstaticSqls;
-	int flags = 0;
-	// int scratchSize;
-// Apple/Win get smaller max dbsize because they are both fucked when it comes to mmap.
-// They are just dev platforms anyway.
-#if defined(__APPLE__) || defined(_WIN32)
-	u64 dbsize = 4096LL*1024LL*1024LL;
-#else
-	// 1TB def size on linux
-	u64 dbsize = 1099511627776LL;
-#endif
 
 #ifdef _WIN32
 	WSADATA wsd;
@@ -3782,6 +3924,14 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	g_pd = priv;
 	priv->nReadThreads = 1;
 	priv->nWriteThreads = 1;
+// Apple/Win get smaller max dbsize because they are both fucked when it comes to mmap.
+// They are just dev platforms anyway.
+#if defined(__APPLE__) || defined(_WIN32)
+	priv->dbsize = 4096LL*1024LL*1024LL;
+#else
+	// 1TB def size on linux
+	priv->dbsize = 1099511627776LL;
+#endif
 	memset(nodename,0,128);
 
 	// scratchSize = 1024*1024*10;
@@ -3828,7 +3978,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 #endif
 	if (enif_get_map_value(env, info, atom_dbsize, &value))
 	{
-		if (!enif_get_uint64(env,value,(ErlNifUInt64*)&dbsize))
+		if (!enif_get_uint64(env,value,(ErlNifUInt64*)&priv->dbsize))
 			return -1;
 	}
 	if (enif_get_map_value(env, info, atom_staticsqls, &value))
@@ -3840,9 +3990,9 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		}
 		if (i > MAX_STATIC_SQLS)
 			return -1;
-		nstaticSqls = i;
-		for (i = 0; i < nstaticSqls; i++)
-			enif_get_string(env,param[i],staticSqls[i],256,ERL_NIF_LATIN1);
+		priv->nstaticSqls = i;
+		for (i = 0; i < priv->nstaticSqls; i++)
+			enif_get_string(env,param[i],priv->staticSqls[i],256,ERL_NIF_LATIN1);
 	}
 	if (enif_get_map_value(env, info, atom_paths, &value))
 	{
@@ -3850,6 +4000,14 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		{
 			DBG("Param not tuple");
 			return -1;
+		}
+
+		priv->paths = calloc(priv->nEnvs, sizeof(char*));
+		for (i = 0; i < priv->nEnvs; i++)
+		{
+			priv->paths[i] = calloc(MAX_PATHNAME, sizeof(char));
+			if (!(enif_get_string(env,pathtuple[i],priv->paths[i],MAX_PATHNAME,ERL_NIF_LATIN1) < (MAX_PATHNAME-MAX_ACTOR_NAME)))
+				return -1;
 		}
 	}
 	if (enif_get_map_value(env, info, atom_rthreads, &value))
@@ -3872,15 +4030,9 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		if (!enif_get_int(env,value,&i))
 			return -1;
 		if (i == 0)
-		{
 			g_transsync = 0;
-			flags = MDB_NOSYNC;
-		}
 		else
-		{
-			flags = 0;
 			g_transsync = 1;
-		}
 	}
 
 	if (priv->nReadThreads > 255)
@@ -3913,150 +4065,6 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	memset(priv->wmdb, 0, sizeof(mdbinf)*priv->nEnvs);
 	// priv->writeBufs = malloc(sizeof(u8*)*priv->nEnvs);
 
-	controlThread = malloc(sizeof(db_thread));
-	memset(controlThread,0,sizeof(db_thread));
-	controlThread->nThread = -1;
-	controlThread->tasks = queue_create();
-	priv->wtasks[priv->nEnvs*priv->nWriteThreads] = controlThread->tasks;
-	priv->syncNumbers = malloc(sizeof(u64)*priv->nEnvs);
-	priv->wthrMutexes = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
-	memset(priv->syncNumbers, 0, sizeof(sizeof(u64)*priv->nEnvs));
-
-	if(enif_thread_create("db_connection", &(priv->tids[priv->nEnvs*priv->nWriteThreads]),
-		ctrl_thread_func, controlThread, NULL) != 0)
-	{
-		return -1;
-	}
-
-	priv->prepMutex = enif_mutex_create("prepmutex");
-
-	DBG("Driver starting, paths=%d, threads (w=%d, r=%d). Dbsize %llu, nbatch=%d, tsy=%d, atomic=%d",
-		priv->nEnvs,priv->nWriteThreads,priv->nReadThreads,dbsize,g_nbatch,(int)g_transsync,ATOMIC);
-
-	for (i = 0; i < priv->nEnvs; i++)
-	{
-		MDB_env *menv = NULL;
-		MDB_dbi infodb;
-		MDB_dbi logdb;
-		MDB_dbi pagesdb;
-		MDB_dbi actorsdb;
-		int j,k;
-
-		// atomic_init(&priv->syncNumbers[i],0);
-		// priv->writeBufs[i] = (u8*)wbuf_init(2496);
-		for (k = 0; k < priv->nReadThreads+priv->nWriteThreads; k++)
-		{
-			char lmpath[MAX_PATHNAME];
-			char path[MAX_PATHNAME];
-			db_thread *curThread = malloc(sizeof(db_thread));
-
-			memset(curThread,0,sizeof(db_thread));
-
-			if (!(enif_get_string(env,pathtuple[i],path,MAX_PATHNAME,ERL_NIF_LATIN1) < 
-				(MAX_PATHNAME-MAX_ACTOR_NAME)))
-				return -1;
-
-			sprintf(lmpath,"%s/lmdb",path);
-
-			if (k == 0)
-			{
-				MDB_val key = {1,(void*)"?"}, data = {0,NULL};
-				u64 index = 0;
-				int rc;
-				MDB_txn *txn;
-
-				// MDB INIT
-				if (mdb_env_create(&menv) != MDB_SUCCESS)
-					return -1;
-				if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
-					return -1;
-				if (mdb_env_set_mapsize(menv,dbsize) != MDB_SUCCESS)
-					return -1;
-				// Syncs are handled from erlang.
-				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|flags, 0664) != MDB_SUCCESS) //MDB_NOSYNC
-					return -1;
-
-				// Create databases if they do not exist yet
-				if (mdb_txn_begin(menv, NULL, 0, &txn) != MDB_SUCCESS)
-					return -1;
-				if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != MDB_SUCCESS)
-					return -1;
-				if (mdb_dbi_open(txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
-					return -1;
-				if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
-					return -1;
-				if (mdb_dbi_open(txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
-					return -1;
-
-				rc = mdb_get(txn,actorsdb,&key,&data);
-				if (rc == MDB_SUCCESS)
-					memcpy(&index,data.mv_data,sizeof(u64));
-
-				#if ATOMIC
-				atomic_init(&priv->actorIndexes[i],index);
-				#else
-				priv->actorIndexes[i] = index;
-				priv->actorIndexesMtx[i] = enif_mutex_create("aindexes");
-				#endif
-
-				if (mdb_txn_commit(txn) != MDB_SUCCESS)
-					return -1;
-
-				priv->wmdb[i].env = menv;
-				priv->wmdb[i].infodb = infodb;
-				priv->wmdb[i].actorsdb = actorsdb;
-				priv->wmdb[i].logdb = logdb;
-				priv->wmdb[i].pagesdb = pagesdb;
-			}
-
-			if (k == 0)
-			{
-				priv->wthrMutexes[i] = enif_mutex_create("envmutex");
-				curThread->finish = 1;
-			}
-
-			curThread->nEnv = i;
-			if (k < priv->nWriteThreads)
-				curThread->nThread = k;
-			else
-			{
-				curThread->isreadonly = 1;
-				curThread->nThread = k - priv->nWriteThreads;
-			}
-
-			curThread->tasks = queue_create();
-			curThread->mdb.env = menv;
-			curThread->mdb.infodb = infodb;
-			curThread->mdb.actorsdb = actorsdb;
-			curThread->mdb.logdb = logdb;
-			curThread->mdb.pagesdb = pagesdb;
-			if (k < priv->nWriteThreads)
-				priv->wtasks[i*priv->nWriteThreads + k] = curThread->tasks;
-			else
-				priv->rtasks[i*priv->nReadThreads + (k - priv->nWriteThreads)] = curThread->tasks;
-
-			curThread->nstaticSqls = nstaticSqls;
-			for (j = 0; j < nstaticSqls; j++)
-				memcpy(curThread->staticSqls[j], staticSqls[j], 256);
-
-			if (k < priv->nWriteThreads)
-			{
-				if (enif_thread_create("wthr", &(priv->tids[i*priv->nWriteThreads+k]), processing_thread_func, curThread, NULL) != 0)
-				{
-					return -1;
-				}
-			}
-			else
-			{
-				if (enif_thread_create("rthr", &(priv->rtids[i*priv->nReadThreads + (k - priv->nWriteThreads)]), 
-					processing_thread_func, curThread, NULL) != 0)
-				{
-					return -1;
-				}
-			}
-		}
-	}
-
 	return 0;
 }
 
@@ -4081,19 +4089,19 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			cmd->type = cmd_stop;
 			push_command(-1, i*priv->nEnvs + k, priv, item);
 		}
-		for (k = 0; k < priv->nReadThreads; k++)
-		{
-			enif_thread_join((ErlNifTid)priv->rtids[i*priv->nReadThreads + k],NULL);
-			queue_destroy(priv->rtasks[i*priv->nEnvs+k]);
-			priv->rtasks[i*priv->nEnvs+k] = NULL;
-		}
-
 		for (k = 0; k < priv->nWriteThreads; k++)
 		{
 			item = command_create(i*priv->nEnvs + k,-1,priv);
 			cmd = (db_command*)item->cmd;
 			cmd->type = cmd_stop;
 			push_command(i*priv->nEnvs + k,-1, priv, item);
+		}
+
+		for (k = 0; k < priv->nReadThreads; k++)
+		{
+			enif_thread_join((ErlNifTid)priv->rtids[i*priv->nReadThreads + k],NULL);
+			queue_destroy(priv->rtasks[i*priv->nEnvs+k]);
+			priv->rtasks[i*priv->nEnvs+k] = NULL;
 		}
 		for (k = 0; k < priv->nWriteThreads; k++)
 		{
@@ -4106,6 +4114,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 		#if !ATOMIC
 		enif_mutex_destroy(priv->actorIndexesMtx[i]);
 		#endif
+		free(priv->paths[i]);
 		// free(priv->writeBufs[i]);
 	}
 	enif_thread_join((ErlNifTid)priv->tids[priv->nEnvs * priv->nWriteThreads],NULL);
@@ -4122,6 +4131,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	fclose(g_log);
 #endif
 	enif_mutex_destroy(priv->prepMutex);
+	free(priv->paths);
 	free(priv->wtasks);
 	free(priv->rtasks);
 	free(priv->tids);
@@ -4139,6 +4149,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 }
 
 static ErlNifFunc nif_funcs[] = {
+	{"start_threads", 0, start_threads},
 	{"open", 5, db_open},
 	{"open", 6, db_open},
 	{"close", 3, db_close},
