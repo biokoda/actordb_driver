@@ -84,7 +84,6 @@ queue_destroy(queue *queue)
     enif_mutex_lock(queue->lock);
     lock = queue->lock;
     cond = queue->cond;
-    length = queue->length;
 
     while(queue->reuseq != NULL)
     {
@@ -108,7 +107,6 @@ queue_destroy(queue *queue)
     }
     enif_mutex_unlock(lock);
 
-    assert(length == 0 && "Attempting to destroy a non-empty queue.");
     cond_destroy(cond);
     enif_mutex_destroy(lock);
     enif_free(queue);
