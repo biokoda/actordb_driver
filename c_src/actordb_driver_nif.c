@@ -293,7 +293,10 @@ void fail_send(int i,priv_data *priv)
 	// cmd->arg3 = enif_make_int(item->env,i);
 	// push_command(-1,-1, priv, item);
 	enif_send(NULL, &priv->tunnelConnector, thr->env, 
-		enif_make_tuple2(thr->env, atom_tcpfail, enif_make_int(thr->env, i)));
+		enif_make_tuple3(thr->env, 
+			atom_tcpfail, 
+			enif_make_int(thr->env, thr->nEnv * priv->nWriteThreads + thr->nThread), 
+			enif_make_int(thr->env, i)));
 	enif_clear_env(thr->env);
 }
 
@@ -3202,7 +3205,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	db_command *cmd = NULL;
 	// int nthreads = pd->nEnvs;
 
-	DBG( "all_tunnel_call");
+	DBG("all_tunnel_call");
 
 	if (argc != 3 && argc != 4)
 		return enif_make_badarg(env);
