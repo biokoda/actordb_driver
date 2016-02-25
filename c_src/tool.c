@@ -88,6 +88,20 @@ typedef struct lmdb
 	MDB_cursor *cursorActors;
 }lmdb;
 
+static size_t file_size(const char *pth)
+{
+	size_t sz;
+	FILE *file = fopen(pth,"rb");
+	if (!file)
+		return 0;
+
+	fseek(file, 0L, SEEK_END);
+	sz = ftell(file);
+	fseek(file, 0L, SEEK_SET);
+	fclose(file);
+
+	return sz;
+}
 
 static int open_env(lmdb *lm, const char *pth, int flags)
 {
@@ -98,13 +112,22 @@ static int open_env(lmdb *lm, const char *pth, int flags)
 	// 	u64 dbsize = 4096*1024*1024*128*2LL;
 	// #endif
 	int rc;
+	size_t dbsize = 0;
+
+	if (!flags)
+	{
+		dbsize = file_size(pth) + 4096*100;
+	}
 
 	if ((rc = mdb_env_create(&lm->menv)) != MDB_SUCCESS)
 		return rc;
 	if ((rc = mdb_env_set_maxdbs(lm->menv,5)) != MDB_SUCCESS)
 		return rc;
-	// if (mdb_env_set_mapsize(lm->menv,dbsize) != MDB_SUCCESS)
-	// 	return -1;
+	if (dbsize)
+	{
+		if (mdb_env_set_mapsize(lm->menv,dbsize) != MDB_SUCCESS)
+			return -1;
+	}
 	if ((rc = mdb_env_open(lm->menv, pth, MDB_NOSUBDIR | flags, 0664)) != MDB_SUCCESS)
 		return rc;
 
@@ -143,21 +166,6 @@ static void close_env(lmdb *lm)
 		mdb_txn_commit(lm->txn);
 	if (lm->menv)
 		mdb_env_close(lm->menv);
-}
-
-static size_t file_size(const char *pth)
-{
-	size_t sz;
-	FILE *file = fopen(pth,"rb");
-	if (!file)
-		return 0;
-
-	fseek(file, 0L, SEEK_END);
-	sz = ftell(file);
-	fseek(file, 0L, SEEK_SET);
-	fclose(file);
-
-	return sz;
 }
 
 
@@ -283,7 +291,7 @@ static int do_print(const char *pth, int what)
 // {
 // }
 
-static int do_backup(const char *src, const char *dst)
+static int do_backup(const char *src, const char *dst, u8 doCompact)
 {
 	MDB_val key, data;
 	lmdb rd, wr;
@@ -293,6 +301,8 @@ static int do_backup(const char *src, const char *dst)
 	#ifdef _WIN32
 	flags = MDB_CP_COMPACT;
 	#endif
+	if (doCompact)
+		flags = MDB_CP_COMPACT;
 // #ifdef SIGPIPE
 // 	signal(SIGPIPE, sighandle);
 // #endif
@@ -326,9 +336,6 @@ static int do_backup(const char *src, const char *dst)
 	mdb_txn_commit(rd.txn);
 	close_env(&rd);
 
-	#ifdef _WIN32
-	goto bckp_done;
-	#endif
 	// if (open_env(&rd, src, MDB_RDONLY) == -1)
 	// {
 	// 	printf("Unable to open source environment\n");
@@ -650,7 +657,7 @@ int main(int argc, const char* argv[])
 		} 
 		do_print(path, flag);
 	}
-	else if (argc == 4 && strcmp(argv[1],"backup") == 0)
+	else if (argc == 4 && (strcmp(argv[1],"backup") == 0 || strcmp(argv[1],"compact") == 0))
 	{
 		char ch = 'y';
 		
@@ -665,7 +672,7 @@ int main(int argc, const char* argv[])
 			return 0;
 		}
 
-		do_backup(argv[2],argv[3]);
+		do_backup(argv[2],argv[3], strcmp(argv[1],"compact") == 0);
 	}
 	else if ((argc == 5 || argc == 6) && strcmp(argv[1],"extract") == 0)
 	{
@@ -687,8 +694,11 @@ int main(int argc, const char* argv[])
 	else
 	{
 		printf("Backup:\n");
-		printf("%s backup /path/to/source/lmdb /path/to/backup/lmdb\n",argv[0]);
+		printf("%s backup src_lmdb dest_lmdb\n",argv[0]);
 		printf("To backup to stdout, use -\n");
+		printf("\n");
+		printf("Backup and compact the lmdb file (requires more CPU and is slower):\n");
+		printf("%s compact src_lmdb dest_lmdb\n",argv[0]);
 		printf("\n");
 		printf("Extract an individual actor to an sqlite file\n");
 		printf("%s extract /path/to/lmdb_file actorname actortype out_file\n",argv[0]);
