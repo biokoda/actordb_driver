@@ -90,6 +90,31 @@ typedef struct lmdb
 
 static size_t file_size(const char *pth)
 {
+#ifdef _WIN32
+	HANDLE h = CreateFile(pth,
+		GENERIC_READ,
+		FILE_SHARE_READ,
+		NULL,
+		OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL,
+		NULL);
+	if (h == INVALID_HANDLE_VALUE)
+	{
+		DWORD err = GetLastError();
+		if (err == 32)
+		{
+			printf("Can not open file because it is used by another process.\n");
+		}
+		return 0;
+	}
+	else
+	{
+		LARGE_INTEGER fs;
+		GetFileSizeEx(h,&fs);
+		CloseHandle(h);
+		return fs.QuadPart;
+	}
+#else
 	size_t sz;
 	FILE *file = fopen(pth,"rb");
 	if (!file)
@@ -101,6 +126,7 @@ static size_t file_size(const char *pth)
 	fclose(file);
 
 	return sz;
+#endif
 }
 
 static int open_env(lmdb *lm, const char *pth, int flags)
