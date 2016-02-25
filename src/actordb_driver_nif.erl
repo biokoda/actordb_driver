@@ -18,9 +18,6 @@ interrupt_query/1,
 lz4_compress/1,
 lz4_decompress/2,
 lz4_decompress/3,
-tcp_connect/6,
-tcp_connect/7,
-tcp_reconnect/0,
 replicate_opts/3,
 replication_done/1,
 page_size/0,
@@ -41,7 +38,8 @@ fsync_num/1,
 fsync/3,
 fsync/0,
 stmt_info/4,
-file_write/3
+set_tunnel_connector/0,
+set_thread_fd/4
 ]).
 
 stmt_info(_,_,_,_) ->
@@ -115,15 +113,6 @@ noop(_,_,_) ->
 replicate_opts(_,_,_) ->
 	exit(nif_library_not_loaded).
 
-tcp_connect(_,_,_,_,_,_) ->
-	exit(nif_library_not_loaded).
-
-tcp_connect(_,_,_,_,_,_,_) ->
-	exit(nif_library_not_loaded).
-
-tcp_reconnect() ->
-	exit(nif_library_not_loaded).
-
 interrupt_query(_) ->
 	exit(nif_library_not_loaded).
 
@@ -139,7 +128,10 @@ lz4_decompress(_,_) ->
 lz4_decompress(_,_,_) ->
 	exit(nif_library_not_loaded).
 
-file_write(_,_,_) ->
+set_tunnel_connector() ->
+	exit(nif_library_not_loaded).
+
+set_thread_fd(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
 start_threads() ->

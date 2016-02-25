@@ -114,6 +114,10 @@ struct priv_data
 	u64 dbsize;
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
+
+	#if  !_TESTAPP_
+	ErlNifPid tunnelConnector;
+	#endif
 };
 
 struct Wal {
@@ -187,7 +191,6 @@ struct db_thread
 
 	#ifndef _TESTAPP_
 	queue *tasks;
-	control_data *control;
 	ERL_NIF_TERM *columnSpace;
 	#endif
 
@@ -197,7 +200,6 @@ struct db_thread
 	int nEnv;    // Environment index of this thread
 	int maxvalsize;
 	int nResFrames;
-	int fd;
 	u8 forceCommit;
 	u8 isopen;
 	u8 isreadonly;
@@ -205,6 +207,11 @@ struct db_thread
 
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
+
+	#ifndef _TESTAPP_
+	control_data *control;
+	ErlNifEnv *env;
+	#endif
 };
 
 
@@ -335,7 +342,7 @@ static ERL_NIF_TERM push_command(int thread, int readThreadNum,priv_data *pd, qi
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 // int wal_hook(void *data,sqlite3* db,const char* nm,int npages);
 static qitem *command_create(int threadnum,int readThreadNum,priv_data* pd);
-static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos, ErlNifEnv *env);
+// static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos, ErlNifEnv *env);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 void fail_send(int i,priv_data *priv);

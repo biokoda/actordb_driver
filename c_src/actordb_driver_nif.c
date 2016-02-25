@@ -76,6 +76,7 @@ ERL_NIF_TERM atom_dbsize;
 ERL_NIF_TERM atom_logname;
 ERL_NIF_TERM atom_nbatch;
 ERL_NIF_TERM atom_lmdbsync;
+ERL_NIF_TERM atom_tcpfail;
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -269,15 +270,10 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 #endif
 			if (rt != completeSize+4)
 			{
-				// conn->failFlags |= (1 << i);
-				close(thread->sockets[i]);
+				// close(thread->sockets[i]);
 				thread->sockets[i] = 0;
 				fail_send(i,g_pd);
 			}
-			// else
-			// {
-			// 	// conn->nSent++;
-			// }
 		}
 	}
 
@@ -288,13 +284,17 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 
 void fail_send(int i,priv_data *priv)
 {
+	db_thread *thr = g_tsd_thread;
 	// tell control thread to create new connections for position i
-	qitem *item = command_create(-1,-1,priv);
-	db_command *cmd = (db_command*)item->cmd;
-	DBG("FAIL SEND!");
-	cmd->type = cmd_tcp_connect;
-	cmd->arg3 = enif_make_int(item->env,i);
-	push_command(-1,-1, priv, item);
+	// qitem *item = command_create(-1,-1,priv);
+	// db_command *cmd = (db_command*)item->cmd;
+	// DBG("FAIL SEND!");
+	// cmd->type = cmd_tcp_connect;
+	// cmd->arg3 = enif_make_int(item->env,i);
+	// push_command(-1,-1, priv, item);
+	enif_send(NULL, &priv->tunnelConnector, thr->env, 
+		enif_make_tuple2(thr->env, atom_tcpfail, enif_make_int(thr->env, i)));
+	enif_clear_env(thr->env);
 }
 
 
@@ -396,7 +396,7 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread, ErlNif
 #endif
 			if (rt != head.size+compressedSize+4 + (cmd->arg1 ? 4 : 0))
 			{
-				close(thread->sockets[i]);
+				// close(thread->sockets[i]);
 				thread->sockets[i] = 0;
 				fail_send(i,g_pd);
 			}
@@ -763,280 +763,280 @@ static ERL_NIF_TERM do_interrupt(db_command *cmd, db_thread *thread, ErlNifEnv *
 	return atom_error;
 }
 
-static ERL_NIF_TERM do_tcp_reconnect(db_command *cmd, db_thread *thread, ErlNifEnv *env)
-{
-	int i;
+// static ERL_NIF_TERM do_tcp_reconnect(db_command *cmd, db_thread *thread, ErlNifEnv *env)
+// {
+// 	int i;
 
-	if (!thread->control)
-		return atom_ok;
+// 	if (!thread->control)
+// 		return atom_ok;
 
-	for (i = 0; i < MAX_CONNECTIONS; i++)
-	{
-		// address set and not open
-		if (thread->control->addresses[i][0] && !thread->control->isopen[i])
-		{
-			do_tcp_connect1(cmd,thread, i, env);
-		}
-	}
-	return atom_ok;
-}
+// 	for (i = 0; i < MAX_CONNECTIONS; i++)
+// 	{
+// 		// address set and not open
+// 		if (thread->control->addresses[i][0] && !thread->control->isopen[i])
+// 		{
+// 			do_tcp_connect1(cmd,thread, i, env);
+// 		}
+// 	}
+// 	return atom_ok;
+// }
 
-static ERL_NIF_TERM do_tcp_connect(db_command *cmd, db_thread *thread, ErlNifEnv *env)
-{
-	int pos;
-	ErlNifBinary bin;
-	if (!thread->control)
-	{
-		thread->control = enif_alloc(sizeof(control_data));
-		memset(thread->control,0,sizeof(control_data));
-	}
-	if (!enif_get_int(env,cmd->arg3,&pos))
-		return enif_make_badarg(env);
+// static ERL_NIF_TERM do_tcp_connect(db_command *cmd, db_thread *thread, ErlNifEnv *env)
+// {
+// 	int pos;
+// 	ErlNifBinary bin;
+// 	if (!thread->control)
+// 	{
+// 		thread->control = enif_alloc(sizeof(control_data));
+// 		memset(thread->control,0,sizeof(control_data));
+// 	}
+// 	if (!enif_get_int(env,cmd->arg3,&pos))
+// 		return enif_make_badarg(env);
 
-	if (pos < 0 || pos > 7)
-		return enif_make_badarg(env);
+// 	if (pos < 0 || pos > 7)
+// 		return enif_make_badarg(env);
 
-	// this can be called from erlang, or it can be called
-	// from a thread that has lost connection.
-	// If called from a thread, only pos is sent in arg3. Everything else
-	//  has already been set on first call from erlang.
-	if (cmd->arg)
-	{
-		if (!enif_get_string(env, cmd->arg,thread->control->addresses[pos],255,ERL_NIF_LATIN1))
-			return enif_make_badarg(env);
-		if (!enif_get_int(env,cmd->arg1,&(thread->control->ports[pos])))
-			return enif_make_badarg(env);
-		if (!enif_inspect_iolist_as_binary(env,cmd->arg2,&bin))
-			return enif_make_badarg(env);
+// 	// this can be called from erlang, or it can be called
+// 	// from a thread that has lost connection.
+// 	// If called from a thread, only pos is sent in arg3. Everything else
+// 	//  has already been set on first call from erlang.
+// 	if (cmd->arg)
+// 	{
+// 		if (!enif_get_string(env, cmd->arg,thread->control->addresses[pos],255,ERL_NIF_LATIN1))
+// 			return enif_make_badarg(env);
+// 		if (!enif_get_int(env,cmd->arg1,&(thread->control->ports[pos])))
+// 			return enif_make_badarg(env);
+// 		if (!enif_inspect_iolist_as_binary(env,cmd->arg2,&bin))
+// 			return enif_make_badarg(env);
 
-		enif_alloc_binary(bin.size,&(thread->control->prefixes[pos]));
-		memcpy(thread->control->prefixes[pos].data,bin.data,bin.size);
-		if (cmd->arg4)
-		{
-			if (!enif_get_int(env,cmd->arg4,&(thread->control->types[pos])))
-				return enif_make_badarg(env);
-		}
-		else
-			thread->control->types[pos] = 1;
-	}
-	else
-	{
-		bin = thread->control->prefixes[pos];
-	}
+// 		enif_alloc_binary(bin.size,&(thread->control->prefixes[pos]));
+// 		memcpy(thread->control->prefixes[pos].data,bin.data,bin.size);
+// 		if (cmd->arg4)
+// 		{
+// 			if (!enif_get_int(env,cmd->arg4,&(thread->control->types[pos])))
+// 				return enif_make_badarg(env);
+// 		}
+// 		else
+// 			thread->control->types[pos] = 1;
+// 	}
+// 	else
+// 	{
+// 		bin = thread->control->prefixes[pos];
+// 	}
 
-	return do_tcp_connect1(cmd,thread,pos, env);
-}
+// 	return do_tcp_connect1(cmd,thread,pos, env);
+// }
 
-static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos, ErlNifEnv *env)
-{
-	int i;
-	// struct sockaddr_in addr;
-	int fd;
-	priv_data *pd = g_pd;
-	ERL_NIF_TERM result = atom_ok;
-#ifndef _WIN32
-	struct iovec iov[2];
-#else
-	WSABUF iov[2];
-#endif
-	char portstr[10];
-	u8 packetLen[4];
-	int *sockets;
-	char confirm[7] = {0,0,0,0,0,0,0};
-	int flag = 1, rt = 0, error = 0, opts;
-	socklen_t errlen = sizeof error;
-	struct timeval timeout;
-	fd_set fdset;
-	struct addrinfo *addrlist;
-	struct addrinfo *adrp;
+// static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos, ErlNifEnv *env)
+// {
+// 	int i;
+// 	// struct sockaddr_in addr;
+// 	int fd;
+// 	priv_data *pd = g_pd;
+// 	ERL_NIF_TERM result = atom_ok;
+// #ifndef _WIN32
+// 	struct iovec iov[2];
+// #else
+// 	WSABUF iov[2];
+// #endif
+// 	char portstr[10];
+// 	u8 packetLen[4];
+// 	int *sockets;
+// 	char confirm[7] = {0,0,0,0,0,0,0};
+// 	int flag = 1, rt = 0, error = 0, opts;
+// 	socklen_t errlen = sizeof error;
+// 	struct timeval timeout;
+// 	fd_set fdset;
+// 	struct addrinfo *addrlist;
+// 	struct addrinfo *adrp;
 
-	sockets = alloca(pd->nEnvs*pd->nWriteThreads);
+// 	sockets = alloca(pd->nEnvs*pd->nWriteThreads);
 
-	put4byte(packetLen,thread->control->prefixes[pos].size);
-#ifndef _WIN32
-	iov[0].iov_base = packetLen;
-	iov[0].iov_len = 4;
-	iov[1].iov_base = thread->control->prefixes[pos].data;
-	iov[1].iov_len = thread->control->prefixes[pos].size;
-#else
-	iov[0].buf = packetLen;
-	iov[0].len = 4;
-	iov[1].buf = thread->control->prefixes[pos].data;
-	iov[1].len = thread->control->prefixes[pos].size;
-#endif
+// 	put4byte(packetLen,thread->control->prefixes[pos].size);
+// #ifndef _WIN32
+// 	iov[0].iov_base = packetLen;
+// 	iov[0].iov_len = 4;
+// 	iov[1].iov_base = thread->control->prefixes[pos].data;
+// 	iov[1].iov_len = thread->control->prefixes[pos].size;
+// #else
+// 	iov[0].buf = packetLen;
+// 	iov[0].len = 4;
+// 	iov[1].buf = thread->control->prefixes[pos].data;
+// 	iov[1].len = thread->control->prefixes[pos].size;
+// #endif
 
-	memset(sockets,0,sizeof(int)*pd->nEnvs*pd->nWriteThreads);
+// 	memset(sockets,0,sizeof(int)*pd->nEnvs*pd->nWriteThreads);
 
-	for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
-	{
-		fd = socket(AF_INET,SOCK_STREAM,0);
+// 	for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
+// 	{
+// 		fd = socket(AF_INET,SOCK_STREAM,0);
 
-#ifndef _WIN32
-		if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
-#else
-		opts = 1;
-		if (ioctlsocket(fd, FIONBIO, &opts) != 0)
-#endif
-		{
-			close(fd);
-			result = make_error_tuple(env,"noblock");
-			break;
-		}
+// #ifndef _WIN32
+// 		if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
+// #else
+// 		opts = 1;
+// 		if (ioctlsocket(fd, FIONBIO, &opts) != 0)
+// #endif
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"noblock");
+// 			break;
+// 		}
 
-		DBG("Connecting to port %s:%d",
-			thread->control->addresses[pos],thread->control->ports[pos]);
+// 		DBG("Connecting to port %s:%d",
+// 			thread->control->addresses[pos],thread->control->ports[pos]);
 
-		// memset(&addr,0,sizeof(addr));
-		// addr.sin_family = AF_INET;
-		// addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
-		// addr.sin_port = htons(thread->control->ports[pos]);
-		snprintf(portstr,9,"%d",thread->control->ports[pos]);
-		if (getaddrinfo(thread->control->addresses[pos], portstr, NULL, &addrlist) != 0)
-		{
-			close(fd);
-			result = make_error_tuple(env,"getaddrinfo");
-			break;
-		}
-		for(adrp = addrlist; adrp != NULL; adrp = adrp->ai_next)
-		{
-			if (adrp->ai_family == AF_INET && adrp->ai_socktype == SOCK_STREAM)
-			{
-				rt = connect(fd, adrp->ai_addr, adrp->ai_addrlen);
-				break;
-			}
-		}
-		if (adrp == NULL)
-			result = make_error_tuple(env,"findaddrinfo");
+// 		// memset(&addr,0,sizeof(addr));
+// 		// addr.sin_family = AF_INET;
+// 		// addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
+// 		// addr.sin_port = htons(thread->control->ports[pos]);
+// 		snprintf(portstr,9,"%d",thread->control->ports[pos]);
+// 		if (getaddrinfo(thread->control->addresses[pos], portstr, NULL, &addrlist) != 0)
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"getaddrinfo");
+// 			break;
+// 		}
+// 		for(adrp = addrlist; adrp != NULL; adrp = adrp->ai_next)
+// 		{
+// 			if (adrp->ai_family == AF_INET && adrp->ai_socktype == SOCK_STREAM)
+// 			{
+// 				rt = connect(fd, adrp->ai_addr, adrp->ai_addrlen);
+// 				break;
+// 			}
+// 		}
+// 		if (adrp == NULL)
+// 			result = make_error_tuple(env,"findaddrinfo");
 
-		freeaddrinfo(addrlist);
-#ifndef _WIN32
-		if (errno != EINPROGRESS)
-#else
-		if (WSAGetLastError() != WSAEWOULDBLOCK)
-#endif
-		{
-			close(fd);
-			result = make_error_tuple(env,"connect");
-			break;
-		}
+// 		freeaddrinfo(addrlist);
+// #ifndef _WIN32
+// 		if (errno != EINPROGRESS)
+// #else
+// 		if (WSAGetLastError() != WSAEWOULDBLOCK)
+// #endif
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"connect");
+// 			break;
+// 		}
 
-		FD_ZERO(&fdset);
-		FD_SET(fd, &fdset);
-		timeout.tv_sec = 1;
-		timeout.tv_usec = 0;
+// 		FD_ZERO(&fdset);
+// 		FD_SET(fd, &fdset);
+// 		timeout.tv_sec = 1;
+// 		timeout.tv_usec = 0;
 
-		rt = select(fd + 1, NULL, &fdset, NULL, &timeout);
-#ifndef _WIN32
-		getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &errlen);
-#else
-		getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&error, &errlen);
-#endif
+// 		rt = select(fd + 1, NULL, &fdset, NULL, &timeout);
+// #ifndef _WIN32
+// 		getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &errlen);
+// #else
+// 		getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&error, &errlen);
+// #endif
 
-		if (rt != 1 || error != 0)
-		{
-			close(fd);
-			result = make_error_tuple(env,"connect");
-			break;
-		}
+// 		if (rt != 1 || error != 0)
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"connect");
+// 			break;
+// 		}
 
-#ifndef _WIN32
-		opts = fcntl(fd,F_GETFL);
-		if (fcntl(fd, F_SETFL, opts & (~O_NONBLOCK)) == -1 || fcntl(fd,F_GETFL) & O_NONBLOCK)
-#else
-		opts = 0;
-		if (ioctlsocket(fd, FIONBIO, &opts) != 0)
-#endif
-		{
-			close(fd);
-			result = make_error_tuple(env,"blocking");
-			break;
-		}
+// #ifndef _WIN32
+// 		opts = fcntl(fd,F_GETFL);
+// 		if (fcntl(fd, F_SETFL, opts & (~O_NONBLOCK)) == -1 || fcntl(fd,F_GETFL) & O_NONBLOCK)
+// #else
+// 		opts = 0;
+// 		if (ioctlsocket(fd, FIONBIO, &opts) != 0)
+// #endif
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"blocking");
+// 			break;
+// 		}
 
-		if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int)) != 0)
-		{
-			close(fd);
-			result = make_error_tuple(env,"keepalive");
-			break;
-		}
-		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int)) != 0)
-		{
-			close(fd);
-			result = make_error_tuple(env,"reuseaddr");
-			break;
-		}
-		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int)) != 0)
-		{
-			close(fd);
-			result = make_error_tuple(env,"nodelay");
-			break;
-		}
-#ifdef SO_NOSIGPIPE
-		if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&flag, sizeof(int)) != 0)
-		{
-		  close(fd);
-		  result = make_error_tuple(env,"nosigpipe");
-		  break;
-		}
-#endif
+// 		if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int)) != 0)
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"keepalive");
+// 			break;
+// 		}
+// 		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int)) != 0)
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"reuseaddr");
+// 			break;
+// 		}
+// 		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int)) != 0)
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"nodelay");
+// 			break;
+// 		}
+// #ifdef SO_NOSIGPIPE
+// 		if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&flag, sizeof(int)) != 0)
+// 		{
+// 		  close(fd);
+// 		  result = make_error_tuple(env,"nosigpipe");
+// 		  break;
+// 		}
+// #endif
 
-		timeout.tv_sec = 2;
-		timeout.tv_usec = 0;
-		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
-		timeout.tv_sec = 2;
-		timeout.tv_usec = 0;
-		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,sizeof(timeout));
-#ifndef _WIN32
-		rt = writev(fd,iov,2);
-#else
-		if (WSASend(fd,iov,2, &rt, 0, NULL, NULL) != 0)
-			rt = 0;
-#endif
-		if (thread->control->prefixes[pos].size+4 != rt)
-		{
-			close(fd);
-			result = make_error_tuple(env,"initialize");
-			break;
-		}
+// 		timeout.tv_sec = 2;
+// 		timeout.tv_usec = 0;
+// 		setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
+// 		timeout.tv_sec = 2;
+// 		timeout.tv_usec = 0;
+// 		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,sizeof(timeout));
+// #ifndef _WIN32
+// 		rt = writev(fd,iov,2);
+// #else
+// 		if (WSASend(fd,iov,2, &rt, 0, NULL, NULL) != 0)
+// 			rt = 0;
+// #endif
+// 		if (thread->control->prefixes[pos].size+4 != rt)
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"initialize");
+// 			break;
+// 		}
 
-		rt = recv(fd,confirm,6,0);
-		if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
-		{
-			close(fd);
-			result = make_error_tuple(env,"initialize");
-			break;
-		}
+// 		rt = recv(fd,confirm,6,0);
+// 		if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
+// 		{
+// 			close(fd);
+// 			result = make_error_tuple(env,"initialize");
+// 			break;
+// 		}
 
-		sockets[i] = fd;
-	}
+// 		sockets[i] = fd;
+// 	}
 
-	if (result == atom_ok)
-	{
-		thread->control->isopen[pos] = 1;
+// 	if (result == atom_ok)
+// 	{
+// 		thread->control->isopen[pos] = 1;
 
-		for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
-		{
-			qitem *item = command_create(i,-1,g_pd);
-			db_command *cmd = (db_command*)item->cmd;
-			cmd->type = cmd_set_socket;
-			cmd->arg = enif_make_int(item->env,sockets[i]);
-			cmd->arg1 = enif_make_int(item->env,pos);
-			cmd->arg2 = enif_make_int(item->env,thread->control->types[pos]);
-			push_command(i, -1, g_pd, item);
-		}
-	}
-	else
-	{
-		thread->control->isopen[pos] = 0;
+// 		for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
+// 		{
+// 			qitem *item = command_create(i,-1,g_pd);
+// 			db_command *cmd = (db_command*)item->cmd;
+// 			cmd->type = cmd_set_socket;
+// 			cmd->arg = enif_make_int(item->env,sockets[i]);
+// 			cmd->arg1 = enif_make_int(item->env,pos);
+// 			cmd->arg2 = enif_make_int(item->env,thread->control->types[pos]);
+// 			push_command(i, -1, g_pd, item);
+// 		}
+// 	}
+// 	else
+// 	{
+// 		thread->control->isopen[pos] = 0;
 
-		for (i = 0; i < pd->nWriteThreads; i++)
-		{
-			if (sockets[i])
-				close(sockets[i]);
-		}
-	}
+// 		for (i = 0; i < pd->nWriteThreads; i++)
+// 		{
+// 			if (sockets[i])
+// 				close(sockets[i]);
+// 		}
+// 	}
 
-	return result;
-}
+// 	return result;
+// }
 
 
 static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *env)
@@ -1499,40 +1499,6 @@ static ERL_NIF_TERM do_actor_info(db_command *cmd, db_thread *thr, ErlNifEnv *en
 	}
 	else
 		return atom_error;
-}
-
-static ERL_NIF_TERM do_file_write(db_command *cmd, db_thread *thread, ErlNifEnv *env)
-{
-	#ifndef _WIN32
-	int n = 0, i;
-	u32 offset;
-	struct iovec *iov;
-	ERL_NIF_TERM list, head;
-
-	if (!thread->fd)
-	{
-		thread->fd = open("q",O_RDWR|O_CREAT,S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP);
-	}
-
-	enif_get_uint(env,cmd->arg,&offset);
-	enif_get_int(env,cmd->arg1,&n);
-
-	list = cmd->arg2;
-
-	iov = alloca(sizeof(struct iovec) * n);
-	for (i = 0; i < n; i++)
-	{
-		ErlNifBinary bin;
-		enif_get_list_cell(env,list,&head,&list);
-		enif_inspect_binary(env,head,&bin);
-		iov[i].iov_base = bin.data;
-		iov[i].iov_len = bin.size;
-	}
-	// pwritev(thread->fd, iov, n, offset);
-	lseek(thread->fd, offset, SEEK_SET);
-	writev(thread->fd, iov, n);
-#endif
-	return atom_ok;
 }
 
 static ERL_NIF_TERM do_actorsdb_add(db_command *cmd, db_thread *thread, ErlNifEnv *env)
@@ -2445,8 +2411,6 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifE
 		return do_wal_rewind(cmd,thread,env);
 	case cmd_stmt_info:
 		return do_stmt_info(cmd,thread,env);
-	case cmd_file_write:
-		return do_file_write(cmd,thread,env);
 	case cmd_interrupt:
 		return do_interrupt(cmd,thread,env);
 	case cmd_iterate:
@@ -2456,10 +2420,10 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifE
 	case cmd_unknown:
 		// return enif_make_int(env,queue_getct(thread->tasks));
 		return atom_ok;
-	case cmd_tcp_connect:
-		return do_tcp_connect(cmd,thread,env);
-	case cmd_tcp_reconnect:
-		return do_tcp_reconnect(cmd,thread,env);
+	// case cmd_tcp_connect:
+	// 	return do_tcp_connect(cmd,thread,env);
+	// case cmd_tcp_reconnect:
+	// 	return do_tcp_reconnect(cmd,thread,env);
 	case cmd_alltunnel_call:
 		return do_all_tunnel_call(cmd,thread,env);
 	case cmd_checkpoint_lock:
@@ -2482,27 +2446,27 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifE
 
 		if (fd > 3 && pos >= 0 && pos < 8)
 		{
-			if (thread->sockets[pos] > 3)
-			{
-				char zero[4];
-				memset(zero,0,4);
+// 			if (thread->sockets[pos] > 3)
+// 			{
+// 				char zero[4];
+// 				memset(zero,0,4);
 
-				// check if connection open, if it is do not use new socket
-#ifdef MSG_NOSIGNAL
-				if (send(thread->sockets[pos], zero, sizeof(zero), MSG_NOSIGNAL) == -1)
-#else
-				if (write(thread->sockets[pos],zero,4) == -1)
-#endif
-				{
-					close(thread->sockets[pos]);
-					thread->sockets[pos] = fd;
-				}
-				else
-				{
-					close(fd);
-				}
-			}
-			else
+// 				// check if connection open, if it is do not use new socket
+// #ifdef MSG_NOSIGNAL
+// 				if (send(thread->sockets[pos], zero, sizeof(zero), MSG_NOSIGNAL) == -1)
+// #else
+// 				if (write(thread->sockets[pos],zero,4) == -1)
+// #endif
+// 				{
+// 					// close(thread->sockets[pos]);
+// 					thread->sockets[pos] = fd;
+// 				}
+// 				else
+// 				{
+// 					// close(fd);
+// 				}
+// 			}
+// 			else
 			{
 				thread->sockets[pos] = fd;
 				thread->socket_types[pos] = type;
@@ -2647,6 +2611,7 @@ static void *processing_thread_func(void *arg)
 	g_tsd_thread  = data;
 
 	data->isopen = 1;
+	data->env = enif_alloc_env();
 
 	data->maxvalsize = mdb_env_get_maxkeysize(mdb->env);
 	data->resFrames = alloca((SQLITE_DEFAULT_PAGE_SIZE/data->maxvalsize + 1)*sizeof(MDB_val));
@@ -3042,60 +3007,97 @@ static ERL_NIF_TERM replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
 
 // Called with: ref,pid, ip, port, connect string, connection number
-static ERL_NIF_TERM tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// static ERL_NIF_TERM tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+// 	ErlNifPid pid;
+// 	qitem *item;
+// 	priv_data *pd = (priv_data*)enif_priv_data(env);
+// 	db_command *cmd = NULL;
+
+// 	DBG( "tcp_connect");
+
+// 	if (!(argc == 6 || argc == 7))
+// 		return enif_make_badarg(env);
+
+// 	if(!enif_is_ref(env, argv[0]))
+// 		return make_error_tuple(env, "invalid_ref");
+// 	if(!enif_get_local_pid(env, argv[1], &pid))
+// 		return make_error_tuple(env, "invalid_pid");
+// 	if (!enif_is_list(env,argv[2]))
+// 		return enif_make_badarg(env);
+// 	if (!enif_is_number(env,argv[3]))
+// 		return enif_make_badarg(env);
+// 	if (!(enif_is_binary(env,argv[4]) || enif_is_list(env,argv[2])))
+// 		return enif_make_badarg(env);
+// 	if (!enif_is_number(env,argv[5]))
+// 		return enif_make_badarg(env);
+// 	if (argc == 7 && !enif_is_number(env,argv[6]))
+// 		return enif_make_badarg(env);
+
+// 	item = command_create(-1,-1,pd);
+// 	cmd = (db_command*)item->cmd;
+// 	cmd->type = cmd_tcp_connect;
+// 	cmd->arg = enif_make_copy(item->env,argv[2]);
+// 	cmd->arg1 = enif_make_copy(item->env,argv[3]);
+// 	cmd->arg2 = enif_make_copy(item->env,argv[4]);
+// 	cmd->arg3 = enif_make_copy(item->env,argv[5]);
+// 	if (argc == 7)
+// 		cmd->arg4 = enif_make_copy(item->env,argv[6]);
+// 	cmd->ref = enif_make_copy(item->env, argv[0]);
+// 	cmd->pid = pid;
+
+// 	enif_consume_timeslice(env,90);
+// 	return push_command(-1,-1,pd,item);
+// }
+
+static ERL_NIF_TERM set_tunnel_connector(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-	ErlNifPid pid;
+	priv_data *pd = (priv_data*)enif_priv_data(env);
+
+	enif_self(env, &pd->tunnelConnector);
+
+	return atom_ok;
+}
+
+static ERL_NIF_TERM set_thread_fd(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	int thread, fd, type, pos;
 	qitem *item;
-	priv_data *pd = (priv_data*)enif_priv_data(env);
-	db_command *cmd = NULL;
+	db_command *cmd;
 
-	DBG( "tcp_connect");
+	if (!enif_get_int(env,argv[0],&thread))
+		return make_error_tuple(env, "not_int");
+	if (!enif_get_int(env,argv[1],&fd))
+		return make_error_tuple(env, "not_int");
+	if (!enif_get_int(env,argv[2],&pos))
+		return make_error_tuple(env, "not_int");
+	if (!enif_get_int(env,argv[3],&type))
+		return make_error_tuple(env, "not_int");
 
-	if (!(argc == 6 || argc == 7))
-		return enif_make_badarg(env);
+	if (pos > 8 || pos < 0 || fd < 3 || thread >= g_pd->nWriteThreads * g_pd->nEnvs)
+		return atom_false;
 
-	if(!enif_is_ref(env, argv[0]))
-		return make_error_tuple(env, "invalid_ref");
-	if(!enif_get_local_pid(env, argv[1], &pid))
-		return make_error_tuple(env, "invalid_pid");
-	if (!enif_is_list(env,argv[2]))
-		return enif_make_badarg(env);
-	if (!enif_is_number(env,argv[3]))
-		return enif_make_badarg(env);
-	if (!(enif_is_binary(env,argv[4]) || enif_is_list(env,argv[2])))
-		return enif_make_badarg(env);
-	if (!enif_is_number(env,argv[5]))
-		return enif_make_badarg(env);
-	if (argc == 7 && !enif_is_number(env,argv[6]))
-		return enif_make_badarg(env);
-
-	item = command_create(-1,-1,pd);
+	item = command_create(thread,-1,g_pd);
 	cmd = (db_command*)item->cmd;
-	cmd->type = cmd_tcp_connect;
-	cmd->arg = enif_make_copy(item->env,argv[2]);
-	cmd->arg1 = enif_make_copy(item->env,argv[3]);
-	cmd->arg2 = enif_make_copy(item->env,argv[4]);
-	cmd->arg3 = enif_make_copy(item->env,argv[5]);
-	if (argc == 7)
-		cmd->arg4 = enif_make_copy(item->env,argv[6]);
-	cmd->ref = enif_make_copy(item->env, argv[0]);
-	cmd->pid = pid;
-
-	enif_consume_timeslice(env,90);
-	return push_command(-1,-1,pd,item);
+	cmd->type = cmd_set_socket;
+	cmd->arg = enif_make_int(item->env,fd);
+	cmd->arg1 = enif_make_int(item->env,pos);
+	cmd->arg2 = enif_make_int(item->env,type);
+	push_command(thread, -1, g_pd, item);
+	return atom_ok;
 }
 
-static ERL_NIF_TERM tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-	priv_data *pd = (priv_data*)enif_priv_data(env);
-	qitem *item = command_create(-1,-1,pd);
-	db_command *cmd = (db_command*)item->cmd;
-	cmd->type = cmd_tcp_reconnect;
+// static ERL_NIF_TERM tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+// 	priv_data *pd = (priv_data*)enif_priv_data(env);
+// 	qitem *item = command_create(-1,-1,pd);
+// 	db_command *cmd = (db_command*)item->cmd;
+// 	cmd->type = cmd_tcp_reconnect;
 
-	enif_consume_timeslice(env,90);
+// 	enif_consume_timeslice(env,90);
 
-	return push_command(-1,-1,pd,item);
-}
+// 	return push_command(-1,-1,pd,item);
+// }
 
 static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -3685,32 +3687,6 @@ static ERL_NIF_TERM wal_rewind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
 	return push_command(res->wthreadind, -1, pd, item);
 }
 
-static ERL_NIF_TERM file_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-	qitem *item;
-	priv_data *pd = (priv_data*)enif_priv_data(env);
-	db_command *cmd = NULL;
-
-	if(argc != 3)
-		return enif_make_badarg(env);
-
-	if (!enif_is_number(env,argv[0]))
-		return make_error_tuple(env,"offset_not_num");
-	if (!enif_is_number(env,argv[1]))
-		return make_error_tuple(env,"len_not_size");
-	if (!enif_is_list(env,argv[2]))
-		return make_error_tuple(env,"not_list");
-
-	item = command_create(0,-1,pd);
-	cmd = (db_command*)item->cmd;
-	cmd->type = cmd_file_write;
-	cmd->arg = enif_make_copy(item->env,argv[0]);
-	cmd->arg1 = enif_make_copy(item->env,argv[1]);
-	cmd->arg2 = enif_make_copy(item->env,argv[2]);
-
-	enif_consume_timeslice(env,90);
-	return push_command(0, -1, pd, item);
-}
 
 static ERL_NIF_TERM noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -3968,6 +3944,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_logname = enif_make_atom(env, "logname");
 	atom_nbatch = enif_make_atom(env, "nbatch");
 	atom_lmdbsync = enif_make_atom(env, "lmdbsync");
+	atom_tcpfail = enif_make_atom(env, "tcpfail");
 
 #ifdef _TESTDBG_
 	if (enif_get_map_value(env, info, atom_logname, &value))
@@ -4165,9 +4142,11 @@ static ErlNifFunc nif_funcs[] = {
 	{"lz4_compress",1,lz4_compress},
 	{"lz4_decompress",2,lz4_decompress},
 	{"lz4_decompress",3,lz4_decompress},
-	{"tcp_connect",6,tcp_connect},
-	{"tcp_connect",7,tcp_connect},
-	{"tcp_reconnect",0,tcp_reconnect},
+	// {"tcp_connect",6,tcp_connect},
+	// {"tcp_connect",7,tcp_connect},
+	// {"tcp_reconnect",0,tcp_reconnect},
+	{"set_tunnel_connector",0,set_tunnel_connector},
+	{"set_thread_fd",4,set_thread_fd},
 	{"all_tunnel_call",3,all_tunnel_call},
 	{"all_tunnel_call",4,all_tunnel_call},
 	{"store_prepared_table",2,store_prepared_table},
@@ -4186,8 +4165,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"fsync",3,db_sync},
 	{"fsync",0,db_sync},
 	{"replication_done",1,replication_done},
-	{"stmt_info",4,stmt_info},
-	{"file_write",3,file_write}
+	{"stmt_info",4,stmt_info}
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

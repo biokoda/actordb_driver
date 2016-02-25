@@ -12,20 +12,23 @@
 		store_prepared_table/2,
 		close/1,inject_page/3,
 		parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0,
-		replication_done/1,file_write/3,
+		replication_done/1,
 		lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
 		iterate_close/1, fsync_num/1,fsync/1,fsync/0,
-		replicate_opts/2,replicate_opts/3,tcp_connect/4,all_tunnel_call/1,all_tunnel_call/2,checkpoint_lock/2,
+		set_tunnel_connector/0, set_thread_fd/4,
+		replicate_opts/2,replicate_opts/3, all_tunnel_call/1,all_tunnel_call/2,checkpoint_lock/2,
 		checkpoint/2, term_store/3,term_store/4, actor_info/2, wal_rewind/2,wal_rewind/3,
-		tcp_connect_async/4,tcp_connect_async/5,tcp_reconnect/0, stmt_info/2]).
+		stmt_info/2]).
 
 % #{paths => {Path1,Path2,...}, staticsqls => {StaticSql1,StaticSql2,...}, 
 %   dbsize => MaxDbSize, rthreads => NumReadThreads, wthreads => NumWriteThreads}
 init(Info) when is_map(Info) ->
 	actordb_driver_nif:init(Info).
 
-file_write(Offset,Items,L) ->
-	actordb_driver_nif:file_write(Offset,Items,L).
+set_tunnel_connector() ->
+	actordb_driver_nif:set_tunnel_connector().
+set_thread_fd(Thread,Fd,Pos,Type) ->
+	actordb_driver_nif:set_thread_fd(Thread,Fd,Pos,Type).
 
 open(Filename) ->
 	open(Filename,0,wal).
@@ -94,20 +97,20 @@ replicate_opts({actordb_driver, _Ref, Connection},PacketPrefix,Type) ->
 replication_done({actordb_driver, _Ref, Connection}) ->
 	ok = actordb_driver_nif:replication_done(Connection).
 
-tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
-	Ref = make_ref(),
-	actordb_driver_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber),
-	receive_answer(Ref).
-tcp_connect_async(Ip,Port,ConnectStr,ConnNumber) ->
-	Ref = make_ref(),
-	actordb_driver_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber),
-	Ref.
-tcp_connect_async(Ip,Port,ConnectStr,ConnNumber,Type) ->
-	Ref = make_ref(),
-	actordb_driver_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber,Type),
-	Ref.
-tcp_reconnect() ->
-	actordb_driver_nif:tcp_reconnect().
+% tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
+% 	Ref = make_ref(),
+% 	actordb_driver_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber),
+% 	receive_answer(Ref).
+% tcp_connect_async(Ip,Port,ConnectStr,ConnNumber) ->
+% 	Ref = make_ref(),
+% 	actordb_driver_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber),
+% 	Ref.
+% tcp_connect_async(Ip,Port,ConnectStr,ConnNumber,Type) ->
+% 	Ref = make_ref(),
+% 	actordb_driver_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber,Type),
+% 	Ref.
+% tcp_reconnect() ->
+% 	actordb_driver_nif:tcp_reconnect().
 
 all_tunnel_call(Bin) ->
 	Ref = make_ref(),
