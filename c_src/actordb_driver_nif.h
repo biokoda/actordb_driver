@@ -22,7 +22,6 @@
 #define MAX_PATHNAME 512
 #define PAGE_BUFF_SIZE 4300
 #define MAX_CONNECTIONS 8
-#define PACKET_ITEMS 9
 #define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
 #define MAX_ACTOR_NAME 92
@@ -151,20 +150,6 @@ struct Wal {
 	u32 allPages; // mxPage + unused pages
 };
 
-
-struct control_data
-{
-	char addresses[MAX_CONNECTIONS][255];
-	int ports[MAX_CONNECTIONS];
-	int types[MAX_CONNECTIONS];
-	#ifndef _TESTAPP_
-	// connection prefixes
-	ErlNifBinary prefixes[MAX_CONNECTIONS];
-	char isopen[MAX_CONNECTIONS];
-	#endif
-};
-
-
 struct db_thread
 {
 	#ifdef TRACK_TIME
@@ -209,7 +194,6 @@ struct db_thread
 	int nstaticSqls;
 
 	#ifndef _TESTAPP_
-	control_data *control;
 	ErlNifEnv *env;
 	#endif
 };
@@ -345,7 +329,7 @@ static qitem *command_create(int threadnum,int readThreadNum,priv_data* pd);
 // static ERL_NIF_TERM do_tcp_connect1(db_command *cmd, db_thread* thread, int pos, ErlNifEnv *env);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
-void fail_send(int i,priv_data *priv);
+void fail_send(int i);
 #endif
 
 
