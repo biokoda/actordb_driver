@@ -43,10 +43,10 @@ static void lock_wtxn(int env);
 #define __thread __declspec( thread )
 #endif
 
-static __thread db_thread      *g_tsd_thread;
-static __thread db_connection  *g_tsd_conn;
-static __thread mdbinf         *g_tsd_wmdb;
-static __thread u64             g_tsd_cursync;
+static __thread db_thread      *g_tsd_thread = NULL;
+static __thread db_connection  *g_tsd_conn = NULL;
+static __thread mdbinf         *g_tsd_wmdb = NULL;
+static __thread u64             g_tsd_cursync = 0;
 
 static priv_data               *g_pd;
 static int                      g_nbatch = 0;  // how many writes to batch together

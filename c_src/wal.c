@@ -68,6 +68,9 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	MDB_txn *txn = mdb->txn;
 	int offset = 0, cutoff = 0, nmLen = 0;
 
+	if (!thr)
+		return SQLITE_ERROR;
+
 	actorsdb = mdb->actorsdb;
 	infodb = mdb->infodb;
 
@@ -280,6 +283,8 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 {
 	// db_thread * const thread = enif_tsd_get(g_tsd_thread);
 	db_thread *thread = g_tsd_thread;
+	if (!thread)
+		return SQLITE_ERROR;
 	/*if (thr->isreadonly)
 	{
 		u64 readSafeEvnum, readSafeTerm;
@@ -746,6 +751,8 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	// u8 somethingDeleted  = 0;
 	int allPagesDiff 	 = 0;
 
+	if (!thr)
+		return SQLITE_ERROR;
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
 	mdb = g_tsd_wmdb;
@@ -899,6 +906,8 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
 	db_thread *thr = g_tsd_thread;
 	rc  = SQLITE_OK;
+	if (!thr)
+		return SQLITE_OK;
 
 	if (pWal->inProgressTerm == 0)
 		return SQLITE_OK;
@@ -1083,6 +1092,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	db_thread *thr      = g_tsd_thread;
 	db_connection* pCon	= g_tsd_conn;
 
+	if (!thr)
+		return SQLITE_ERROR;
 	if (!g_tsd_wmdb)
 		lock_wtxn(thr->nEnv);
 	mdb = g_tsd_wmdb;
