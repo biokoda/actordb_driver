@@ -77,6 +77,7 @@ ERL_NIF_TERM atom_logname;
 ERL_NIF_TERM atom_nbatch;
 ERL_NIF_TERM atom_lmdbsync;
 ERL_NIF_TERM atom_tcpfail;
+ERL_NIF_TERM atom_drivername;
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -288,8 +289,8 @@ void fail_send(int i)
 {
 	db_thread *thr = g_tsd_thread;
 	enif_send(NULL, &g_pd->tunnelConnector, thr->env, 
-		enif_make_tuple3(thr->env, 
-			atom_tcpfail, 
+		enif_make_tuple4(thr->env, 
+			atom_tcpfail, atom_drivername,
 			enif_make_int(thr->env, thr->nEnv * g_pd->nWriteThreads + thr->nThread), 
 			enif_make_int(thr->env, i)));
 	enif_clear_env(thr->env);
@@ -3603,6 +3604,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_nbatch = enif_make_atom(env, "nbatch");
 	atom_lmdbsync = enif_make_atom(env, "lmdbsync");
 	atom_tcpfail = enif_make_atom(env, "tcpfail");
+	atom_drivername = enif_make_atom(env, "actordb_driver");
 
 #ifdef _TESTDBG_
 	if (enif_get_map_value(env, info, atom_logname, &value))
