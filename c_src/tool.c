@@ -465,7 +465,7 @@ static int do_backup(const char *src, const char *dst, u8 doCompact)
 		mdb_cursor_del(wr.cursorActors,0);
 	}while ((rc = mdb_cursor_get(wr.cursorActors,&key,&data,MDB_NEXT)) == MDB_SUCCESS);
 	mdb_txn_commit(wr.txn);
-
+	wr.txn = NULL;
 
 	// 
 	// Should we support incremental backup from here? It may actually be slower since it involves checking
