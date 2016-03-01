@@ -134,20 +134,19 @@ set_tunnel_connector() ->
 set_thread_fd(_,_,_,_) ->
 	exit(nif_library_not_loaded).
 
-start_threads() ->
+open(_Ref, _Dest, _Filename,_ThreadNumber,_Mode) ->
+	exit(nif_library_not_loaded).
+open(_Ref, _Dest, _Filename,_ThreadNumber,_Sql,_Mode) ->
 	exit(nif_library_not_loaded).
 
-% backup_init(_,_,_,_) ->
-%     exit(nif_library_not_loaded).
+exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam) ->
+	exit(nif_library_not_loaded).
 
-% backup_finish(_,_,_) ->
-%     exit(nif_library_not_loaded).
+exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam,_RecordInsert) ->
+	exit(nif_library_not_loaded).
 
-% backup_step(_,_,_,_) ->
-%     exit(nif_library_not_loaded).
-
-% backup_pages(_) ->
-%     exit(nif_library_not_loaded).
+close(_Db, _Ref, _Dest) ->
+	exit(nif_library_not_loaded).
 
 init(Info) ->
 	NifName = "actordb_driver_nif",
@@ -158,28 +157,9 @@ init(Info) ->
 	S = integer_to_list(calendar:datetime_to_gregorian_seconds(erlang:localtime())),
 	case erlang:load_nif(NifFileName, Info#{logname => "drv_"++hd(string:tokens(atom_to_list(node()),"@"))++"_"++S++".txt"}) of
 		ok ->
-			start_threads();
+			ok;
 		{error,{upgrade,_}} ->
 			ok;
 		{error,{reload,_}} ->
 			ok
 	end.
-
-% wal_pages(_) ->
-%     exit(nif_library_not_loaded).
-
-open(_Ref, _Dest, _Filename,_ThreadNumber,_Mode) ->
-	exit(nif_library_not_loaded).
-open(_Ref, _Dest, _Filename,_ThreadNumber,_Sql,_Mode) ->
-	exit(nif_library_not_loaded).
-
-
-exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam) ->
-	exit(nif_library_not_loaded).
-
-exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam,_RecordInsert) ->
-	exit(nif_library_not_loaded).
-
-
-close(_Db, _Ref, _Dest) ->
-	exit(nif_library_not_loaded).

@@ -9,13 +9,13 @@
 #endif
 
 #if defined(_WIN32)
-#define ATOMIC 0
+	#define ATOMIC 0
 #else
-#if defined(__STDC_NO_ATOMICS__)
-#define ATOMIC 0
-#else
-#define ATOMIC 1
-#endif
+	#if defined(__STDC_NO_ATOMICS__)
+		#define ATOMIC 0
+	#else
+		#define ATOMIC 1
+	#endif
 #endif
 
 #define MAX_ATOM_LENGTH 255

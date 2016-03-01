@@ -3374,11 +3374,10 @@ static ERL_NIF_TERM noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 
-static ERL_NIF_TERM start_threads(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+static int start_threads(priv_data *priv)
 {
 	db_thread *controlThread = NULL;
 	int i,flags = 0;
-	priv_data *priv = (priv_data*)enif_priv_data(env);
 
 	if (g_transsync == 0)
 		flags = MDB_NOSYNC;
@@ -3397,7 +3396,7 @@ static ERL_NIF_TERM start_threads(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	if(enif_thread_create("db_connection", &(priv->tids[priv->nEnvs*priv->nWriteThreads]),
 		ctrl_thread_func, controlThread, NULL) != 0)
 	{
-		return atom_false;
+		return -1;
 	}
 
 	priv->prepMutex = enif_mutex_create("prepmutex");
@@ -3510,7 +3509,7 @@ static ERL_NIF_TERM start_threads(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 			{
 				if (enif_thread_create("wthr", &(priv->tids[i*priv->nWriteThreads+k]), processing_thread_func, curThread, NULL) != 0)
 				{
-					return atom_false;
+					return -1;
 				}
 			}
 			else
@@ -3518,14 +3517,12 @@ static ERL_NIF_TERM start_threads(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 				if (enif_thread_create("rthr", &(priv->rtids[i*priv->nReadThreads + (k - priv->nWriteThreads)]), 
 					processing_thread_func, curThread, NULL) != 0)
 				{
-					return atom_false;
+					return -1;
 				}
 			}
 		}
 	}
-	enif_consume_timeslice(env,99);
-
-	return atom_ok;
+	return 0;
 }
 
 
@@ -3702,7 +3699,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	memset(priv->wmdb, 0, sizeof(mdbinf)*priv->nEnvs);
 	// priv->writeBufs = malloc(sizeof(u8*)*priv->nEnvs);
 
-	return 0;
+	return start_threads(priv);
 }
 
 static void on_unload(ErlNifEnv* env, void* pd)
@@ -3786,7 +3783,6 @@ static void on_unload(ErlNifEnv* env, void* pd)
 }
 
 static ErlNifFunc nif_funcs[] = {
-	{"start_threads", 0, start_threads},
 	{"open", 5, db_open},
 	{"open", 6, db_open},
 	{"close", 3, db_close},
