@@ -3433,26 +3433,26 @@ static int start_threads(priv_data *priv)
 
 				// MDB INIT
 				if (mdb_env_create(&menv) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 				if (mdb_env_set_maxdbs(menv,5) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 				if (mdb_env_set_mapsize(menv,priv->dbsize) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 				// Syncs are handled from erlang.
 				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|flags, 0664) != MDB_SUCCESS) //MDB_NOSYNC
-					return atom_false;
+					return -1;
 
 				// Create databases if they do not exist yet
 				if (mdb_txn_begin(menv, NULL, 0, &txn) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 				if (mdb_dbi_open(txn, "info", MDB_INTEGERKEY | MDB_CREATE, &infodb) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 				if (mdb_dbi_open(txn, "actors", MDB_CREATE, &actorsdb) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 				if (mdb_dbi_open(txn, "log", MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED | MDB_INTEGERDUP, &logdb) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 				if (mdb_dbi_open(txn, "pages", MDB_CREATE | MDB_DUPSORT, &pagesdb) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 
 				rc = mdb_get(txn,actorsdb,&key,&data);
 				if (rc == MDB_SUCCESS)
