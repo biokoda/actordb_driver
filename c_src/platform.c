@@ -1,7 +1,7 @@
 #include "platform.h"
 
 #ifndef __APPLE__
-int SEM_TIMEDWAIT(sem_t s, u32 milis)
+int SEM_TIMEDWAIT(sem_t s, uint32_t milis)
 {
 	TIME stv;
 	clock_gettime(CLOCK_REALTIME, &stv);

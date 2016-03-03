@@ -118,7 +118,7 @@ qitem* queue_pop(queue *queue)
 		INITTIME;
 		while (1)
 		{
-			u64 diff;
+			uint64_t diff;
 			TIME stop;
 			sched_yield();
 			GETTIME(stop);

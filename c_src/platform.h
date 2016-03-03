@@ -8,11 +8,11 @@
 #include <pthread.h>
 #endif
 
-#define u8 uint8_t
-#define i64 int64_t
-#define u64 uint64_t
-#define u32 uint32_t
-#define i32 int32_t
+// #define u8 uint8_t
+// #define i64 int64_t
+// #define u64 uint64_t
+// #define u32 uint32_t
+// #define i32 int32_t
 
 #if defined(_WIN32)
 	#define ATOMIC 0
@@ -49,7 +49,7 @@
 	#include <dispatch/dispatch.h>
 	#define IOV struct iovec
 	#define SEMAPHORE dispatch_semaphore_t
-	#define TIME u64
+	#define TIME uint64_t
 	#define SEM_INIT_SET(X) (X = dispatch_semaphore_create(1)) == NULL
 	#define SEM_INIT(X) (X = dispatch_semaphore_create(0)) == NULL
 	#define SEM_WAIT(X) dispatch_semaphore_wait(X, DISPATCH_TIME_FOREVER)
@@ -68,7 +68,7 @@
 	#define SEM_INIT_SET(X) sem_init(&X, 0, 1) != 0
 	#define SEM_INIT(X) sem_init(&X, 0, 0) != 0
 	#define SEM_WAIT(X) sem_wait(&X)
-	int SEM_TIMEDWAIT(sem_t s, u32 time);
+	int SEM_TIMEDWAIT(sem_t s, uint32_t time);
 	#define SEM_POST(X) sem_post(&X)
 	#define SEM_DESTROY(X) sem_destroy(&X)
 	#define GETTIME(X) clock_gettime(CLOCK_MONOTONIC, &X)
