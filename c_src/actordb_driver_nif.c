@@ -550,17 +550,18 @@ static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfr
 
 static qitem* command_create(int writeThreadNum, int readThreadNum, priv_data *p)
 {
-	queue *thrCmds = NULL;
+	// queue *thrCmds = NULL;
 	qitem *item;
 
-	if (writeThreadNum == -1 && readThreadNum == -1)
-		thrCmds = p->wtasks[p->nEnvs*p->nWriteThreads];
-	else if (writeThreadNum >= 0)
-		thrCmds = p->wtasks[writeThreadNum];
-	else
-		thrCmds = p->rtasks[readThreadNum];
+	// if (writeThreadNum == -1 && readThreadNum == -1)
+	// 	thrCmds = p->wtasks[p->nEnvs*p->nWriteThreads];
+	// else if (writeThreadNum >= 0)
+	// 	thrCmds = p->wtasks[writeThreadNum];
+	// else
+	// 	thrCmds = p->rtasks[readThreadNum];
+	// thrCmds
 
-	item = queue_get_item(thrCmds);
+	item = queue_get_item();
 	if (!item)
 		return NULL;
 	if (item->cmd == NULL)
@@ -2252,7 +2253,7 @@ static void *ctrl_thread_func(void *arg)
 
 		if (cmd->type == cmd_stop)
 		{
-			queue_recycle(data->tasks,item);
+			queue_recycle(item);
 			break;
 		}
 
@@ -2311,7 +2312,7 @@ static void respond_cmd(db_thread *data, qitem *item)
 	{
 		enif_release_resource(cmd->conn);
 	}
-	queue_recycle(data->tasks,item);
+	queue_recycle(item);
 }
 
 static void respond_items(db_thread *data, qitem *itemsWaiting)
@@ -2331,6 +2332,7 @@ static void *processing_thread_func(void *arg)
 	qitem *itemsWaiting = NULL;
 	u64 waitingCommit = 0;
 	int rc;
+	qitem *nitem = NULL;
 	g_tsd_cursync = 0;
 	g_tsd_conn    = NULL;
 	g_tsd_wmdb    = NULL;
@@ -2345,15 +2347,20 @@ static void *processing_thread_func(void *arg)
 	while (1)
 	{
 		db_command *cmd;
-		qitem *item = queue_pop(data->tasks);
-		cmd 		= (db_command*)item->cmd;
+		qitem *item = nitem;
+
+		if (!item)
+			item = queue_pop(data->tasks);
+		else
+			nitem = NULL;
+		cmd = (db_command*)item->cmd;
 		data->pagesChanged = 0;
 		
 		DBG("rthread=%d command=%d.",data->nThread,cmd->type);
 
 		if (cmd->type == cmd_stop)
 		{
-			queue_recycle(data->tasks,item);
+			queue_recycle(item);
 			mdb_txn_abort(mdb->txn);
 			break;
 		}
@@ -2409,7 +2416,8 @@ static void *processing_thread_func(void *arg)
 			if (g_tsd_wmdb != NULL)
 			{
 				char syncForce = (cmd->type == cmd_sync && cmd->answer == atom_false);
-				char commit = queue_size(data->tasks) == 0;
+				nitem = queue_trypop(data->tasks);
+				char commit = nitem == NULL; //queue_size(data->tasks) == 0;
 				u64 curCommit = g_tsd_wmdb->commitCount;
 				unlock_write_txn(data->nEnv, syncForce, &commit, data->pagesChanged > 0);
 
@@ -2446,7 +2454,8 @@ static void *processing_thread_func(void *arg)
 				respond_cmd(data, item);
 				if (itemsWaiting)
 				{
-					char commit = queue_size(data->tasks) == 0;
+					nitem = queue_trypop(data->tasks);
+					char commit = nitem == NULL; //queue_size(data->tasks) == 0;
 					if (commit)
 					{
 						u64 curCommit;
@@ -3510,7 +3519,7 @@ static int start_threads(priv_data *priv)
 				#endif
 
 				if (mdb_txn_commit(txn) != MDB_SUCCESS)
-					return atom_false;
+					return -1;
 
 				priv->wmdb[i].env = menv;
 				priv->wmdb[i].infodb = infodb;

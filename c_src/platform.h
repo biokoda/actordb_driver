@@ -50,6 +50,7 @@
 	#define IOV struct iovec
 	#define SEMAPHORE dispatch_semaphore_t
 	#define TIME u64
+	#define SEM_INIT_SET(X) (X = dispatch_semaphore_create(1)) == NULL
 	#define SEM_INIT(X) (X = dispatch_semaphore_create(0)) == NULL
 	#define SEM_WAIT(X) dispatch_semaphore_wait(X, DISPATCH_TIME_FOREVER)
 	#define SEM_TIMEDWAIT(X,T) dispatch_semaphore_wait(X, dispatch_time(DISPATCH_TIME_NOW, (uint64_t)MS(T)))
@@ -64,6 +65,7 @@
 	#include <time.h>
 	#define SEMAPHORE sem_t
 	#define TIME struct timespec
+	#define SEM_INIT_SET(X) sem_init(&X, 0, 1) != 0
 	#define SEM_INIT(X) sem_init(&X, 0, 0) != 0
 	#define SEM_WAIT(X) sem_wait(&X)
 	int SEM_TIMEDWAIT(sem_t s, u32 time);
