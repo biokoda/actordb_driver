@@ -2,7 +2,7 @@
 % License, v. 2.0. If a copy of the MPL was not distributed with this
 % file, You can obtain one at http://mozilla.org/MPL/2.0/.
 -module(actordb_driver).
-
+-define(DELAY,5).
 -export([init/1,noop/1,
 		open/1,open/2,open/3,open/4,
 		exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
@@ -36,36 +36,62 @@ open(Filename,ThreadNumber) ->
 	open(Filename,ThreadNumber,wal).
 open(Filename,ThreadNumber,Mode) when Mode == wal; Mode == blob ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode),
-	case receive_answer(Ref) of
-		{ok,Connection} ->
-			{ok, {actordb_driver, make_ref(),Connection}};
-		{error, _Msg}=Error ->
-			Error
+	case actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode) of
+		again ->
+			timer:sleep(?DELAY),
+			open(Filename,ThreadNumber,Mode);
+		ok ->
+			case receive_answer(Ref) of
+				{ok,Connection} ->
+					{ok, {actordb_driver, make_ref(),Connection}};
+				{error, _Msg}=Error ->
+					Error
+			end
 	end;
 open(Filename,ThreadNumber,Sql) when is_binary(Sql); is_list(Sql) ->
 	open(Filename,ThreadNumber,Sql,wal).
 open(Filename,ThreadNumber,Sql,Mode) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode,Sql),
-	case receive_answer(Ref) of
-		{ok,Connection,Res} ->
-			{ok, {actordb_driver, make_ref(),Connection},Res};
-		{ok,Connection} ->
-			{ok, {actordb_driver, make_ref(),Connection}};
-		{error, _Msg}=Error ->
-			Error
+	case actordb_driver_nif:open(Ref, self(), Filename,ThreadNumber,Mode,Sql) of
+		again ->
+			timer:sleep(?DELAY);
+		ok ->
+			case receive_answer(Ref) of
+				{ok,Connection,Res} ->
+					{ok, {actordb_driver, make_ref(),Connection},Res};
+				{ok,Connection} ->
+					{ok, {actordb_driver, make_ref(),Connection}};
+				{error, _Msg}=Error ->
+					Error
+			end
 	end.
 
 actor_info(Name,Thread) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:actor_info(Ref,self(),Name,Thread),
-	receive_answer(Ref).
+	case actordb_driver_nif:actor_info(Ref,self(),Name,Thread) of
+		again ->
+			timer:sleep(?DELAY),
+			actor_info(Name, Thread);
+		ok ->
+			receive_answer(Ref)
+	end.
 
 term_store({actordb_driver, _Ref, Connection},CurrentTerm,VotedFor) ->
-	ok = actordb_driver_nif:term_store(Connection, CurrentTerm, VotedFor).
+	case actordb_driver_nif:term_store(Connection, CurrentTerm, VotedFor) of
+		ok ->
+			ok;
+		again ->
+			timer:sleep(?DELAY),
+			term_store({actordb_driver, _Ref, Connection},CurrentTerm,VotedFor)
+	end.
 term_store(Name, CurrentTerm, VotedFor, Thread) ->
-	ok = actordb_driver_nif:term_store(Name, CurrentTerm, VotedFor, Thread).
+	case actordb_driver_nif:term_store(Name, CurrentTerm, VotedFor, Thread) of
+		ok ->
+			ok;
+		again ->
+			timer:sleep(?DELAY),
+			term_store(Name, CurrentTerm, VotedFor, Thread)
+	end.
 
 close({actordb_driver, _Ref, _Connection}) ->
 	% Noop. Rely on GC. This is to avoid double closing.
@@ -76,13 +102,23 @@ store_prepared_table(Indexes,Sqls) when is_tuple(Indexes), is_tuple(Sqls), tuple
 
 checkpoint({actordb_driver, _Ref, Connection}, Evnum) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:checkpoint(Connection,Ref,self(),Evnum),
-	receive_answer(Ref).
+	case actordb_driver_nif:checkpoint(Connection,Ref,self(),Evnum) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			checkpoint({actordb_driver, _Ref, Connection}, Evnum)
+	end.
 
 stmt_info({actordb_driver, _Ref, Connection}, Sql) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:stmt_info(Connection,Ref,self(),Sql),
-	receive_answer(Ref).
+	case actordb_driver_nif:stmt_info(Connection,Ref,self(),Sql) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			stmt_info({actordb_driver, _Ref, Connection}, Sql)
+	end.
 
 parse_helper(Bin) ->
 	parse_helper(Bin,0).
@@ -114,13 +150,22 @@ replication_done({actordb_driver, _Ref, Connection}) ->
 
 all_tunnel_call(Bin) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:all_tunnel_call(Ref,self(),Bin),
-	receive_answer(Ref).
-
+	case actordb_driver_nif:all_tunnel_call(Ref,self(),Bin) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			all_tunnel_call(Bin)
+	end.
 all_tunnel_call(Head,Body) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:all_tunnel_call(Ref,self(),Head,Body),
-	receive_answer(Ref).
+	case actordb_driver_nif:all_tunnel_call(Ref,self(),Head,Body) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			all_tunnel_call(Head,Body)
+	end.
 
 lz4_compress(B) ->
 	actordb_driver_nif:lz4_compress(B).
@@ -134,12 +179,22 @@ lz4_decompress(B,SizeOrig,SizeIn) ->
 
 wal_rewind({actordb_driver, _Ref, Connection},Evnum) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),Evnum),
-	receive_answer(Ref).
+	case actordb_driver_nif:wal_rewind(Connection, Ref, self(),Evnum) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			wal_rewind({actordb_driver, _Ref, Connection},Evnum)
+	end.
 wal_rewind({actordb_driver, _Ref, Connection}, 0, ReplaceSql) when is_binary(ReplaceSql); is_list(ReplaceSql) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:wal_rewind(Connection, Ref, self(),0, ReplaceSql),
-	receive_answer(Ref).
+	case actordb_driver_nif:wal_rewind(Connection, Ref, self(),0, ReplaceSql) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			wal_rewind({actordb_driver, _Ref, Connection}, 0, ReplaceSql)
+	end.
 
 fsync_num({actordb_driver, _Ref, Connection}) ->
 	actordb_driver_nif:fsync_num(Connection).
@@ -161,17 +216,32 @@ iterate_close({iter,Iter}) ->
 
 iterate_db({actordb_driver, _Ref, Connection},{iter,Iter}) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:iterate_db(Connection, Ref, self(),Iter),
-	receive_answer(Ref).
+	case actordb_driver_nif:iterate_db(Connection, Ref, self(),Iter) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			iterate_db({actordb_driver, _Ref, Connection},{iter,Iter})
+	end.
 iterate_db({actordb_driver, _Ref, Connection},Evterm,Evnum) when is_integer(Evnum) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:iterate_db(Connection, Ref, self(), Evterm,Evnum),
-	receive_answer(Ref).
+	case actordb_driver_nif:iterate_db(Connection, Ref, self(), Evterm,Evnum) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			iterate_db({actordb_driver, _Ref, Connection},Evterm,Evnum)
+	end.
 
 inject_page({actordb_driver, _Ref, Connection},Bin,Head) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:inject_page(Connection, Ref, self(),Bin,Head),
-	receive_answer(Ref).
+	case actordb_driver_nif:inject_page(Connection, Ref, self(),Bin,Head) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			inject_page({actordb_driver, _Ref, Connection},Bin,Head)
+	end.
 % inject_page({actordb_driver, _Ref, Connection},Bin,Head) ->
 % 	Ref = make_ref(),
 % 	ok = actordb_driver_nif:inject_page(Connection, Ref, self(),Bin,Head),
@@ -182,21 +252,36 @@ page_size() ->
 
 noop({actordb_driver, _Ref, Connection}) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:noop(Connection, Ref, self()),
-	receive_answer(Ref).
+	case actordb_driver_nif:noop(Connection, Ref, self()) of
+		ok ->
+			receive_answer(Ref);
+		again ->
+			timer:sleep(?DELAY),
+			noop({actordb_driver, _Ref, Connection})
+	end.
 
 exec_read(Sql,Db) ->
 	exec_read(Sql,Db,infinity).
 exec_read(Sql,{actordb_driver, _Ref, Connection},Timeout) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql),
-	receive_answer(Ref,Connection,Timeout);
+	case actordb_driver_nif:exec_read(Connection, Ref, self(), Sql) of
+		ok ->
+			receive_answer(Ref,Connection,Timeout);
+		again ->
+			timer:sleep(?DELAY),
+			exec_read(Sql,{actordb_driver, _Ref, Connection},Timeout)
+	end;
 exec_read(Sql,Recs,{actordb_driver, _Ref, _Connection} = Db) ->
 	exec_read(Sql,Recs,Db,infinity).
 exec_read(Sql,Recs,{actordb_driver, _Ref, Connection},Timeout) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs),
-	receive_answer(Ref,Connection,Timeout).
+	case actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs) of
+		ok ->
+			receive_answer(Ref,Connection,Timeout);
+		again ->
+			timer:sleep(?DELAY),
+			exec_read(Sql,Recs,{actordb_driver, _Ref, Connection},Timeout)
+	end.
 
 exec_script(Sql, Db) ->
 	exec_script(Sql,Db,infinity,0,0,<<>>).
@@ -211,22 +296,42 @@ exec_script(Sql, Recs, Db, Timeout) when is_integer(Timeout), element(1,Db) == a
 
 exec_script(Sql, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
-	receive_answer(Ref,Connection,Timeout).
+	case actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam) of
+		ok ->
+			receive_answer(Ref,Connection,Timeout);
+		again ->
+			timer:sleep(?DELAY),
+			exec_script(Sql, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam)
+	end.
 exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
-	receive_answer(Ref,Connection,Timeout).
+	case actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs) of
+		ok ->
+			receive_answer(Ref,Connection,Timeout);
+		again ->
+			timer:sleep(?DELAY),
+			exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam)
+	end.
 
 
 exec_read_async(Sql,{actordb_driver, _Ref, Connection}) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql),
-	Ref.
+	case actordb_driver_nif:exec_read(Connection, Ref, self(), Sql) of
+		ok ->
+			Ref;
+		again ->
+			timer:sleep(?DELAY),
+			exec_read_async(Sql,{actordb_driver, _Ref, Connection})
+	end.
 exec_read_async(Sql,Recs,{actordb_driver, _Ref, Connection}) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs),
-	Ref.
+	case actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs) of
+		ok ->
+			Ref;
+		again ->
+			timer:sleep(?DELAY),
+			exec_read_async(Sql,Recs,{actordb_driver, _Ref, Connection})
+	end.
 
 exec_script_async(Sql,Recs, Db) when element(1,Db) == actordb_driver ->
 	exec_script_async(Sql,Recs,Db,0,0,<<>>).
@@ -235,12 +340,22 @@ exec_script_async(Sql, Db) when element(1,Db) == actordb_driver ->
 
 exec_script_async(Sql, {actordb_driver, _Ref, Connection},Term,Index,AppendParam) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
-	Ref.
+	case actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam) of
+		ok ->
+			Ref;
+		again ->
+			timer:sleep(?DELAY),
+			exec_script_async(Sql, {actordb_driver, _Ref, Connection},Term,Index,AppendParam)
+	end.
 exec_script_async(Sql, Recs, {actordb_driver, _Ref, Connection},Term,Index,AppendParam) ->
 	Ref = make_ref(),
-	ok = actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
-	Ref.
+	case actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs) of
+		ok ->
+			Ref;
+		again ->
+			timer:sleep(?DELAY),
+			exec_script_async(Sql, Recs, {actordb_driver, _Ref, Connection},Term,Index,AppendParam)
+	end.
 
 checkpoint_lock({actordb_driver, _Ref, Connection},Lock) ->
 	case Lock of
@@ -254,7 +369,13 @@ checkpoint_lock({actordb_driver, _Ref, Connection},Lock) ->
 			ok
 	end,
 	Ref = make_ref(),
-	ok = actordb_driver_nif:checkpoint_lock(Connection,Ref,self(),L).
+	case actordb_driver_nif:checkpoint_lock(Connection,Ref,self(),L) of
+		ok ->
+			ok;
+		again ->
+			timer:sleep(?DELAY),
+			checkpoint_lock({actordb_driver, _Ref, Connection},Lock)
+	end.
 
 % backup_init({actordb_driver, _, Dest},{actordb_driver, _, Src}) ->
 %     Ref = make_ref(),
