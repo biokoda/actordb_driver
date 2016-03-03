@@ -1,42 +1,53 @@
-#ifndef _LFQUEUE_H_
-#define _LFQUEUE_H_
+#ifndef LFQUEUE_H
+#define LFQUEUE_H
 
-#include <stdatomic.h>
-#include <stdlib.h>
-#include <string.h>
 #ifndef _TESTAPP_
 #include "erl_nif.h"
 #endif
+#include "platform.h"
 
-typedef struct qitem
+typedef struct queue_t queue;
+typedef struct qitem_t qitem;
+typedef struct intq intq;
+
+struct qitem_t
 {
-	void         *cmd;
+	_Atomic (struct qitem_t*) next;
+	void *cmd;
 	#ifndef _TESTAPP_
-	ErlNifEnv    *env;
+	ErlNifEnv *env;
 	#endif
-	struct qitem *next;
-} qitem;
+	char blockStart;
+	// Every pair of producer-consumer has a reuse queue.  
+	// This way we're not constantly doing allocations.
+	// Home is a queue that is attached to every producer 
+	// (scheduler) thread.
+	intq *home;
+};
 
-typedef struct queue
+struct intq
 {
-	char       *buf;
-	atomic_int size;
-	atomic_int ct;
-	int        last_map_pos;
-	long long int visited;
-	int        npages;
-	int        map_elements;
-	int        bufbytes;
-	int        mapbytes;
-} queue;
+	_Atomic (qitem*) head;
+	qitem* tail;
+};
 
-queue *queue_create(const int npages);
+struct queue_t
+{
+	struct intq q;
+	SEMAPHORE sem;
+	size_t length;
+};
+
+queue *queue_create(void);
 void queue_destroy(queue *queue);
-qitem* queue_get_item(queue *queue);
+
 int queue_push(queue *queue, qitem* item);
 qitem* queue_pop(queue *queue);
-void queue_recycle(queue *queue, qitem* item);
-int queue_size(queue *queue);
-int queue_getct(queue *q);
+qitem* queue_trypop(queue *queue);
+qitem* queue_timepop(queue *queue, uint32_t miliseconds);
 
-#endif
+void queue_recycle(qitem* item);
+qitem* queue_get_item(void);
+void queue_intq_destroy(intq *q);
+
+#endif 

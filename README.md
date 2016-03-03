@@ -10,7 +10,7 @@ c_src/sqlite3.c - SQLite amalgamation code without wal.c
 
 c_src/queue.c - work queue. Spin lock based.
 
-c_src/lfqueue.c - lock free work queue. An experiment that is not used. Spin lock version performs better.
+c_src/lfqueue.c - the future
 
 c_src/wbuf.c - another lock free experiment that is not used. A lock free write buffer.
 

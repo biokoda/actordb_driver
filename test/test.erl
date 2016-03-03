@@ -136,23 +136,38 @@ async() ->
 	after 20000 ->
 		ok
 	end,
-	[exit(P,stop) || P <- Pids],
-	timer:sleep(3000),
-	?debugFmt("Reads: ~p, Writes: ~p",[ets:lookup(ops,r),ets:lookup(ops,w)]),
+	[P ! stop || P <- Pids],
+	{Reads,Writes} = rec_counts(0,0),
+	?debugFmt("Reads: ~p, Writes: ~p",[Reads,Writes]),
 	garbage_collect(),
 	code:delete(actordb_driver_nif),
 	code:purge(actordb_driver_nif).
+rec_counts(R,W) ->
+	receive
+		{'DOWN',_Monitor,_,_PID,{R1,W1}} ->
+			rec_counts(R+R1, W+W1)
+		after 2000 ->
+			{R,W}
+	end.
 
 w(N,RandList) ->
 	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
 	% {ok,Db} = actordb_driver:open(":memory:",N),
 	Sql = "CREATE TABLE tab (id integer primary key, val text);",
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
-	w(Db,N,1,RandList,[]).
-w(Db,Me,C,[Rand|T],L) ->
+	w(Db,N,0,0,1,RandList,[]).
+w(Db,Me,R,W,C,[Rand|T],L) ->
+	{_,QL} = erlang:process_info(self(),message_queue_len),
+	case QL of
+		0 ->
+			ok;
+		_ ->
+			exit({R,W})
+	end,
 	case C rem 2 of
 		0 when C rem 20 == 0 ->
-			actordb_driver:checkpoint(Db,C-20);
+			actordb_driver:checkpoint(Db,C-20),
+			w(Db,Me,R,W,C+1,T,[Rand|L]);
 		% _ when C rem 101 == 0, Me == 1 ->
 		% 	?debugFmt("Contention situations:~p",[actordb_driver:noop(Db)]);
 		0 ->
@@ -160,14 +175,13 @@ w(Db,Me,C,[Rand|T],L) ->
 			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
 			Sql = <<"#s00;">>,
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
-			ets:update_counter(ops,w,{2,1});
+			w(Db,Me,R,W+1,C+1,T,[Rand|L]);
 		_ ->
 			{ok,_RR} = ?READ("select * from tab limit 1",Db),
-			ets:update_counter(ops,r,{2,1})
-	end,
-	w(Db,Me,C+1,T,[Rand|L]);
-w(Db,Me,C,[],L) ->
-	w(Db,Me,C,L,[]).
+			w(Db,Me,R+1,W,C+1,T,[Rand|L])
+	end;
+w(Db,Me,R,W,C,[],L) ->
+	w(Db,Me,R,W,C,L,[]).
 
 problem_checkpoint() ->
 	case file:read_file_info("../problemlmdb") of
