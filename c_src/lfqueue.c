@@ -50,8 +50,8 @@ static qitem* qpop(intq* self)
 
 // External API. For a task queue.
 // Actually uses multiple internal queues.
-// The main queue is X producers to 1 consumer.
-// Recycle queues are between every producer and consumer (1to1).
+// The main queue is X producers to 1 consumer. Scheduler threads to a worker.
+// Recycle queues are between all worker threads and a scheduler.
 // All based on initq/qpush/qpop. 
 // Fixed size and does no allocations after first calls.
 queue *queue_create()
