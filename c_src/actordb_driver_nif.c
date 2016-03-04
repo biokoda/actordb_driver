@@ -514,6 +514,7 @@ static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfr
 	{
 		const char *error_code_msg = get_sqlite3_return_code_msg(error_code);
 		const char *msg = get_sqlite3_error_msg(error_code, db);
+		DBG("Returning sqlite error: %s:%s",error_code_msg, msg);
 
 		if (error_code > 0)
 			return enif_make_tuple2(env, atom_error,

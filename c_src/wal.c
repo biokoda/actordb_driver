@@ -324,7 +324,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 		mdb = &thr->mdb;
 
 	track_time(7,thr);
-	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu",
+	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu\n",
 		pgno,pWal->index,limitTerm,limitEvnum);
 
 	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, 
