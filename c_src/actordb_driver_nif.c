@@ -51,6 +51,8 @@ static __thread u64             g_tsd_cursync = 0;
 static priv_data               *g_pd;
 static int                      g_nbatch = 0;  // how many writes to batch together
 static u8                       g_transsync;   // if every transaction is a sync to disk
+static atomic_llong            *g_counters = NULL;   // allocated on_load, used as global counters from erlang
+static int                      g_nCounters = 0;
 static ErlNifResourceType *db_connection_type;
 static ErlNifResourceType *iterate_type;
 
@@ -79,6 +81,7 @@ ERL_NIF_TERM atom_lmdbsync;
 ERL_NIF_TERM atom_tcpfail;
 ERL_NIF_TERM atom_drivername;
 ERL_NIF_TERM atom_again;
+ERL_NIF_TERM atom_counters;
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -2752,6 +2755,34 @@ static ERL_NIF_TERM set_tunnel_connector(ErlNifEnv *env, int argc, const ERL_NIF
 	return atom_ok;
 }
 
+static ERL_NIF_TERM counter_inc(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+	i64 val;
+	int i;
+
+	if (argc != 2)
+		return atom_false;
+
+	if (!enif_get_int(env,argv[0],&i))
+		return make_error_tuple(env, "not_int");
+	if (!enif_get_int64(env,argv[1],(ErlNifSInt64*)&val))
+		return make_error_tuple(env, "not_int");
+
+	if (val < 0)
+	{
+		val = atomic_fetch_sub_explicit(&g_counters[i], -val, memory_order_relaxed);
+	}
+	else if (val > 0)
+	{
+		val = atomic_fetch_add_explicit(&g_counters[i], val, memory_order_relaxed);
+	}
+	else
+	{
+		val = atomic_load_explicit(&g_counters[i], memory_order_relaxed);
+	}
+	return enif_make_int64(env, val);
+}
+
 static ERL_NIF_TERM set_thread_fd(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	int thread, fd, type, pos;
@@ -3657,6 +3688,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_tcpfail = enif_make_atom(env, "tcpfail");
 	atom_drivername = enif_make_atom(env, "actordb_driver");
 	atom_again = enif_make_atom(env, "again");
+	atom_counters = enif_make_atom(env, "counters");
 
 #ifdef _TESTDBG_
 	if (enif_get_map_value(env, info, atom_logname, &value))
@@ -3682,6 +3714,14 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		priv->nstaticSqls = i;
 		for (i = 0; i < priv->nstaticSqls; i++)
 			enif_get_string(env,param[i],priv->staticSqls[i],256,ERL_NIF_LATIN1);
+	}
+	if (enif_get_map_value(env, info, atom_counters, &value))
+	{
+		if (!enif_get_int(env, value, &g_nCounters))
+			return -1;
+		g_counters = malloc(g_nCounters * sizeof(atomic_llong));
+		for (i = 0; i < g_nCounters; i++)
+			atomic_init(&g_counters[i], 0);
 	}
 	if (enif_get_map_value(env, info, atom_paths, &value))
 	{
@@ -3820,6 +3860,8 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	fclose(g_log);
 #endif
 	enif_mutex_destroy(priv->prepMutex);
+	free(g_counters);
+	g_counters = NULL;
 	free(priv->paths);
 	free(priv->wtasks);
 	free(priv->rtasks);
@@ -3873,7 +3915,8 @@ static ErlNifFunc nif_funcs[] = {
 	{"fsync",3,db_sync},
 	{"fsync",0,db_sync},
 	{"replication_done",1,replication_done},
-	{"stmt_info",4,stmt_info}
+	{"stmt_info",4,stmt_info},
+	{"counter_inc", 2, counter_inc},
 };
 
 ERL_NIF_INIT(actordb_driver_nif, nif_funcs, on_load, NULL, NULL, on_unload);

@@ -14,19 +14,19 @@
 // #define u32 uint32_t
 // #define i32 int32_t
 
-#if defined(_WIN32)
-	#define ATOMIC 0
-#else
-	#if defined(__STDC_NO_ATOMICS__)
-		#define ATOMIC 0
-	#else
-		#define ATOMIC 1
-	#endif
-#endif
+// #if defined(_WIN32)
+// 	#define ATOMIC 0
+// #else
+// 	#if defined(__STDC_NO_ATOMICS__)
+// 		#define ATOMIC 0
+// 	#else
+#define ATOMIC 1
+// 	#endif
+// #endif
 
-#if ATOMIC
-	#include <stdatomic.h>
-#endif
+// #if ATOMIC
+#include <stdatomic.h>
+// #endif
 
 #define SEC(X) (1000000000*X)
 #define MS(X)  (1000000*X)

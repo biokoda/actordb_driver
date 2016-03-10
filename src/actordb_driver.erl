@@ -13,6 +13,7 @@
 		close/1,inject_page/3,
 		parse_helper/1,parse_helper/2, iterate_db/2,iterate_db/3,page_size/0,
 		replication_done/1,
+		get_counter/1, counter_inc/2,
 		lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
 		iterate_close/1, fsync_num/1,fsync/1,fsync/0,
 		set_tunnel_connector/0, set_thread_fd/4,
@@ -24,6 +25,11 @@
 %   dbsize => MaxDbSize, rthreads => NumReadThreads, wthreads => NumWriteThreads}
 init(Info) when is_map(Info) ->
 	actordb_driver_nif:init(Info).
+
+get_counter(Index) ->
+	actordb_driver_nif:counter_inc(Index, 0).
+counter_inc(Index,Val) ->
+	actordb_driver_nif:counter_inc(Index, Val).
 
 set_tunnel_connector() ->
 	actordb_driver_nif:set_tunnel_connector().

@@ -39,8 +39,12 @@ fsync/3,
 fsync/0,
 stmt_info/4,
 set_tunnel_connector/0,
-set_thread_fd/4
+set_thread_fd/4,
+counter_inc/2
 ]).
+
+counter_inc(_,_) ->
+	exit(nif_library_not_loaded).
 
 stmt_info(_,_,_,_) ->
 	exit(nif_library_not_loaded).
