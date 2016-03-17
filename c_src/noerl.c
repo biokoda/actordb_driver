@@ -77,13 +77,13 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit)
 	if (!g_tsd_wmdb)
 		return;
 
-	++g_tsd_wmdb->usageCount;
+	++g_tsd_wmdb->batchCounter;
 	if (*commit || syncForce)
 	{
 		if (mdb_txn_commit(g_tsd_wmdb->txn) != MDB_SUCCESS)
 			mdb_txn_abort(g_tsd_wmdb->txn);
 		g_tsd_wmdb->txn = NULL;
-		g_tsd_wmdb->usageCount = 0;
+		g_tsd_wmdb->batchCounter = 0;
 		
 		if (syncForce)
 			mdb_env_sync(g_tsd_wmdb->env,1);
@@ -115,7 +115,7 @@ static void *perform(void *arg)
 		if (i % 1000 == 0)
 			printf("r %lld %d\n",(i64)pthread_self(),i);
 
-		if (pthread_mutex_trylock(&g_cons[j].wal.mtx) != 0)
+		if (sqlite3_mutex_try(g_cons[j].db->mutex) != 0)
 			continue;
 
 		g_tsd_conn = &g_cons[j];
@@ -127,7 +127,7 @@ static void *perform(void *arg)
 			break;
 		}
 
-		pthread_mutex_unlock(&g_cons[j].wal.mtx);
+		sqlite3_mutex_leave(g_cons[j].db->mutex);
 
 		mdb_txn_reset(thr->mdb.txn);
 		rc = mdb_txn_renew(thr->mdb.txn);
@@ -233,8 +233,6 @@ int main(int argc, const char* argv[])
 		g_tsd_conn = &cons[i];
 		sprintf(filename, "ac%d.db", i);
 
-		pthread_mutex_init(&cons[i].wal.mtx, NULL);
-
 		thr.pagesChanged = 0;
 
 		rc = sqlite3_open(filename,&(cons[i].db));
@@ -301,7 +299,7 @@ int main(int argc, const char* argv[])
 		int j = rand() % NCONS;
 		db_connection *con = &g_cons[j];
 		char str[100];
-		if (pthread_mutex_trylock(&con->wal.mtx) != 0)
+		if (sqlite3_mutex_try(con->db->mutex) != 0)
 		{
 			i--;
 			continue;
@@ -329,7 +327,7 @@ int main(int argc, const char* argv[])
 		sprintf(str,"INSERT INTO tab VALUES (%d,'VALUE VALUE13456');", i);
 		sqlite3_exec(con->db,str,NULL,NULL,NULL);
 
-		pthread_mutex_unlock(&con->wal.mtx);
+		sqlite3_mutex_leave(con->db->mutex);
 
 		unlock_write_txn(thr.nEnv, 0, &commit);
 
