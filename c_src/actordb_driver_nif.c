@@ -2263,16 +2263,19 @@ static void check_stalled_exec(u64 rtm, int n, db_thread **thrs, u64 *rThrReqs, 
 					sqlite3_interrupt(con->db);
 			}
 		}
-		else if (!cmd)
-		{
-			rTimes[i] = 0;
-		}
 		else
 		{
-			rTimes[i] = rtm;
+			if (!cmd)
+			{
+				rTimes[i] = 0;
+			}
+			else
+			{
+				rTimes[i] = rtm;
+			}
+			rThrReqs[i] = nrq;
+			rThrCmds[i] = cmd;
 		}
-		rThrReqs[i] = nrq;
-		rThrCmds[i] = cmd;
 	}
 }
 
