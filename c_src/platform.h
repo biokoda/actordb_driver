@@ -68,7 +68,7 @@ int clock_gettime(int X, struct timespec *tv);
 	#define memory_order_relaxed 1
 	#define sched_yield SwitchToThread
 	#define atomic_exchange InterlockedExchangePointer
-	#define atomic_store(X,V) *X = V
+	#define atomic_store(X,V) *(X) = V
 	#define atomic_init(X,V) *X = V
 	#define atomic_fetch_add InterlockedAdd64
 	#define atomic_fetch_sub InterlockedAdd64

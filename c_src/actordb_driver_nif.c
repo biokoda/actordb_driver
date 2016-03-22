@@ -2542,7 +2542,7 @@ static void *processing_thread_func(void *arg)
 			}
 
 			DBG("rthread=%d command done 2. haveWaiting=%d, havenext=%d.",
-				data->nThread,(int)itemsWaiting != 0, (int)nitem != NULL);
+				data->nThread,(int)(itemsWaiting != 0), (int)(nitem != NULL));
 		}
 	}
 	if (!data->isreadonly && data->finish)
