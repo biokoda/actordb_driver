@@ -101,13 +101,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		cmd = (db_command*)item->cmd;
 		cmd->type = cmd_actorsdb_add;
 
-		#if ATOMIC
 		index = atomic_fetch_add_explicit(&g_pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
-		#else
-		enif_mutex_lock(g_pd->actorIndexesMtx[thr->nEnv]);
-		index = g_pd->actorIndexes[thr->nEnv]++;
-		enif_mutex_unlock(g_pd->actorIndexesMtx[thr->nEnv]);
-		#endif
 		pWal->index = index;
 
 		cmd->arg = enif_make_string(item->env,zWalName,ERL_NIF_LATIN1);
@@ -121,16 +115,12 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		}
 		else
 		{
-			#if ATOMIC
 			char filename[MAX_PATHNAME];
 			sprintf(filename,"%.*s",(int)(nmLen-cutoff),zWalName+offset);
 			index = atomic_fetch_add_explicit(&g_pd->actorIndexes[thr->nEnv], 1, memory_order_relaxed);
 			pWal->index = index;
 			if (register_actor(index, filename) != SQLITE_OK)
 				return SQLITE_ERROR;
-			#else
-			return SQLITE_ERROR;
-			#endif
 		}
 		#endif
 	}
@@ -324,7 +314,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 		mdb = &thr->mdb;
 
 	track_time(7,thr);
-	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu\n",
+	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu",
 		pgno,pWal->index,limitTerm,limitEvnum);
 
 	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, 

@@ -1,8 +1,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include "lfqueue.h"
+#ifndef _WIN32
 #include <sched.h>
-#define BLOCK_SIZE 1024
+#endif
+
 
 #ifdef _WIN32
 #define __thread __declspec( thread )
@@ -63,7 +65,10 @@ queue *queue_create()
 		return NULL;
 
 	if (SEM_INIT(ret->sem))
+	{
 		return NULL;
+	}
+
 	initq(&ret->q);
 
 	return ret;
@@ -146,7 +151,7 @@ void queue_recycle(qitem *entry)
 static void populate(intq *q)
 {
 	int i;
-	qitem *entry = calloc(1,sizeof(qitem)*BLOCK_SIZE);
+	qitem *entry = calloc(1,sizeof(qitem)*QSIZE);
 
 	#ifndef _TESTAPP_
 	entry[0].env = enif_alloc_env();
@@ -154,7 +159,7 @@ static void populate(intq *q)
 	entry[0].blockStart = 1;
 	entry[0].home = q;
 	qpush(q, &entry[0]);
-	for (i = 1; i < BLOCK_SIZE; i++)
+	for (i = 1; i < QSIZE; i++)
 	{
 		#ifndef _TESTAPP_
 		entry[i].env = enif_alloc_env();
@@ -162,7 +167,7 @@ static void populate(intq *q)
 		entry[i].home = q;
 		qpush(q, &entry[i]);
 	}
-	tls_qsize += BLOCK_SIZE;
+	tls_qsize += QSIZE;
 }
 
 // scheduler thread is the single consumer of tls_reuseq

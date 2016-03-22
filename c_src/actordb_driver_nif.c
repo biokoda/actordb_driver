@@ -51,7 +51,7 @@ static __thread u64             g_tsd_cursync = 0;
 static priv_data               *g_pd;
 static int                      g_nbatch = 0;  // how many writes to batch together
 static u8                       g_transsync;   // if every transaction is a sync to disk
-static atomic_llong            *g_counters = NULL;   // allocated on_load, used as global counters from erlang
+static _Atomic(i64)            *g_counters = NULL;   // allocated on_load, used as global counters from erlang
 static int                      g_nCounters = 0;
 static ErlNifResourceType *db_connection_type;
 static ErlNifResourceType *iterate_type;
@@ -140,6 +140,7 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWri
 	wmdb = g_tsd_wmdb;
 
 	++wmdb->batchCounter;
+	DBG("Batch count %u",wmdb->batchCounter);
 	wmdb->hasWritten |= hasWritten;
 	if (*commit || syncForce || wmdb->batchCounter > g_nbatch)
 	{
@@ -2277,18 +2278,16 @@ static void check_stalled_exec(u64 rtm, int n, db_thread **thrs, u64 *rThrReqs, 
 
 static void *ctrl_thread_func(void *arg)
 {
+	u64 rtm = 0;
 	db_thread* data = (db_thread*)arg;
+	u64 *rThrReqs = (u64*)calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u64));
+	u64 *wThrReqs = (u64*)calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u64));
+	u8 *rThrCmds = (u8*)calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u8));
+	u8 *wThrCmds = (u8*)calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u8));
+	u64 *rTimes = (u64*)calloc(g_pd->nEnvs, sizeof(u64));
+	u64 *wTimes = (u64*)calloc(g_pd->nEnvs, sizeof(u64));
 	g_tsd_thread = data;
 	data->isopen = 1;
-	u64 rtm = 0;
-
-	u64 *rThrReqs = calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u64));
-	u64 *wThrReqs = calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u64));
-	u8 *rThrCmds = calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u8));
-	u8 *wThrCmds = calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u8));
-	u64 *rTimes = calloc(g_pd->nEnvs, sizeof(u64));
-	u64 *wTimes = calloc(g_pd->nEnvs, sizeof(u64));
-
 	while(1)
 	{
 		db_command *cmd;
@@ -2307,7 +2306,8 @@ static void *ctrl_thread_func(void *arg)
 
 		if (cmd->type == cmd_stop)
 		{
-			queue_recycle(item);
+			DBG("CTRL THREAD STOP");
+			//queue_recycle(item);
 			break;
 		}
 
@@ -2331,10 +2331,9 @@ static void *ctrl_thread_func(void *arg)
 	free(wThrReqs);
 	free(rThrCmds);
 	free(wThrCmds);
-	queue_destroy(data->tasks);
 	data->isopen = 0;
 
-	DBG("thread=%d stopping.",data->nThread);
+	DBG("ctrl thread=%d stopping.",data->nThread);
 
 	if (data->columnSpace)
 		free(data->columnSpace);
@@ -2478,10 +2477,13 @@ static void *processing_thread_func(void *arg)
 
 			if (g_tsd_wmdb != NULL)
 			{
+				u64 curCommit;
+				char commit;
 				char syncForce = (cmd->type == cmd_sync && cmd->answer == atom_false);
 				nitem = queue_trypop(data->tasks);
-				char commit = nitem == NULL; //queue_size(data->tasks) == 0;
-				u64 curCommit = g_tsd_wmdb->commitCount;
+				commit = nitem == NULL; //queue_size(data->tasks) == 0;
+				DBG("COMMIT %d",(int)commit);
+				curCommit = g_tsd_wmdb->commitCount;
 				unlock_write_txn(data->nEnv, syncForce, &commit, data->pagesChanged > 0);
 
 				if (syncForce)
@@ -2517,8 +2519,9 @@ static void *processing_thread_func(void *arg)
 				respond_cmd(data, item);
 				if (itemsWaiting)
 				{
+					char commit;
 					nitem = queue_trypop(data->tasks);
-					char commit = nitem == NULL; //queue_size(data->tasks) == 0;
+					commit = nitem == NULL; //queue_size(data->tasks) == 0;
 					if (commit)
 					{
 						u64 curCommit;
@@ -2538,7 +2541,8 @@ static void *processing_thread_func(void *arg)
 				}
 			}
 
-			DBG("rthread=%d command done 2. haveWaiting=%d.",data->nThread,(int)itemsWaiting != 0);
+			DBG("rthread=%d command done 2. haveWaiting=%d, havenext=%d.",
+				data->nThread,(int)itemsWaiting != 0, (int)nitem != NULL);
 		}
 	}
 	if (!data->isreadonly && data->finish)
@@ -3175,7 +3179,10 @@ static ERL_NIF_TERM exec_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
 
 	item = command_create(-1,res->rthreadind,pd);
 	if (!item)
+	{
+		DBG("exec_read again!");
 		return atom_again;
+	}
 	cmd = (db_command*)item->cmd;
 	cmd->type = cmd_exec_script;
 	cmd->ref = enif_make_copy(item->env, argv[1]);
@@ -3225,7 +3232,10 @@ static ERL_NIF_TERM exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 
 	item = command_create(res->wthreadind,-1,pd);
 	if (!item)
+	{
+		DBG("exec_script again!");
 		return atom_again;
+	}
 	cmd = (db_command*)item->cmd;
 
 	cmd->type = cmd_exec_script;
@@ -3545,8 +3555,8 @@ static int start_threads(priv_data *priv)
 
 	priv->prepMutex = enif_mutex_create("prepmutex");
 
-	DBG("Driver starting, paths=%d, threads (w=%d, r=%d). Dbsize %llu, nbatch=%d, tsy=%d, atomic=%d",
-		priv->nEnvs,priv->nWriteThreads,priv->nReadThreads,priv->dbsize,g_nbatch,(int)g_transsync,ATOMIC);
+	DBG("Driver starting, paths=%d, threads (w=%d, r=%d). Dbsize %llu, nbatch=%d, tsy=%d",
+		priv->nEnvs,priv->nWriteThreads,priv->nReadThreads,priv->dbsize,g_nbatch,(int)g_transsync);
 
 	for (i = 0; i < priv->nEnvs; i++)
 	{
@@ -3602,12 +3612,7 @@ static int start_threads(priv_data *priv)
 				if (rc == MDB_SUCCESS)
 					memcpy(&index,data.mv_data,sizeof(u64));
 
-				#if ATOMIC
 				atomic_init(&priv->actorIndexes[i],index);
-				#else
-				priv->actorIndexes[i] = index;
-				priv->actorIndexesMtx[i] = enif_mutex_create("aindexes");
-				#endif
 
 				if (mdb_txn_commit(txn) != MDB_SUCCESS)
 					return -1;
@@ -3786,7 +3791,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	{
 		if (!enif_get_int(env, value, &g_nCounters))
 			return -1;
-		g_counters = malloc(g_nCounters * sizeof(atomic_llong));
+		g_counters = malloc(g_nCounters * sizeof(_Atomic(i64)));
 		for (i = 0; i < g_nCounters; i++)
 			atomic_init(&g_counters[i], 0);
 	}
@@ -3851,12 +3856,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	if(!iterate_type)
 		return -1;
 
-	#if ATOMIC
-	priv->actorIndexes = malloc(sizeof(atomic_ullong)*priv->nEnvs);
-	#else
-	priv->actorIndexes = malloc(sizeof(u64)*priv->nEnvs);
-	priv->actorIndexesMtx = malloc(sizeof(ErlNifMutex*)*priv->nEnvs);
-	#endif
+	priv->actorIndexes = malloc(sizeof(_Atomic(u64))*priv->nEnvs);
 	priv->wtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nWriteThreads+1));
 	priv->rtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nReadThreads));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nWriteThreads+1));
@@ -3899,7 +3899,6 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			cmd->type = cmd_stop;
 			push_command(i*priv->nEnvs + k,-1, priv, item);
 		}
-
 		for (k = 0; k < priv->nReadThreads; k++)
 		{
 			enif_thread_join((ErlNifTid)priv->rtids[i*priv->nReadThreads + k],NULL);
@@ -3912,16 +3911,11 @@ static void on_unload(ErlNifEnv* env, void* pd)
 			queue_destroy(priv->wtasks[i*priv->nEnvs+k]);
 			priv->wtasks[i*priv->nEnvs+k] = NULL;
 		}
-
 		enif_mutex_destroy(priv->wthrMutexes[i]);
-		#if !ATOMIC
-		enif_mutex_destroy(priv->actorIndexesMtx[i]);
-		#endif
 		free(priv->paths[i]);
 		// free(priv->writeBufs[i]);
 	}
 	enif_thread_join((ErlNifTid)priv->tids[priv->nEnvs * priv->nWriteThreads],NULL);
-
 	for (i = 0; i < MAX_PREP_SQLS; i++)
 	{
 		for (j = 0; j < MAX_PREP_SQLS; j++)
@@ -3944,9 +3938,6 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->wthrMutexes);
 	free(priv->syncNumbers);
 	free(priv->actorIndexes);
-	#if !ATOMIC
-	free(priv->actorIndexesMtx);
-	#endif
 	free(priv->wmdb);
 	free(priv->wthreads);
 	free(priv->rthreads);

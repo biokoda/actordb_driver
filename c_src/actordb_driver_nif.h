@@ -25,13 +25,13 @@
 
 FILE *g_log = 0;
 #if defined(_TESTDBG_)
-#ifndef _WIN32
-# define DBG(X, ...)  fprintf(g_log,"thr=%lld: " X "\r\n",(i64)pthread_self(),##__VA_ARGS__) ;fflush(g_log);
+	#ifndef _WIN32
+		#define DBG(X, ...)  fprintf(g_log,"thr=%lld: " X "\r\n",(i64)pthread_self(),##__VA_ARGS__) ;fflush(g_log);
+	#else
+		#define DBG(X, ...)  fprintf(g_log, "thr=%lld: " X "\r",(i64)GetCurrentThreadId(),##__VA_ARGS__) ;fflush(g_log);
+	#endif
 #else
-# define DBG(X, ...)  fprintf(g_log, X "\r\n",##__VA_ARGS__) ;fflush(g_log);
-#endif
-#else
-# define DBG(X, ...)
+	# define DBG(X, ...)
 #endif
 
 
@@ -85,14 +85,7 @@ struct priv_data
 	// For actorsdb, when opening a new actor
 	// do an atomic increment to get a unique index. Then send a write
 	// to write thread for it.
-	#if ATOMIC
-	atomic_ullong *actorIndexes;
-	#else
-	#if  !_TESTAPP_
-	u64 *actorIndexes;
-	ErlNifMutex **actorIndexesMtx;
-	#endif
-	#endif
+	_Atomic(u64) *actorIndexes;
 	int prepSize;
 	int prepVersions[MAX_PREP_SQLS][MAX_PREP_SQLS];
 	char* prepSqls[MAX_PREP_SQLS][MAX_PREP_SQLS];
@@ -164,9 +157,9 @@ struct db_thread
 	int sockets[MAX_CONNECTIONS];
 	int socket_types[MAX_CONNECTIONS];
 
-	atomic_ullong nReqs;
+	_Atomic(u64) nReqs;
 	db_connection *execConn;
-	atomic_uchar  reqRunning;
+	_Atomic(u8)  reqRunning;
 	#ifndef _TESTAPP_
 	queue *tasks;
 	ERL_NIF_TERM *columnSpace;

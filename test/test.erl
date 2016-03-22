@@ -1,7 +1,7 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
 -define(READTHREADS,4).
--define(WRITETHREADS,2).
+-define(WRITETHREADS,1).
 -define(DBSIZE,4096*1024*128).
 % -define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
 -define(CFG,#{paths => {"."}, 
@@ -60,6 +60,7 @@ modes() ->
 
 	{ok,Blob} = actordb_driver:open("myfile",0,blob),
 	[begin
+		?debugFmt("Blob ~p",[N]),
 		Bin1 = iolist_to_binary([<<"page_1_">>,integer_to_list(N)]),
 		Bin2 = iolist_to_binary([<<"page_2_">>,integer_to_list(N)]),
 		{ok,{[],[]}} = actordb_driver:exec_script({1,2},{Bin1,Bin2},Blob),
@@ -71,7 +72,7 @@ modes() ->
 				throw(badmatch)
 		end
 	end || N <- lists:seq(1,1000)],
-
+	?debugFmt("STATEM",[]),
 	{ok,2,0} = actordb_driver:stmt_info(Db,"insert into tab values (?1,?2,3);"),
 	{ok,1,3} = actordb_driver:stmt_info(Db,"select * from tab where id=?1;"),
 
@@ -175,7 +176,9 @@ w(Db,Me,R,W,C,[Rand|T],L) ->
 			% Using static sql with parameterized queries cuts down on sql parsing
 			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
 			Sql = <<"#s00;">>,
+			?debugFmt("Write start!",[]),
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
+			?debugFmt("Write done!",[]),
 			w(Db,Me,R,W+1,C+1,T,[Rand|L]);
 		_ ->
 			{ok,_RR} = ?READ("select * from tab limit 1",Db),
