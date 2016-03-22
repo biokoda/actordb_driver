@@ -104,6 +104,9 @@ struct priv_data
 	#if  !_TESTAPP_
 	ErlNifPid tunnelConnector;
 	#endif
+	u32 maxReqTime;
+	db_thread **wthreads;
+	db_thread **rthreads;
 };
 
 struct Wal {
@@ -161,6 +164,9 @@ struct db_thread
 	int sockets[MAX_CONNECTIONS];
 	int socket_types[MAX_CONNECTIONS];
 
+	atomic_ullong nReqs;
+	db_connection *execConn;
+	atomic_uchar  reqRunning;
 	#ifndef _TESTAPP_
 	queue *tasks;
 	ERL_NIF_TERM *columnSpace;

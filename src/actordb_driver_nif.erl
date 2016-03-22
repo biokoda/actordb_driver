@@ -14,7 +14,7 @@ store_prepared_table/2,
 close/3,
 noop/3,
 parse_helper/2,
-interrupt_query/1,
+% interrupt_query/1,
 lz4_compress/1,
 lz4_decompress/2,
 lz4_decompress/3,
@@ -117,8 +117,8 @@ noop(_,_,_) ->
 replicate_opts(_,_,_) ->
 	exit(nif_library_not_loaded).
 
-interrupt_query(_) ->
-	exit(nif_library_not_loaded).
+% interrupt_query(_) ->
+% 	exit(nif_library_not_loaded).
 
 parse_helper(_,_) ->
 	exit(nif_library_not_loaded).

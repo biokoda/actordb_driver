@@ -82,6 +82,7 @@ ERL_NIF_TERM atom_tcpfail;
 ERL_NIF_TERM atom_drivername;
 ERL_NIF_TERM atom_again;
 ERL_NIF_TERM atom_counters;
+ERL_NIF_TERM atom_maxreqtime;
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -1481,6 +1482,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 	u32 mxPage = cmd->conn->wal.mxPage;
 	char dofinalize = 1;
 
+	thread->execConn = cmd->conn;
+
 	if (cmd->arg1)
 	{
 		enif_get_uint64(env,cmd->arg1,(ErlNifUInt64*)&(newTerm));
@@ -1995,6 +1998,8 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 	} while (tuplePos < tupleSize);
 	track_time(12,thread);
 
+	thread->execConn = NULL;
+
 	if (tupleResult && !(rc > 0 && rc < 100))
 	{
 		results = enif_make_tuple_from_array(env, tupleResult, tupleSize);
@@ -2240,17 +2245,62 @@ static ERL_NIF_TERM make_answer(qitem *item, ERL_NIF_TERM answer)
 	return enif_make_tuple2(item->env, cmd->ref, answer);
 }
 
+static void check_stalled_exec(u64 rtm, int n, db_thread **thrs, u64 *rThrReqs, u8 *rThrCmds, u64 *rTimes)
+{
+	int i;
+	for (i = 0; i < n; i++)
+	{
+		u8 cmd = atomic_load_explicit(&thrs[i]->reqRunning,memory_order_relaxed);
+		u64 nrq = atomic_load_explicit(&thrs[i]->nReqs,memory_order_relaxed);
+		if (cmd && cmd == rThrCmds[i] && nrq == rThrReqs[i])
+		{
+			// We are still on the same command
+			if ((rtm - rTimes[i]) > g_pd->maxReqTime && cmd == cmd_exec_script)
+			{
+				db_connection *con = thrs[i]->execConn;
+				if (con)
+					sqlite3_interrupt(con->db);
+			}
+		}
+		else if (!cmd)
+		{
+			rTimes[i] = 0;
+		}
+		else
+		{
+			rTimes[i] = rtm;
+		}
+		rThrReqs[i] = nrq;
+		rThrCmds[i] = cmd;
+	}
+}
+
 static void *ctrl_thread_func(void *arg)
 {
 	db_thread* data = (db_thread*)arg;
 	g_tsd_thread = data;
 	data->isopen = 1;
+	u64 rtm = 0;
+
+	u64 *rThrReqs = calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u64));
+	u64 *wThrReqs = calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u64));
+	u8 *rThrCmds = calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u8));
+	u8 *wThrCmds = calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u8));
+	u64 *rTimes = calloc(g_pd->nEnvs, sizeof(u64));
+	u64 *wTimes = calloc(g_pd->nEnvs, sizeof(u64));
 
 	while(1)
 	{
 		db_command *cmd;
 		ERL_NIF_TERM res;
-		qitem *item = queue_pop(data->tasks);
+		qitem *item = queue_timepop(data->tasks,100);
+		if (item == NULL)
+		{
+			rtm += 100;
+			check_stalled_exec(rtm, g_pd->nEnvs * g_pd->nReadThreads,g_pd->rthreads, rThrReqs, rThrCmds, rTimes);
+			check_stalled_exec(rtm, g_pd->nEnvs * g_pd->nWriteThreads,g_pd->wthreads, wThrReqs, wThrCmds, wTimes);
+			continue;
+		}
 		cmd = (db_command*)item->cmd;
 		// track_flag(data,1);
 		// track_time(0,data);
@@ -2275,6 +2325,12 @@ static void *ctrl_thread_func(void *arg)
 		}
 		// thread_ex(data, item);
 	}
+	free(wTimes);
+	free(rTimes);
+	free(rThrReqs);
+	free(wThrReqs);
+	free(rThrCmds);
+	free(wThrCmds);
 	queue_destroy(data->tasks);
 	data->isopen = 0;
 
@@ -2353,13 +2409,16 @@ static void *processing_thread_func(void *arg)
 		db_command *cmd;
 		qitem *item = nitem;
 
+		atomic_store(&data->reqRunning, 0);
 		if (!item)
 			item = queue_pop(data->tasks);
 		else
 			nitem = NULL;
 		cmd = (db_command*)item->cmd;
 		data->pagesChanged = 0;
-		
+		atomic_store(&data->reqRunning, cmd->type);
+		atomic_fetch_add(&data->nReqs, 1);
+
 		DBG("rthread=%d command=%d.",data->nThread,cmd->type);
 
 		if (cmd->type == cmd_stop)
@@ -2815,34 +2874,34 @@ static ERL_NIF_TERM set_thread_fd(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 }
 
 
-static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-	db_connection *res;
-	qitem *item;
-	priv_data *pd = (priv_data*)enif_priv_data(env);
-	db_command *cmd = NULL;
+// static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+// 	db_connection *res;
+// 	qitem *item;
+// 	priv_data *pd = (priv_data*)enif_priv_data(env);
+// 	db_command *cmd = NULL;
 
-	DBG( "interrupt");
+// 	DBG( "interrupt");
 
-	if(argc != 1)
-		return enif_make_badarg(env);
+// 	if(argc != 1)
+// 		return enif_make_badarg(env);
 
-	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
-	{
-		return enif_make_badarg(env);
-	}
-	item = command_create(-1,-1,pd);
-	if (!item)
-		return atom_again;
-	cmd = (db_command*)item->cmd;
-	cmd->type = cmd_interrupt;
-	cmd->conn = res;
-	enif_keep_resource(res);
+// 	if(!enif_get_resource(env, argv[0], db_connection_type, (void **) &res))
+// 	{
+// 		return enif_make_badarg(env);
+// 	}
+// 	item = command_create(-1,-1,pd);
+// 	if (!item)
+// 		return atom_again;
+// 	cmd = (db_command*)item->cmd;
+// 	cmd->type = cmd_interrupt;
+// 	cmd->conn = res;
+// 	enif_keep_resource(res);
 
-	enif_consume_timeslice(env,90);
+// 	enif_consume_timeslice(env,90);
 
-	return push_command(-1,-1,pd, item);
-}
+// 	return push_command(-1,-1,pd, item);
+// }
 
 static ERL_NIF_TERM lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -3582,9 +3641,15 @@ static int start_threads(priv_data *priv)
 			curThread->mdb.logdb = logdb;
 			curThread->mdb.pagesdb = pagesdb;
 			if (k < priv->nWriteThreads)
+			{
 				priv->wtasks[i*priv->nWriteThreads + k] = curThread->tasks;
+				priv->wthreads[i*priv->nWriteThreads + k] = curThread;
+			}
 			else
+			{
 				priv->rtasks[i*priv->nReadThreads + (k - priv->nWriteThreads)] = curThread->tasks;
+				priv->rthreads[i*priv->nReadThreads + (k - priv->nWriteThreads)] = curThread;
+			}
 
 			curThread->nstaticSqls = priv->nstaticSqls;
 			for (j = 0; j < priv->nstaticSqls; j++)
@@ -3650,6 +3715,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->dbsize = 1099511627776LL;
 #endif
 	memset(nodename,0,128);
+	priv->maxReqTime = 60000;
 
 	// scratchSize = 1024*1024*10;
 	// while (scratchSize % (SQLITE_DEFAULT_PAGE_SIZE*6) > 0)
@@ -3689,6 +3755,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_drivername = enif_make_atom(env, "actordb_driver");
 	atom_again = enif_make_atom(env, "again");
 	atom_counters = enif_make_atom(env, "counters");
+	atom_maxreqtime = enif_make_atom(env, "maxtime");
 
 #ifdef _TESTDBG_
 	if (enif_get_map_value(env, info, atom_logname, &value))
@@ -3722,6 +3789,11 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 		g_counters = malloc(g_nCounters * sizeof(atomic_llong));
 		for (i = 0; i < g_nCounters; i++)
 			atomic_init(&g_counters[i], 0);
+	}
+	if (enif_get_map_value(env, info, atom_maxreqtime, &value))
+	{
+		if (!enif_get_uint(env, value, &priv->maxReqTime))
+			return -1;
 	}
 	if (enif_get_map_value(env, info, atom_paths, &value))
 	{
@@ -3789,6 +3861,8 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->rtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nReadThreads));
 	priv->tids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nWriteThreads+1));
 	priv->rtids = malloc(sizeof(ErlNifTid)*(priv->nEnvs*priv->nReadThreads));
+	priv->wthreads = malloc(sizeof(db_thread*)*(priv->nEnvs*priv->nWriteThreads));
+	priv->rthreads = malloc(sizeof(db_thread*)*(priv->nEnvs*priv->nReadThreads));
 	priv->wmdb = malloc(sizeof(mdbinf)*priv->nEnvs);
 
 	memset(priv->wmdb, 0, sizeof(mdbinf)*priv->nEnvs);
@@ -3874,6 +3948,8 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->actorIndexesMtx);
 	#endif
 	free(priv->wmdb);
+	free(priv->wthreads);
+	free(priv->rthreads);
 	// free(priv->writeBufs);
 	// free(priv->sqlite_pgcache);
 	free(pd);
@@ -3891,7 +3967,7 @@ static ErlNifFunc nif_funcs[] = {
 	{"exec_script", 8, exec_script},
 	{"noop", 3, noop},
 	{"parse_helper",2,parse_helper},
-	{"interrupt_query",1,interrupt_query},
+	// {"interrupt_query",1,interrupt_query},
 	{"lz4_compress",1,lz4_compress},
 	{"lz4_decompress",2,lz4_decompress},
 	{"lz4_decompress",3,lz4_decompress},

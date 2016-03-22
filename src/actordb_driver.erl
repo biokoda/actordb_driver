@@ -272,7 +272,7 @@ exec_read(Sql,{actordb_driver, _Ref, Connection},Timeout) ->
 	Ref = make_ref(),
 	case actordb_driver_nif:exec_read(Connection, Ref, self(), Sql) of
 		ok ->
-			receive_answer(Ref,Connection,Timeout);
+			receive_answer(Ref);
 		again ->
 			timer:sleep(?DELAY),
 			exec_read(Sql,{actordb_driver, _Ref, Connection},Timeout)
@@ -283,7 +283,7 @@ exec_read(Sql,Recs,{actordb_driver, _Ref, Connection},Timeout) ->
 	Ref = make_ref(),
 	case actordb_driver_nif:exec_read(Connection, Ref, self(), Sql, Recs) of
 		ok ->
-			receive_answer(Ref,Connection,Timeout);
+			receive_answer(Ref);
 		again ->
 			timer:sleep(?DELAY),
 			exec_read(Sql,Recs,{actordb_driver, _Ref, Connection},Timeout)
@@ -304,7 +304,7 @@ exec_script(Sql, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendPar
 	Ref = make_ref(),
 	case actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam) of
 		ok ->
-			receive_answer(Ref,Connection,Timeout);
+			receive_answer(Ref);
 		again ->
 			timer:sleep(?DELAY),
 			exec_script(Sql, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam)
@@ -313,7 +313,7 @@ exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,App
 	Ref = make_ref(),
 	case actordb_driver_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs) of
 		ok ->
-			receive_answer(Ref,Connection,Timeout);
+			receive_answer(Ref);
 		again ->
 			timer:sleep(?DELAY),
 			exec_script(Sql, Recs, {actordb_driver, _Ref, Connection},Timeout,Term,Index,AppendParam)
@@ -411,14 +411,14 @@ receive_answer(Ref) ->
 	receive
 		{Ref, Resp} -> Resp
 	end.
-receive_answer(Ref,Connection,Timeout) ->
-	receive
-		{Ref,Resp} ->
-			Resp
-	after Timeout ->
-		ok = actordb_driver_nif:interrupt_query(Connection),
-		receive
-			{Ref,Resp} ->
-				Resp
-		end
-   end.
+% receive_answer(Ref,Connection,Timeout) ->
+% 	receive
+% 		{Ref,Resp} ->
+% 			Resp
+% 	after Timeout ->
+% 		ok = actordb_driver_nif:interrupt_query(Connection),
+% 		receive
+% 			{Ref,Resp} ->
+% 				Resp
+% 		end
+%    end.

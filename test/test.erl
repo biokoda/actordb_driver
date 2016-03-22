@@ -1,6 +1,6 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
--define(READTHREADS,2).
+-define(READTHREADS,4).
 -define(WRITETHREADS,2).
 -define(DBSIZE,4096*1024*128).
 % -define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
@@ -10,6 +10,7 @@
 	rthreads => ?READTHREADS,
 	wthreads => ?WRITETHREADS,
 	lmdbsync => 0,
+	maxtime => 90,
 	nbatch => 30}).
 -define(INIT,actordb_driver:init(?CFG)).
 -define(READ,actordb_driver:exec_read).
