@@ -176,9 +176,7 @@ w(Db,Me,R,W,C,[Rand|T],L) ->
 			% Using static sql with parameterized queries cuts down on sql parsing
 			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
 			Sql = <<"#s00;">>,
-			?debugFmt("Write start!",[]),
 			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
-			?debugFmt("Write done!",[]),
 			w(Db,Me,R,W+1,C+1,T,[Rand|L]);
 		_ ->
 			{ok,_RR} = ?READ("select * from tab limit 1",Db),

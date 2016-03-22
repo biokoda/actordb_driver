@@ -2284,8 +2284,8 @@ static void *ctrl_thread_func(void *arg)
 	u64 *wThrReqs = (u64*)calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u64));
 	u8 *rThrCmds = (u8*)calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u8));
 	u8 *wThrCmds = (u8*)calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u8));
-	u64 *rTimes = (u64*)calloc(g_pd->nEnvs, sizeof(u64));
-	u64 *wTimes = (u64*)calloc(g_pd->nEnvs, sizeof(u64));
+	u64 *rTimes = (u64*)calloc(g_pd->nEnvs * g_pd->nReadThreads, sizeof(u64));
+	u64 *wTimes = (u64*)calloc(g_pd->nEnvs * g_pd->nWriteThreads, sizeof(u64));
 	g_tsd_thread = data;
 	data->isopen = 1;
 	while(1)
@@ -2325,6 +2325,7 @@ static void *ctrl_thread_func(void *arg)
 		}
 		// thread_ex(data, item);
 	}
+
 	free(wTimes);
 	free(rTimes);
 	free(rThrReqs);
