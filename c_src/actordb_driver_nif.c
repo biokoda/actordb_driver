@@ -3796,7 +3796,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	{
 		if (!enif_get_int(env, value, &g_nCounters))
 			return -1;
-		g_counters = malloc(g_nCounters * sizeof(_Atomic(i64))*8);
+		g_counters = calloc(g_nCounters, sizeof(_Atomic(i64))*8);
 		for (i = 0; i < g_nCounters; i++)
 			atomic_init(&g_counters[i*8], 0);
 	}
