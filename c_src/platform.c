@@ -15,11 +15,24 @@ int clock_gettime(int X, struct timespec* tp)
 #endif
 
 #if !defined(__APPLE__) && !defined(_WIN32)
+#include <errno.h>
 int SEM_TIMEDWAIT(sem_t s, uint32_t milis)
 {
-	TIME stv;
-	clock_gettime(CLOCK_REALTIME, &stv);
-	stv.tv_nsec += MS(milis); 
-	return sem_timedwait(&s, &stv);
+    struct timespec ts;
+    struct timespec dts;
+    struct timespec sts;
+    int r;
+
+    if (clock_gettime(CLOCK_REALTIME, &ts) == -1)
+        return -1;
+
+    dts.tv_sec = milis / 1000;
+    dts.tv_nsec = (milis % 1000) * 1000000;
+    sts.tv_sec = ts.tv_sec + dts.tv_sec + (dts.tv_nsec + ts.tv_nsec) / 1000000000;
+    sts.tv_nsec = (dts.tv_nsec + ts.tv_nsec) % 1000000000;
+
+    while ((r = sem_timedwait(&s, &sts)) == -1 && errno == EINTR)
+        continue;
+    return r;
 }
 #endif

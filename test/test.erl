@@ -2,7 +2,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -define(READTHREADS,4).
 -define(WRITETHREADS,1).
--define(DBSIZE,4096*1024*128).
+-define(DBSIZE,4096*1024*128*5).
 % -define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
 -define(CFG,#{paths => {"."}, 
 	staticsqls => {"INSERT INTO tab VALUES (?1,?2);"}, 
@@ -26,7 +26,7 @@ run_test_() ->
 	{timeout, 25, fun checkpoint1/0},
 	fun bigtrans/0,
 	fun bigtrans_check/0,
-	{timeout,25,fun async/0},
+	{timeout,60*10,fun async/0},
 	fun problem_checkpoint/0,
 	fun problem_rewind/0
 	% {timeout,25,fun open_test/0}
@@ -132,12 +132,14 @@ async() ->
 	ets:insert(ops,{r,0}),
 	RandBytes = [base64:encode(crypto:rand_bytes(128)) || _ <- lists:seq(1,1000)],
 	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,200)],
+	Syncer = spawn(fun() -> syncer() end),
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
 			exit(Reason)
 	after 20000 ->
 		ok
 	end,
+	Syncer ! stop,
 	[P ! stop || P <- Pids],
 	{Reads,Writes} = rec_counts(0,0),
 	?debugFmt("Reads: ~p, Writes: ~p",[Reads,Writes]),
@@ -152,6 +154,15 @@ rec_counts(R,W) ->
 			{R,W}
 	end.
 
+syncer() ->
+	receive
+		stop ->
+			ok
+	after 100 ->
+		ok = actordb_driver:fsync(),
+		syncer()
+	end.
+
 w(N,RandList) ->
 	{ok,Db} = actordb_driver:open("ac"++integer_to_list(N),N),
 	% {ok,Db} = actordb_driver:open(":memory:",N),
@@ -159,28 +170,39 @@ w(N,RandList) ->
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,1,<<>>),
 	w(Db,N,0,0,1,RandList,[]).
 w(Db,Me,R,W,C,[Rand|T],L) ->
-	{_,QL} = erlang:process_info(self(),message_queue_len),
-	case QL of
-		0 ->
-			ok;
-		_ ->
+	% {_,QL} = erlang:process_info(self(),message_queue_len),
+	% case QL of
+	% 	0 ->
+	% 		ok;
+	% 	_ ->
+	% 		exit({R,W})
+	% end,
+	receive
+		stop ->
 			exit({R,W})
-	end,
-	case C rem 2 of
-		0 when C rem 20 == 0 ->
-			actordb_driver:checkpoint(Db,C-20),
-			w(Db,Me,R,W,C+1,T,[Rand|L]);
-		% _ when C rem 101 == 0, Me == 1 ->
-		% 	?debugFmt("Contention situations:~p",[actordb_driver:noop(Db)]);
-		0 ->
-			% Using static sql with parameterized queries cuts down on sql parsing
-			% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
-			Sql = <<"#s00;">>,
-			{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
-			w(Db,Me,R,W+1,C+1,T,[Rand|L]);
-		_ ->
-			{ok,_RR} = ?READ("select * from tab limit 1",Db),
-			w(Db,Me,R+1,W,C+1,T,[Rand|L])
+	after 0 ->
+		case C rem 2 of
+			0 when C rem 20 == 0 ->
+				% case Me == 1 andalso C rem 200 == 0 of
+				% 	true ->
+				% 		?debugFmt("me=1, c=~p",[C]);
+				% 	_ ->
+				% 		ok
+				% end,
+				actordb_driver:checkpoint(Db,C-20),
+				w(Db,Me,R,W,C+1,T,[Rand|L]);
+			% _ when C rem 101 == 0, Me == 1 ->
+			% 	?debugFmt("Contention situations:~p",[actordb_driver:noop(Db)]);
+			0 ->
+				% Using static sql with parameterized queries cuts down on sql parsing
+				% Sql = <<"INSERT INTO tab VALUES (?1,?2);">>,
+				Sql = <<"#s00;">>,
+				{ok,_} = actordb_driver:exec_script(Sql,[[[C,Rand]]],Db,infinity,1,C,<<>>),
+				w(Db,Me,R,W+1,C+1,T,[Rand|L]);
+			_ ->
+				{ok,_RR} = ?READ("select * from tab limit 1",Db),
+				w(Db,Me,R+1,W,C+1,T,[Rand|L])
+		end
 	end;
 w(Db,Me,R,W,C,[],L) ->
 	w(Db,Me,R,W,C,L,[]).
