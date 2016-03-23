@@ -1000,6 +1000,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 /* Undo any frames written (but not committed) to the log */
 int sqlite3WalUndo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx)
 {
+	DBG("sqlite3WalUndo");
 	return doundo(pWal,xUndo, pUndoCtx,1);
 }
 
@@ -1013,6 +1014,138 @@ void sqlite3WalSavepoint(Wal *pWal, u32 *aWalData)
 ** response to a ROLLBACK TO command. */
 int sqlite3WalSavepointUndo(Wal *pWal, u32 *aWalData)
 {
+	return SQLITE_OK;
+}
+
+static int wal_rewind_int(mdbinf *mdb, Wal *pWal, u64 limitEvnum)
+{
+	MDB_val logKey, logVal;
+	u8 logKeyBuf[sizeof(u64)*3];
+	int allPagesDiff = 0;
+	int logop, rc;
+	u64 evnum,evterm,aindex;
+
+	// u8 somethingDeleted = 0;
+	memcpy(logKeyBuf,                 &pWal->index,          sizeof(u64));
+	memcpy(logKeyBuf + sizeof(u64),   &pWal->lastCompleteTerm, sizeof(u64));
+	memcpy(logKeyBuf + sizeof(u64)*2, &pWal->lastCompleteEvnum,sizeof(u64));
+
+	logKey.mv_data = logKeyBuf;
+	logKey.mv_size = sizeof(logKeyBuf);
+
+	if ((rc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET)) != MDB_SUCCESS)
+	{
+		DBG("Key not found in log for rewind %llu %llu",
+			pWal->lastCompleteTerm,pWal->lastCompleteEvnum);
+		return SQLITE_OK;
+	}
+
+	while (pWal->lastCompleteEvnum >= limitEvnum)
+	{
+		// mdb_cursor_count(thr->cursorLog,&ndupl);
+		// For every page here
+		// ** - Log DB: {<<ActorIndex:64, Evterm:64, Evnum:64>>, <<Pgno:32/unsigned>>}
+		// Delete from
+		// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Count,CompressedPage/binary>>}
+		logop = MDB_LAST_DUP;
+		while ((rc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,logop)) == MDB_SUCCESS)
+		{
+			u32 pgno;
+			// u8 rewrite = 0;
+			u8 pagesKeyBuf[sizeof(u64)+sizeof(u32)];
+			MDB_val pgKey, pgVal;
+			size_t ndupl;
+			// size_t rewritePos = 0;
+			int pgop;
+
+			memcpy(&pgno, logVal.mv_data,sizeof(u32));
+			DBG("Moving to pgno=%u, evnum=%llu",pgno,pWal->lastCompleteEvnum);
+
+			memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
+			memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
+			pgKey.mv_data = pagesKeyBuf;
+			pgKey.mv_size = sizeof(pagesKeyBuf);
+
+			logop = MDB_PREV_DUP;
+			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
+			{
+				continue;
+			}
+			mdb_cursor_count(mdb->cursorPages,&ndupl);
+			if (ndupl == 0)
+				continue;
+			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_LAST_DUP) != MDB_SUCCESS)
+				continue;
+			pgop = MDB_PREV_DUP;
+			do
+			{
+				u8 frag;
+				MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
+
+				if (mdb_cursor_get(mdb->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT) != MDB_SUCCESS)
+					break;
+				frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
+				memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
+				DBG("Deleting pgno=%u, evnum=%llu",pgno,evnum);
+				if (evnum >= limitEvnum)
+				{
+					// Like checkpoint, we can not trust this will succeed.
+					rc = mdb_cursor_del(mdb->cursorPages,0);
+					if (rc != MDB_SUCCESS)
+					{
+						DBG("Unable to delete rewind page!!!");
+						break;
+					}
+					// else
+					// {
+					// 	// This is normal operation. Delete page and set flag
+					// 	// that something is deleted.
+					// 	DBG("Rewind page deleted!");
+					// 	somethingDeleted = 1;
+					// }
+					if (frag == 0)
+						allPagesDiff++;
+				}
+				else
+				{
+					// No ugliness happened. Either there is nothing to delete or
+					// we deleted a few pages off the top and we are done.
+					break;
+				}
+				ndupl--;
+				if (!ndupl)
+					break;
+				rc = mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,pgop);
+			} while (rc == MDB_SUCCESS);
+			DBG("Done looping pages %d",rc);
+			// If we moved through all pages and rewrite did not happen
+			// and this is last page, we have shrunk DB.
+			if (!ndupl && pgno == pWal->mxPage)
+				pWal->mxPage--;
+		}
+		if (mdb_cursor_del(mdb->cursorLog,MDB_NODUPDATA) != MDB_SUCCESS)
+		{
+			DBG("Rewind Unable to cleanup key from logdb");
+		}
+		if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_PREV_NODUP) != MDB_SUCCESS)
+		{
+			DBG("Rewind Unable to move to next log");
+			break;
+		}
+		memcpy(&aindex, logKey.mv_data,                 sizeof(u64));
+		memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
+		memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
+
+		if (aindex != pWal->index)
+		{
+			DBG("Rewind Reached another actor=%llu, me=%llu",aindex,pWal->index);
+			break;
+		}
+		pWal->lastCompleteTerm = evterm;
+		pWal->lastCompleteEvnum = evnum;
+		pWal->allPages -= allPagesDiff;
+		allPagesDiff = 0;
+	}
 	return SQLITE_OK;
 }
 
@@ -1082,6 +1215,8 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	db_thread *thr      = g_tsd_thread;
 	db_connection* pCon	= g_tsd_conn;
 
+	DBG("sqlite3WalFrames");
+
 	if (!thr)
 		return SQLITE_ERROR;
 	if (!g_tsd_wmdb)
@@ -1096,9 +1231,18 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 	key.mv_data = (void*)&pWal->index;
 
 	// Term/evnum must always be increasing
-	if ((pWal->inProgressTerm > 0 && pWal->inProgressTerm < pWal->lastCompleteTerm) ||
+	while ((pWal->inProgressTerm > 0 && pWal->inProgressTerm < pWal->lastCompleteTerm) ||
 		(pWal->inProgressEvnum > 0 && pWal->inProgressEvnum < pWal->lastCompleteEvnum))
-		return SQLITE_ERROR;
+	{
+		u64 preTerm = pWal->lastCompleteTerm;
+		u64 preNum = pWal->lastCompleteEvnum;
+		DBG("Must do rewind. inprog_term=%llu, inprog_evnum=%llu, lc_term=%llu, lc_evnum=%llu",
+			pWal->inProgressTerm, pWal->inProgressEvnum, pWal->lastCompleteTerm, pWal->lastCompleteEvnum);
+
+		wal_rewind_int(mdb,pWal,pWal->lastCompleteEvnum);
+		if (preTerm == pWal->lastCompleteTerm && preNum == pWal->lastCompleteEvnum)
+			break;
+	}
 
 	track_time(2,thr);
 	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, <<Evterm:64,Evnum:64,Fragment,CompressedPage/binary>>}

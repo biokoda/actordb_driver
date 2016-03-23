@@ -62,7 +62,7 @@ modes() ->
 
 	{ok,Blob} = actordb_driver:open("myfile",0,blob),
 	[begin
-		?debugFmt("Blob ~p",[N]),
+		% ?debugFmt("Blob ~p",[N]),
 		Bin1 = iolist_to_binary([<<"page_1_">>,integer_to_list(N)]),
 		Bin2 = iolist_to_binary([<<"page_2_">>,integer_to_list(N)]),
 		{ok,{[],[]}} = actordb_driver:exec_script({1,2},{Bin1,Bin2},Blob),
