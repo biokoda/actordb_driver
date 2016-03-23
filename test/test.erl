@@ -9,6 +9,8 @@
 	dbsize => ?DBSIZE, 
 	rthreads => ?READTHREADS,
 	wthreads => ?WRITETHREADS,
+	counters => 10,
+	timecounter => 0,
 	lmdbsync => 0,
 	maxtime => 90,
 	nbatch => 30}).

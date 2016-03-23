@@ -51,8 +51,11 @@ static __thread u64             g_tsd_cursync = 0;
 static priv_data               *g_pd;
 static int                      g_nbatch = 0;  // how many writes to batch together
 static u8                       g_transsync;   // if every transaction is a sync to disk
-static _Atomic(i64)            *g_counters = NULL;   // allocated on_load, used as global counters from erlang
+// allocated on_load, used as global counters from erlang
+// When loading size of array is set. Every counter takes up 8*sizeof(i64).
+static _Atomic(i64)            *g_counters = NULL;
 static int                      g_nCounters = 0;
+static int                      g_timeCounter = -1;  // which index in counters is timer
 static ErlNifResourceType *db_connection_type;
 static ErlNifResourceType *iterate_type;
 
@@ -83,6 +86,7 @@ ERL_NIF_TERM atom_drivername;
 ERL_NIF_TERM atom_again;
 ERL_NIF_TERM atom_counters;
 ERL_NIF_TERM atom_maxreqtime;
+ERL_NIF_TERM atom_timecounter;
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -2291,7 +2295,11 @@ static void *ctrl_thread_func(void *arg)
 		qitem *item = queue_timepop(data->tasks,100);
 		if (item == NULL)
 		{
-			rtm += 100;
+			// Trust erlangs monotonic timer implementation more than semaphore.
+			if (g_timeCounter >= 0)
+				rtm = atomic_load_explicit(&g_counters[g_timeCounter*8], memory_order_relaxed);
+			else
+				rtm += 100;
 			check_stalled_exec(rtm, g_pd->nEnvs * g_pd->nReadThreads,g_pd->rthreads, rThrReqs, rThrCmds, rTimes);
 			check_stalled_exec(rtm, g_pd->nEnvs * g_pd->nWriteThreads,g_pd->wthreads, wThrReqs, wThrCmds, wTimes);
 			continue;
@@ -2830,15 +2838,15 @@ static ERL_NIF_TERM counter_inc(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 
 	if (val < 0)
 	{
-		val = atomic_fetch_sub_explicit(&g_counters[i], -val, memory_order_relaxed);
+		val = atomic_fetch_sub_explicit(&g_counters[i*8], -val, memory_order_relaxed);
 	}
 	else if (val > 0)
 	{
-		val = atomic_fetch_add_explicit(&g_counters[i], val, memory_order_relaxed);
+		val = atomic_fetch_add_explicit(&g_counters[i*8], val, memory_order_relaxed);
 	}
 	else
 	{
-		val = atomic_load_explicit(&g_counters[i], memory_order_relaxed);
+		val = atomic_load_explicit(&g_counters[i*8], memory_order_relaxed);
 	}
 	return enif_make_int64(env, val);
 }
@@ -2873,7 +2881,6 @@ static ERL_NIF_TERM set_thread_fd(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	enif_consume_timeslice(env,90);
 	return atom_ok;
 }
-
 
 // static ERL_NIF_TERM interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 // {
@@ -3758,6 +3765,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_again = enif_make_atom(env, "again");
 	atom_counters = enif_make_atom(env, "counters");
 	atom_maxreqtime = enif_make_atom(env, "maxtime");
+	atom_timecounter = enif_make_atom(env, "timecounter");
 
 #ifdef _TESTDBG_
 	if (enif_get_map_value(env, info, atom_logname, &value))
@@ -3788,13 +3796,18 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	{
 		if (!enif_get_int(env, value, &g_nCounters))
 			return -1;
-		g_counters = malloc(g_nCounters * sizeof(_Atomic(i64)));
+		g_counters = malloc(g_nCounters * sizeof(_Atomic(i64))*8);
 		for (i = 0; i < g_nCounters; i++)
-			atomic_init(&g_counters[i], 0);
+			atomic_init(&g_counters[i*8], 0);
 	}
 	if (enif_get_map_value(env, info, atom_maxreqtime, &value))
 	{
 		if (!enif_get_uint(env, value, &priv->maxReqTime))
+			return -1;
+	}
+	if (enif_get_map_value(env, info, atom_timecounter, &value))
+	{
+		if (!enif_get_int(env, value, &g_timeCounter))
 			return -1;
 	}
 	if (enif_get_map_value(env, info, atom_paths, &value))
