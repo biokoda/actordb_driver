@@ -2866,6 +2866,7 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	qitem *item;
 	priv_data *pd = (priv_data*)enif_priv_data(env);
 	db_command *cmd = NULL;
+	int i;
 	// int nthreads = pd->nEnvs;
 
 	DBG("all_tunnel_call");
@@ -2882,20 +2883,22 @@ static ERL_NIF_TERM all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM
 	if (argc == 4 && !(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
 		return make_error_tuple(env, "invalid_bin2");
 
-	item = command_create(0,-1,pd);
-	if (!item)
-		return atom_again;
-	cmd = (db_command*)item->cmd;
-	cmd->type = cmd_alltunnel_call;
-	cmd->ref = enif_make_copy(item->env, argv[0]);
-	cmd->pid = pid;
-	cmd->arg = enif_make_copy(item->env, argv[2]);
-	if (argc == 4)
-		cmd->arg1 = enif_make_copy(item->env, argv[3]);
+	for (i = 0; i < pd->nEnvs*pd->nWriteThreads; i++)
+	{
+		item = command_create(i,-1,pd);
+		if (!item)
+			return atom_again;
+		cmd = (db_command*)item->cmd;
+		cmd->type = cmd_alltunnel_call;
+		cmd->ref = enif_make_copy(item->env, argv[0]);
+		cmd->pid = pid;
+		cmd->arg = enif_make_copy(item->env, argv[2]);
+		if (argc == 4)
+			cmd->arg1 = enif_make_copy(item->env, argv[3]);
 
+		push_command(i, -1, pd, item);
+	}
 	enif_consume_timeslice(env,90);
-
-	push_command(0, -1, pd, item);
 
 	return atom_ok;
 }
