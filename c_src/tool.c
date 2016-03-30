@@ -180,7 +180,7 @@ static void close_env(lmdb *lm)
 }
 
 
-static int do_print(const char *pth, int what)
+static int do_print(const char *pth, i64 actor, int what)
 {
 	struct lmdb lm;
 	MDB_val key, data;
@@ -216,15 +216,18 @@ static int do_print(const char *pth, int what)
 			memcpy(&index, key.mv_data,                 sizeof(u64));
 			memcpy(&term,  (u8*)key.mv_data + sizeof(u64),   sizeof(u64));
 			memcpy(&num,   (u8*)key.mv_data + sizeof(u64)*2, sizeof(u64));
-			printf("logdb: actor=%llu, term=%llu, evnum=%llu\n",index, term,num);
-
-			op = MDB_FIRST_DUP;
-			while ((rc = mdb_cursor_get(lm.cursorLog,&key,&data, op)) == MDB_SUCCESS)
+			if (actor == -1 || actor == index)
 			{
-				u32 pgno;
-				memcpy(&pgno,data.mv_data,sizeof(u32));
-				printf("  pgno=%u\n",pgno);
-				op = MDB_NEXT_DUP;
+				printf("logdb: actor=%llu, term=%llu, evnum=%llu\n",index, term,num);
+
+				op = MDB_FIRST_DUP;
+				while ((rc = mdb_cursor_get(lm.cursorLog,&key,&data, op)) == MDB_SUCCESS)
+				{
+					u32 pgno;
+					memcpy(&pgno,data.mv_data,sizeof(u32));
+					printf("  pgno=%u\n",pgno);
+					op = MDB_NEXT_DUP;
+				}
 			}
 			rc = mdb_cursor_get(lm.cursorLog,&key,&data,MDB_NEXT_NODUP);
 		}
@@ -243,24 +246,26 @@ static int do_print(const char *pth, int what)
 			memcpy(&index, key.mv_data, sizeof(u64));
 			memcpy(&pgno, (u8*)key.mv_data + sizeof(u64), sizeof(u32));
 
-			printf("pagesdb: actor=%llu, pgno=%u\n",index, pgno);
-
-			mdb_cursor_count(lm.cursorPages,&ndupl);
-
-			op = MDB_FIRST_DUP;
-			while ((rc = mdb_cursor_get(lm.cursorPages,&key,&data, op)) == MDB_SUCCESS)
+			if (actor == -1 || actor == index)
 			{
-				u64 term,num;
-				u8 frag;
-				memcpy(&term, data.mv_data,               sizeof(u64));
-				memcpy(&num,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
-				frag = *(u8*)((u8*)data.mv_data + sizeof(u64)*2);
-				printf("  evterm=%lld, evnum=%lld, frag=%d, pgsize=%ld\n",term,num,(int)frag,data.mv_size-sizeof(u64)*2-1);
+				printf("pagesdb: actor=%llu, pgno=%u\n",index, pgno);
+				mdb_cursor_count(lm.cursorPages,&ndupl);
 
-				op = MDB_NEXT_DUP;
-				ndupl--;
-				if (ndupl == 0)
-					break;
+				op = MDB_FIRST_DUP;
+				while ((rc = mdb_cursor_get(lm.cursorPages,&key,&data, op)) == MDB_SUCCESS)
+				{
+					u64 term,num;
+					u8 frag;
+					memcpy(&term, data.mv_data,               sizeof(u64));
+					memcpy(&num,  (u8*)data.mv_data + sizeof(u64), sizeof(u64));
+					frag = *(u8*)((u8*)data.mv_data + sizeof(u64)*2);
+					printf("  evterm=%lld, evnum=%lld, frag=%d, pgsize=%ld\n",term,num,(int)frag,data.mv_size-sizeof(u64)*2-1);
+
+					op = MDB_NEXT_DUP;
+					ndupl--;
+					if (ndupl == 0)
+						break;
+				}
 			}
 			rc = mdb_cursor_get(lm.cursorPages,&key,&data,MDB_NEXT);
 		}
@@ -277,19 +282,22 @@ static int do_print(const char *pth, int what)
 			u32 mxPage,allPages;
 
 			memcpy(&index, key.mv_data, sizeof(u64));
-			v = *(u8*)(data.mv_data);
-			memcpy(&fTerm,  (u8*)data.mv_data+1,               sizeof(u64));
-			memcpy(&fEvnum, (u8*)data.mv_data+1+sizeof(u64),   sizeof(u64));
-			memcpy(&lTerm,  (u8*)data.mv_data+1+sizeof(u64)*2, sizeof(u64));
-			memcpy(&lEvnum, (u8*)data.mv_data+1+sizeof(u64)*3, sizeof(u64));
-			memcpy(&iTerm,  (u8*)data.mv_data+1+sizeof(u64)*4, sizeof(u64));
-			memcpy(&iEvnum, (u8*)data.mv_data+1+sizeof(u64)*5, sizeof(u64));
-			memcpy(&mxPage, (u8*)data.mv_data+1+sizeof(u64)*6, sizeof(u32));
-			memcpy(&allPages, (u8*)data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
+			if (actor == -1 || actor == index)
+			{
+				v = *(u8*)(data.mv_data);
+				memcpy(&fTerm,  (u8*)data.mv_data+1,               sizeof(u64));
+				memcpy(&fEvnum, (u8*)data.mv_data+1+sizeof(u64),   sizeof(u64));
+				memcpy(&lTerm,  (u8*)data.mv_data+1+sizeof(u64)*2, sizeof(u64));
+				memcpy(&lEvnum, (u8*)data.mv_data+1+sizeof(u64)*3, sizeof(u64));
+				memcpy(&iTerm,  (u8*)data.mv_data+1+sizeof(u64)*4, sizeof(u64));
+				memcpy(&iEvnum, (u8*)data.mv_data+1+sizeof(u64)*5, sizeof(u64));
+				memcpy(&mxPage, (u8*)data.mv_data+1+sizeof(u64)*6, sizeof(u32));
+				memcpy(&allPages, (u8*)data.mv_data+1+sizeof(u64)*6+sizeof(u32), sizeof(u32));
 
-			printf("actor=%llu, firstTerm=%llu, firstEvnum=%llu, lastTerm=%llu, lastEvnum=%llu,"
-			"inprogTerm=%llu, inprogEvnum=%llu, mxPage=%u, allPages=%u\n",
-			index,fTerm,fEvnum,lTerm,lEvnum,iTerm,iEvnum,mxPage,allPages);
+				printf("actor=%llu, firstTerm=%llu, firstEvnum=%llu, lastTerm=%llu, lastEvnum=%llu,"
+				"inprogTerm=%llu, inprogEvnum=%llu, mxPage=%u, allPages=%u\n",
+				index,fTerm,fEvnum,lTerm,lEvnum,iTerm,iEvnum,mxPage,allPages);
+			}
 
 			rc = mdb_cursor_get(lm.cursorInfo, &key, &data, MDB_NEXT);
 		}
@@ -636,6 +644,7 @@ int main(int argc, const char* argv[])
 
 	if (argc >= 3 && strcmp(argv[1],"print") == 0)
 	{
+		i64 aindex = -1;
 		int flag;
 		const char *path;
 
@@ -646,7 +655,14 @@ int main(int argc, const char* argv[])
 		}			
 		else
 		{
-			path = argv[3];
+			if (argc == 4)
+				path = argv[3];
+			else if (argc == 5)
+			{
+				sscanf(argv[3],"%lld",&aindex);
+				path = argv[4];
+			}
+
 			if (strcmp(argv[2],"info") == 0)
 				flag = PRINT_INFO;
 			else if (strcmp(argv[2],"pages") == 0)
@@ -656,7 +672,7 @@ int main(int argc, const char* argv[])
 			else if (strcmp(argv[2],"actors") == 0)
 				flag = PRINT_ACTORS;
 		} 
-		do_print(path, flag);
+		do_print(path, aindex, flag);
 	}
 	else if (argc == 4 && (strcmp(argv[1],"backup") == 0 || strcmp(argv[1],"compact") == 0))
 	{
@@ -705,7 +721,8 @@ int main(int argc, const char* argv[])
 		printf("%s extract /path/to/lmdb_file actorname actortype out_file\n",argv[0]);
 		printf("\n");
 		printf("Diagnostic print DB structure. This can be a lot of data!\n");
-		printf("%s print [all|info|pages|log|actors] /path/to/lmdb_file\n",argv[0]);
+		printf("Actorindex is optional\n");
+		printf("%s print [all|info|pages|log|actors] [actorindex] /path/to/lmdb_file\n",argv[0]);
 		printf("\n");
 		return 1;
 	}

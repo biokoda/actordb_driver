@@ -764,9 +764,26 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 		memcpy(logKeyBuf + sizeof(u64)*2, &pWal->firstCompleteEvnum,sizeof(u64));
 		if (mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_SET) != MDB_SUCCESS)
 		{
-			DBG("Key not found in log for checkpoint %llu %llu",
+			DBG("Key not found in log for checkpoint %llu %llu\r\n",
 				pWal->firstCompleteTerm, pWal->firstCompleteEvnum);
-			return SQLITE_OK;
+
+			mrc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_FIRST);
+			if (mrc != MDB_SUCCESS)
+				return SQLITE_ERROR;
+			while (aindex != pWal->index)
+			{
+				mrc = mdb_cursor_get(mdb->cursorLog,&logKey,&logVal,MDB_NEXT);
+				if (mrc != MDB_SUCCESS)
+					return SQLITE_ERROR;
+				aindex = *(u64*)(logKey.mv_data);
+			}
+			if (aindex != pWal->index)
+				return SQLITE_ERROR;
+
+			memcpy(&evterm, (u8*)logKey.mv_data + sizeof(u64),   sizeof(u64));
+			memcpy(&evnum,  (u8*)logKey.mv_data + sizeof(u64)*2, sizeof(u64));
+			pWal->firstCompleteTerm = evterm;
+			pWal->firstCompleteEvnum = evnum;
 		}
 
 		DBG("checkpoint evnum=%llu",pWal->firstCompleteEvnum);
