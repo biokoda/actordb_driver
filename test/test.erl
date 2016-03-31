@@ -1,7 +1,7 @@
 -module(test).
 -include_lib("eunit/include/eunit.hrl").
 -define(READTHREADS,4).
--define(WRITETHREADS,1).
+-define(WRITETHREADS,2).
 -define(DBSIZE,4096*1024*128*5).
 % -define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
 -define(CFG,#{paths => {"."}, 
