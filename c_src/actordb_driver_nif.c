@@ -1363,6 +1363,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 	const ERL_NIF_TERM *inputTuple = NULL;
 	const ERL_NIF_TERM *tupleRecs = NULL;
 	ERL_NIF_TERM *tupleResult = NULL;
+	ERL_NIF_TERM response = atom_ok;
 	int tupleSize = 0, tuplePos = 0, tupleRecsSize = 0;
 	int skip = 0;
 	u32 mxPage = cmd->conn->wal.mxPage;
@@ -1892,27 +1893,30 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 		if (tupleSize > 200)
 			free(tupleResult);
 	}
-
-	if (rc > 0 && rc < 100 && pagesPre != thread->pagesChanged && cmd->conn->db)
+	else if (rc > 0 && rc < 100)
 	{
+		if (rc == SQLITE_INTERRUPT)
+			response = make_sqlite3_error_tuple(env, "query_aborted", rc, tuplePos, cmd->conn->db);
+		else
+			response = make_sqlite3_error_tuple(env, errat, rc, tuplePos, cmd->conn->db);
+	}
+
+	if (statement != NULL)
+		dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
+
+	if (rc > 0 && rc < 100 && !thread->isreadonly && cmd->conn->db)
+	{
+		DBG("Rollback err=%d",rc);
 		sqlite3_prepare_v2(cmd->conn->db, "ROLLBACK;", strlen("ROLLBACK;"), &statement, NULL);
 		sqlite3_step(statement);
 		sqlite3_finalize(statement);
 		statement = NULL;
 	}
-	if (statement != NULL)
-		dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
 
 	// enif_release_resource(cmd->conn);
-	// Errors are from 1 to 99.
-	if (rc > 0 && rc < 100 && rc != SQLITE_INTERRUPT)
+	if (response != atom_ok)
 	{
-		return make_sqlite3_error_tuple(env, errat, rc, tuplePos, cmd->conn->db);
-	}
-	else if (rc == SQLITE_INTERRUPT)
-	{
-		// return make_error_tuple(env, "query_aborted");
-		return make_sqlite3_error_tuple(env, "query_aborted", rc, tuplePos, cmd->conn->db);
+		return response;
 	}
 	else
 	{
