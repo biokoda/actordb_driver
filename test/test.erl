@@ -134,14 +134,14 @@ async() ->
 	ets:insert(ops,{r,0}),
 	RandBytes = [base64:encode(crypto:rand_bytes(128)) || _ <- lists:seq(1,1000)],
 	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,200)],
-	Syncer = spawn(fun() -> syncer() end),
+	% Syncer = spawn(fun() -> syncer() end),
 	receive
 		{'DOWN',_Monitor,_,_PID,Reason} ->
 			exit(Reason)
 	after 20000 ->
 		ok
 	end,
-	Syncer ! stop,
+	% Syncer ! stop,
 	[P ! stop || P <- Pids],
 	{Reads,Writes} = rec_counts(0,0),
 	?debugFmt("Reads: ~p, Writes: ~p",[Reads,Writes]),
