@@ -2251,7 +2251,6 @@ static void *ctrl_thread_func(void *arg)
 static void respond_cmd(db_thread *data, qitem *item)
 {
 	db_command *cmd = (db_command*)item->cmd;
-	DBG("Respond");
 	if (cmd->ref)
 	{
 		enif_send(NULL, &cmd->pid, item->env, make_answer(item, cmd->answer));
@@ -2362,8 +2361,7 @@ static void *processing_thread_func(void *arg)
 				}
 			}
 			cmd->answer = evaluate_command(cmd,data,item->env);
-			mdb_txn_abort(mdb->txn);
-			mdb->txn = NULL;
+			mdb_txn_reset(mdb->txn);
 
 			if (g_tsd_wmdb != NULL)
 			{

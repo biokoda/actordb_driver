@@ -205,12 +205,19 @@ wal_rewind({actordb_driver, _Ref, Connection}, 0, ReplaceSql) when is_binary(Rep
 fsync_num({actordb_driver, _Ref, Connection}) ->
 	actordb_driver_nif:fsync_num(Connection).
 fsync() ->
-	ok = actordb_driver_nif:fsync().
+	case actordb_driver_nif:fsync() of
+		again ->
+			io:format("again~n"),
+			timer:sleep(?DELAY),
+			fsync();
+		ok ->
+			ok
+	end.
 fsync({actordb_driver, _Ref, Connection} = C) ->
 	Ref = make_ref(),
 	case actordb_driver_nif:fsync(Connection, Ref, self()) of
 		again ->
-			timer:sleep(10),
+			timer:sleep(?DELAY),
 			fsync(C);
 		ok ->
 			% receive_answer(Ref)

@@ -151,7 +151,7 @@ void queue_recycle(qitem *entry)
 static void populate(intq *q)
 {
 	int i;
-	qitem *entry = calloc(1,sizeof(qitem)*QSIZE);
+	qitem *entry = calloc(QSIZE,sizeof(qitem));
 
 	#ifndef _TESTAPP_
 	entry[0].env = enif_alloc_env();
