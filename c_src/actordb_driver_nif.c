@@ -124,7 +124,7 @@ static void lock_wtxn(int nEnv)
 	}
 	DBG("lock wtxn %u",i);
 	wmdb = g_tsd_wmdb = &g_pd->wmdb[nEnv];
-	
+
 	if (wmdb->txn == NULL)
 	{
 		if (open_txn(wmdb, 0) == NULL)
@@ -300,10 +300,10 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 void fail_send(int i)
 {
 	db_thread *thr = g_tsd_thread;
-	enif_send(NULL, &g_pd->tunnelConnector, thr->env, 
-		enif_make_tuple4(thr->env, 
+	enif_send(NULL, &g_pd->tunnelConnector, thr->env,
+		enif_make_tuple4(thr->env,
 			atom_tcpfail, atom_drivername,
-			enif_make_int(thr->env, thr->nEnv * g_pd->nWriteThreads + thr->nThread), 
+			enif_make_int(thr->env, thr->nEnv * g_pd->nWriteThreads + thr->nThread),
 			enif_make_int(thr->env, i)));
 	enif_clear_env(thr->env);
 }
@@ -323,6 +323,7 @@ static ERL_NIF_TERM do_all_tunnel_call(db_command *cmd,db_thread *thread, ErlNif
 	int nsent = 0, i = 0, rt = 0, nelements = 2, compressedSize = 0;
 	unsigned mxSz;
 	int sockets[MAX_CONNECTIONS];
+
 
 	memset(sockets,0,sizeof(int)*MAX_CONNECTIONS);
 	memset(&head,0,sizeof(ErlNifBinary));
@@ -516,7 +517,7 @@ static const char *get_sqlite3_error_msg(int error_code, sqlite3 *db)
 	return sqlite3_errmsg(db);
 }
 
-static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code, 
+static ERL_NIF_TERM make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code,
 	int pos, sqlite3 *db)
 {
 	if (db)
@@ -713,8 +714,8 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 		return make_error_tuple(env, "invalid_filename");
 
 	track_time(21,thread);
-	// Blob type uses lmdb directly. 
-	// Stores data in binary chunks (like pages of sqlite). 
+	// Blob type uses lmdb directly.
+	// Stores data in binary chunks (like pages of sqlite).
 	// Blob connections have db=NULL
 	if (strcmp(mode, "blob") != 0)
 	{
@@ -863,7 +864,7 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *en
 	else
 	{
 		tDone = enif_make_uint(env,done);
-		return enif_make_tuple5(env,atom_ok, 
+		return enif_make_tuple5(env,atom_ok,
 			enif_make_tuple2(env,atom_iter,res), tBin, tHead, tDone);
 	}
 }
@@ -872,9 +873,9 @@ static ERL_NIF_TERM do_iterate(db_command *cmd, db_thread *thread, ErlNifEnv *en
 static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *env)
 {
 	// Rewind discards a certain number of writes. This may happen due to consensus conflicts.
-	// Rewind is very similar to checkpoint. Checkpoint goes from beginning 
-	// (from firstCompleteEvterm/Evnum),forward to some limit. 
-	// Rewind goes from the end (from lastCompleteEvterm/Evnum) 
+	// Rewind is very similar to checkpoint. Checkpoint goes from beginning
+	// (from firstCompleteEvterm/Evnum),forward to some limit.
+	// Rewind goes from the end (from lastCompleteEvterm/Evnum)
 	// backwards to some limit evnum (including the limit).
 	// DB may get shrunk in the process.
 	MDB_val logKey, logVal;
@@ -954,7 +955,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 					break;
 				mdb_cursor_del(mdb->cursorLog, MDB_NODUPDATA);
 			}
-			pWal->firstCompleteTerm = pWal->firstCompleteTerm = pWal->lastCompleteTerm = 
+			pWal->firstCompleteTerm = pWal->firstCompleteTerm = pWal->lastCompleteTerm =
 			pWal->lastCompleteEvnum = 0;
 		}
 	}
@@ -980,7 +981,7 @@ static ERL_NIF_TERM do_wal_rewind(db_command *cmd, db_thread *thr, ErlNifEnv *en
 				sqlstr = alloca(sqlbin.size+1);
 				memcpy(sqlstr, sqlbin.data, sqlbin.size);
 				sqlstr[sqlbin.size] = 0;
-				
+
 				cmd->conn->doReplicate = 0;
 				sqlite3_exec(cmd->conn->db,sqlstr,NULL,NULL,NULL);
 				cmd->conn->doReplicate = repl;
@@ -1273,7 +1274,7 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread, ErlNifEnv *
 			enif_mutex_unlock(g_pd->prepMutex);
 			return atom_false;
 		}
-		
+
 		if (g_pd->prepSqls[i][rowLen] == NULL)
 		{
 			DBG("Did not find sql in prepared statement");
@@ -1282,7 +1283,7 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread, ErlNifEnv *
 		}
 
 		rc = sqlite3_prepare_v2(cmd->conn->db, g_pd->prepSqls[i][rowLen], -1, &statement, NULL);
-		
+
 		enif_mutex_unlock(g_pd->prepMutex);
 	}
 	else
@@ -1299,7 +1300,7 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread, ErlNifEnv *
 	sqlite3_finalize(statement);
 
 	res = enif_make_tuple3(env,atom_ok,enif_make_int(env,nparam),enif_make_int(env,ncols));
-	
+
 	return res;
 }
 
@@ -1461,7 +1462,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 			rc = SQLITE_OK;
 			skip = 1;
 			memset(&pg,0,sizeof(PgHdr));
-			
+
 			if (!enif_get_uint(env,headTop, &pg.pgno))
 				// return make_error_tuple(env,"not_pgno");
 				return make_sqlite3_error_tuple(env, "not_pgno", 0, tuplePos, cmd->conn->db);
@@ -1501,7 +1502,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 				u32 commit = 0;
 
 				DBG("BLOB STORAGE WRITE!");
-				
+
 				// this is write
 				if (!enif_inspect_iolist_as_binary(env,listTop,&pageBody))
 					return make_error_tuple(env,"not_iolist");
@@ -1557,7 +1558,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 				(readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N'))
 			{
 				skip++;
-				rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, 
+				rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen,
 					&(statement), &readpoint);
 				if(rc != SQLITE_OK)
 				{
@@ -1619,7 +1620,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 
 					if (cmd->conn->staticPrepared[i] == NULL)
 					{
-						rc = sqlite3_prepare_v2(cmd->conn->db, (char *)thread->staticSqls[i], -1, 
+						rc = sqlite3_prepare_v2(cmd->conn->db, (char *)thread->staticSqls[i], -1,
 							&(cmd->conn->staticPrepared[i]), NULL);
 						if(rc != SQLITE_OK)
 						{
@@ -1657,7 +1658,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 						memset(cmd->conn->prepVersions,0,MAX_PREP_SQLS*sizeof(int));
 					}
 
-					if (cmd->conn->prepared[rowLen] == NULL || 
+					if (cmd->conn->prepared[rowLen] == NULL ||
 						cmd->conn->prepVersions[rowLen] != g_pd->prepVersions[i][rowLen])
 					{
 						if (g_pd->prepSqls[i][rowLen] == NULL)
@@ -1670,7 +1671,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 						if (cmd->conn->prepared[rowLen] != NULL)
 							sqlite3_finalize(cmd->conn->prepared[rowLen]);
 
-						rc = sqlite3_prepare_v2(cmd->conn->db, g_pd->prepSqls[i][rowLen], -1, 
+						rc = sqlite3_prepare_v2(cmd->conn->db, g_pd->prepSqls[i][rowLen], -1,
 							&(cmd->conn->prepared[rowLen]), NULL);
 						if(rc != SQLITE_OK)
 						{
@@ -1698,7 +1699,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 					//         DBG("Executing %.*s",(int)statementlen,readpoint+skip);
 					//     }
 					// #endif
-					rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, 
+					rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen,
 						&statement, &readpoint);
 					if(rc != SQLITE_OK)
 					{
@@ -1718,7 +1719,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 					{
 						// List can be:
 						// [[Tuple1,Tuple2],...] -> for every statement, list of rows.
-						// [[[Column1,Column2,..],..],...] -> for every statement, 
+						// [[[Column1,Column2,..],..],...] -> for every statement,
 						// 		for every row, list of columns.
 						if (!enif_get_list_cell(env, listTop, &headTop, &listTop))
 						{
@@ -1727,7 +1728,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 						}
 					}
 
-					// Every row is a list. It can be a list of tuples (which implies records 
+					// Every row is a list. It can be a list of tuples (which implies records
 					// thus we start at offset 1), or a list of columns.
 					if (enif_get_list_cell(env, headTop, &headBot, &headTop))
 					{
@@ -1789,7 +1790,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 					{
 						if (thread->columnSpaceSize < column_count)
 						{
-							thread->columnSpace = realloc(thread->columnSpace, 
+							thread->columnSpace = realloc(thread->columnSpace,
 								column_count*sizeof(ERL_NIF_TERM));
 							thread->columnSpaceSize = column_count;
 						}
@@ -1835,7 +1836,7 @@ static ERL_NIF_TERM do_exec_script(db_command *cmd, db_thread *thread, ErlNifEnv
 					for(i = 0; i < column_count; i++)
 						array[i] = make_cell(env, statement, i);
 
-					rows = enif_make_list_cell(env, enif_make_tuple_from_array(env, 
+					rows = enif_make_list_cell(env, enif_make_tuple_from_array(env,
 						array, column_count), rows);
 					rowcount++;
 				}
@@ -3559,7 +3560,7 @@ static int start_threads(priv_data *priv)
 			}
 			else
 			{
-				if (enif_thread_create("rthr", &(priv->rtids[i*priv->nReadThreads + (k - priv->nWriteThreads)]), 
+				if (enif_thread_create("rthr", &(priv->rtids[i*priv->nReadThreads + (k - priv->nWriteThreads)]),
 					processing_thread_func, curThread, NULL) != 0)
 				{
 					return -1;
