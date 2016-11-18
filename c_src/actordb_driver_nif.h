@@ -94,6 +94,9 @@ struct priv_data
 	char staticSqls[MAX_STATIC_SQLS][256];
 	int nstaticSqls;
 
+	int nPlugins;
+	char **pluginFiles;
+
 	#if  !_TESTAPP_
 	ErlNifPid tunnelConnector;
 	#endif

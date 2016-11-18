@@ -87,6 +87,7 @@ ERL_NIF_TERM atom_again;
 ERL_NIF_TERM atom_counters;
 ERL_NIF_TERM atom_maxreqtime;
 ERL_NIF_TERM atom_timecounter;
+ERL_NIF_TERM atom_pluginfiles;
 
 static ERL_NIF_TERM make_atom(ErlNifEnv *env, const char *atom_name)
 {
@@ -765,6 +766,14 @@ static ERL_NIF_TERM do_open(db_command *cmd, db_thread *thread, ErlNifEnv *env)
 	{
 		// open wal directly
 		sqlite3WalOpen(NULL, NULL, filename, 0, 0, NULL);
+	}
+	if (g_pd->nPlugins && db)
+	{
+		int i;
+		sqlite3_db_config(db,SQLITE_DBCONFIG_ENABLE_LOAD_EXTENSION,1,NULL);
+
+		for (i = 0; i < g_pd->nPlugins; i++)
+			sqlite3_load_extension(db, g_pd->pluginFiles[i], NULL, NULL);
 	}
 	track_time(23,thread);
 	DBG("opened new thread=%d name=%s mode=%s.",(int)thread->nThread,filename,mode);
@@ -3588,7 +3597,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	const ERL_NIF_TERM *param;
 	const ERL_NIF_TERM *pathtuple;
 	ERL_NIF_TERM value;
-	char nodename[128];
+	char nodename[512];
 	priv_data *priv;
 
 #ifdef _WIN32
@@ -3610,7 +3619,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	// 1TB def size on linux
 	priv->dbsize = 1099511627776LL;
 #endif
-	memset(nodename,0,128);
+	memset(nodename,0,512);
 	priv->maxReqTime = 60000;
 
 	// scratchSize = 1024*1024*10;
@@ -3653,14 +3662,37 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	atom_counters = enif_make_atom(env, "counters");
 	atom_maxreqtime = enif_make_atom(env, "maxtime");
 	atom_timecounter = enif_make_atom(env, "timecounter");
+	atom_pluginfiles = enif_make_atom(env, "pluginfiles");
 
 #ifdef _TESTDBG_
 	if (enif_get_map_value(env, info, atom_logname, &value))
 	{
-		enif_get_string(env,value,nodename,128,ERL_NIF_LATIN1);
+		enif_get_string(env,value,nodename,512,ERL_NIF_LATIN1);
 		g_log = fopen(nodename, "w");
 	}
 #endif
+	if (enif_get_map_value(env, info, atom_pluginfiles, &value))
+	{
+		if (!enif_get_tuple(env, value, &i, &param))
+		{
+			DBG("Param not tuple");
+			return -1;
+		}
+		priv->nPlugins = i;
+		if (i)
+		{
+			priv->pluginFiles = calloc(i,sizeof(char*));
+			for (i = 0; i < priv->nPlugins; i++)
+			{
+				priv->pluginFiles[i] = calloc(256,sizeof(char));
+				enif_get_string(env,param[i],priv->pluginFiles[i],256*sizeof(char),ERL_NIF_LATIN1);
+			}
+		}
+		else
+		{
+			priv->pluginFiles = NULL;
+		}
+	}
 	if (enif_get_map_value(env, info, atom_dbsize, &value))
 	{
 		if (!enif_get_uint64(env,value,(ErlNifUInt64*)&priv->dbsize))
@@ -3824,6 +3856,12 @@ static void on_unload(ErlNifEnv* env, void* pd)
 #ifdef _TESTDBG_
 	fclose(g_log);
 #endif
+	if (priv->pluginFiles)
+	{
+		for (i = 0; i < priv->nPlugins; i++)
+			free(priv->pluginFiles[i]);
+		free(priv->pluginFiles);
+	}
 	enif_mutex_destroy(priv->prepMutex);
 	free(g_counters);
 	g_counters = NULL;

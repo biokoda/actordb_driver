@@ -5,6 +5,8 @@
 -define(DBSIZE,4096*1024*128*5).
 % -define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
 -define(CFG,#{paths => {"."}, 
+	pluginfiles => list_to_tuple(filelib:wildcard("../test/*.dylib")++
+		filelib:wildcard("../test/*.so")++filelib:wildcard("../test/*.dll")),
 	staticsqls => {"INSERT INTO tab VALUES (?1,?2);"}, 
 	dbsize => ?DBSIZE, 
 	rthreads => ?READTHREADS,
@@ -51,8 +53,12 @@ modes() ->
 	{ok,Db,_} = actordb_driver:open(":memory:",1,Sql),
 	{ok,_} = actordb_driver:exec_script(<<"$CREATE TABLE tab (id INTEGER PRIMARY KEY, txt TEXT);",
 		"$CREATE TABLE tab1 (id INTEGER PRIMARY KEY, txt TEXT);",
+		"$CREATE TABLE tab2 (id INTEGER PRIMARY KEY, val DOUBLE);"
 		"$ALTER TABLE tab ADD i INTEGER;$CREATE TABLE tabx (id INTEGER PRIMARY KEY, txt TEXT);">>,Db),
 	{ok,_} = actordb_driver:exec_script("INSERT INTO tab VALUES (1, 'asdadad',1);",Db),
+	{ok,_} = actordb_driver:exec_script("INSERT INTO tab2 VALUES (1, 32.0);",Db),
+	% if libhalf extension is present
+	?debugFmt("half=~p",[?READ("SELECT * from tab2 WHERE half(val) == 16.0;",Db)]),
 	{ok,[_]} = ?READ("SELECT * from tab;",Db),
 	Sql1 = "INSERT INTO tab VALUES (2, 'asdadad',1);",
 	Sql2 = "INSERT INTO tab VALUES (3, 'tritri',1);",
