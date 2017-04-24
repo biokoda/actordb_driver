@@ -77,7 +77,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 	if (zWalName[0] == '/')
 		offset = 1;
 	nmLen = strlen(zWalName+offset);
-	if (zWalName[offset+nmLen-1] == 'l' && zWalName[offset+nmLen-2] == 'a' && 
+	if (zWalName[offset+nmLen-1] == 'l' && zWalName[offset+nmLen-2] == 'a' &&
 		zWalName[offset+nmLen-3] == 'w' && zWalName[offset+nmLen-4] == '-')
 		cutoff = 4;
 
@@ -107,7 +107,7 @@ int sqlite3WalOpen(sqlite3_vfs *pVfs, sqlite3_file *pDbFd, const char *zWalName,
 		cmd->arg = enif_make_string(item->env,zWalName,ERL_NIF_LATIN1);
 		cmd->arg1 = enif_make_uint64(item->env, index);
 		push_command(conn->wthreadind, -1, g_pd, item);
-		
+
 		#else
 		if (thr->isreadonly)
 		{
@@ -194,10 +194,10 @@ int register_actor(u64 index, char *name)
 	if (name[0] == '/')
 		offset = 1;
 	nmLen = strlen(name+offset);
-	if (name[offset+nmLen-1] == 'l' && name[offset+nmLen-2] == 'a' && 
+	if (name[offset+nmLen-1] == 'l' && name[offset+nmLen-2] == 'a' &&
 		name[offset+nmLen-3] == 'w' && name[offset+nmLen-4] == '-')
 		cutoff = 4;
-	
+
 	key.mv_size = nmLen-cutoff;
 	key.mv_data = (void*)(name+offset);
 	data.mv_size = sizeof(u64);
@@ -222,7 +222,7 @@ int register_actor(u64 index, char *name)
 	{
 		data.mv_size = sizeof(u64);
 		data.mv_data = (void*)&index;
-		
+
 		DBG("Writing ? index %lld",index);
 		if (mdb_put(mdb->txn,mdb->actorsdb,&key,&data,0) != MDB_SUCCESS)
 		{
@@ -236,7 +236,7 @@ int register_actor(u64 index, char *name)
 }
 
 
-int sqlite3WalClose(Wal *pWal, int sync_flags, int nBuf, u8 *zBuf)
+int sqlite3WalClose(Wal *pWal,sqlite3* db, int sync_flags, int nBuf, u8 *zBuf)
 {
 	return SQLITE_OK;
 }
@@ -290,14 +290,14 @@ int sqlite3WalFindFrame(Wal *pWal, Pgno pgno, u32 *piRead)
 		return findframe(pWal->rthread, pWal, pgno, piRead, readSafeTerm, readSafeEvnum, NULL, NULL);
 	}
 	else*/ if (pWal->inProgressTerm > 0 || pWal->inProgressEvnum > 0)
-		return findframe(thread, pWal, pgno, piRead, pWal->inProgressTerm, 
+		return findframe(thread, pWal, pgno, piRead, pWal->inProgressTerm,
 			pWal->inProgressEvnum, NULL, NULL);
 	else
-		return findframe(thread, pWal, pgno, piRead, pWal->lastCompleteTerm, 
+		return findframe(thread, pWal, pgno, piRead, pWal->lastCompleteTerm,
 			pWal->lastCompleteEvnum, NULL, NULL);
 }
 
-static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm, 
+static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limitTerm,
 	u64 limitEvnum, u64 *outTerm, u64 *outEvnum)
 {
 	MDB_val key, data;
@@ -317,7 +317,7 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 	DBG("FIND FRAME pgno=%u, index=%llu, limitterm=%llu, limitevnum=%llu",
 		pgno,pWal->index,limitTerm,limitEvnum);
 
-	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>, 
+	// ** - Pages DB: {<<ActorIndex:64, Pgno:32/unsigned>>,
 	// 			<<Evterm:64,Evnum:64,Counter,CompressedPage/binary>>}
 	memcpy(pagesKeyBuf,               &pWal->index,sizeof(u64));
 	memcpy(pagesKeyBuf + sizeof(u64), &pgno,       sizeof(u32));
@@ -412,7 +412,7 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 	// 	thr = pWal->rthread;
 	// else
 	// 	thr = pWal->thread;
-	
+
 	DBG("Read frame");
 	// i64 term, evnum;
 	if (thr->nResFrames == 0)
@@ -424,7 +424,7 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 		#ifdef _TESTDBG_
 		if (result > 0)
 		{
-	
+
 			{
 				i64 term, evnum;
 				memcpy(&term,  thr->resFrames[0].mv_data,             sizeof(u64));
@@ -444,8 +444,8 @@ static int readframe(Wal *pWal, u32 iRead, int nOut, u8 *pOut)
 		while (frags >= 0)
 		{
 			// DBG("Read frame %d",pos);
-			memcpy(pagesBuf + pos, 
-				((char*)thr->resFrames[frags].mv_data)+sizeof(u64)*2+1, 
+			memcpy(pagesBuf + pos,
+				((char*)thr->resFrames[frags].mv_data)+sizeof(u64)*2+1,
 				thr->resFrames[frags].mv_size-(sizeof(u64)*2+1));
 			pos += thr->resFrames[frags].mv_size-(sizeof(u64)*2+1);
 			frags--;
@@ -525,7 +525,7 @@ static int wal_iterate(Wal *pWal, iterate_resource *iter, u8 *buf, int bufsize, 
 	mdbinf* const mdb 	 = &thr->mdb;
 	u32 mxPage;
 	u64 readSafeEvnum, readSafeTerm;
-	
+
 	#ifndef _TESTAPP_
 	enif_mutex_lock(pWal->mtx);
 	#endif
@@ -734,7 +734,7 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 	u8 logKeyBuf[sizeof(u64)*3];
 	u64 evnum,evterm,aindex;
 	mdbinf* mdb;
-	
+
 	// db_thread* const thr = enif_tsd_get(g_tsd_thread);
 	db_thread *thr 		 = g_tsd_thread;
 	int logop, mrc 		 = MDB_SUCCESS;
@@ -830,9 +830,9 @@ static int checkpoint(Wal *pWal, u64 limitEvnum)
 			{
 				u8 frag;
 				MDB_val pgDelKey = {0,NULL}, pgDelVal = {0,NULL};
-				
+
 				mdb_cursor_get(mdb->cursorPages,&pgDelKey,&pgDelVal,MDB_GET_CURRENT);
-				
+
 				frag = *((u8*)pgDelVal.mv_data+sizeof(u64)*2);
 				memcpy(&evterm, pgDelVal.mv_data,            sizeof(u64));
 				memcpy(&evnum,  (u8*)pgDelVal.mv_data+sizeof(u64),sizeof(u64));
@@ -1297,7 +1297,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 		memcpy(pagesKeyBuf + sizeof(u64), &p->pgno,    sizeof(u32));
 		key.mv_size = sizeof(pagesKeyBuf);
 		key.mv_data = pagesKeyBuf;
-		
+
 
 		// Check if there are pages with the same or higher evnum/evterm. If there are, delete them.
 		// This can happen if sqlite flushed some page to disk before commiting, because there were
@@ -1477,9 +1477,9 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 			#ifndef _TESTAPP_
 			enif_mutex_lock(pWal->mtx);
 			#endif
-			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ? 
+			pWal->lastCompleteTerm = pWal->inProgressTerm > 0 ?
 				pWal->inProgressTerm : pWal->lastCompleteTerm;
-			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ? 
+			pWal->lastCompleteEvnum = pWal->inProgressEvnum > 0 ?
 				pWal->inProgressEvnum : pWal->lastCompleteEvnum;
 			if (pWal->firstCompleteTerm == 0)
 			{
@@ -1518,6 +1518,7 @@ int sqlite3WalFrames(Wal *pWal, int szPage, PgHdr *pList, Pgno nTruncate, int is
 /* Copy pages from the log to the database file */
 int sqlite3WalCheckpoint(
   Wal *pWal,                      /* Write-ahead log connection */
+  sqlite3 *db,
   int eMode,                      /* One of PASSIVE, FULL and RESTART */
   int (*xBusy)(void*),            /* Function to call when busy */
   void *pBusyArg,                 /* Context argument for xBusyHandler */
