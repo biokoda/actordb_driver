@@ -4,11 +4,11 @@
 -define(WRITETHREADS,2).
 -define(DBSIZE,4096*1024*128*5).
 % -define(INIT,actordb_driver:init({{"."},{"INSERT INTO tab VALUES (?1,?2);"},?DBSIZE,?READTHREADS,?WRITETHREADS})).
--define(CFG,#{paths => {"."}, 
+-define(CFG,#{paths => {"."},
 	pluginfiles => list_to_tuple(filelib:wildcard("../test/*.dylib")++
 		filelib:wildcard("../test/*.so")++filelib:wildcard("../test/*.dll")),
-	staticsqls => {"INSERT INTO tab VALUES (?1,?2);"}, 
-	dbsize => ?DBSIZE, 
+	staticsqls => {"INSERT INTO tab VALUES (?1,?2);"},
+	dbsize => ?DBSIZE,
 	rthreads => ?READTHREADS,
 	wthreads => ?WRITETHREADS,
 	counters => 10,
@@ -138,7 +138,7 @@ async() ->
 	ets:new(ops,[set,public,named_table,{write_concurrency,true}]),
 	ets:insert(ops,{w,0}),
 	ets:insert(ops,{r,0}),
-	RandBytes = [base64:encode(crypto:rand_bytes(128)) || _ <- lists:seq(1,1000)],
+	RandBytes = [base64:encode(crypto:strong_rand_bytes(128)) || _ <- lists:seq(1,1000)],
 	Pids = [element(1,spawn_monitor(fun() -> w(P,RandBytes) end)) || P <- lists:seq(1,200)],
 	% Syncer = spawn(fun() -> syncer() end),
 	receive
@@ -357,7 +357,7 @@ checkpoint() ->
 	ok = actordb_driver:wal_rewind(Db,0, "create table tab1 (id INTEGER PRIMARY KEY, x TEXT);insert into tab1 values (1,'replaced');"),
 	?debugFmt("After rewind+replace to 0=~p",[actordb_driver:actor_info("original",0)]),
 	{ok,[[{columns,{<<"name">>}},{rows,[{<<"tab1">>}]}],
-         [{columns,{<<"id">>,<<"x">>}},{rows,[{1,<<"replaced">>}]}]]} = 
+         [{columns,{<<"id">>,<<"x">>}},{rows,[{1,<<"replaced">>}]}]]} =
         actordb_driver:exec_script("select * from tab1;select name from sqlite_master where type='table';",Db),
 	ok.
 
@@ -372,7 +372,7 @@ checkpoint1() ->
 checkpoint1(Db,C) when C >= 1000 ->
 	ok;
 checkpoint1(Db,C) ->
-	Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'",base64:encode(crypto:rand_bytes(1024*10)),"');"],
+	Sql = ["INSERT INTO tab VALUES (",integer_to_list(C),",'",base64:encode(crypto:strong_rand_bytes(1024*10)),"');"],
 	{ok,_} = actordb_driver:exec_script(Sql,Db,infinity,1,C,<<>>),
 	case C > 5 of
 		true when C rem 3 == 0 ->
@@ -425,7 +425,7 @@ bigtrans() ->
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (3,'7');INSERT OR REPLACE INTO __adb (id,val) VALUES (4,'task');",
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (1,'0');INSERT OR REPLACE INTO __adb (id,val) VALUES (9,'0');",
 	"INSERT OR REPLACE INTO __adb (id,val) VALUES (7,'614475188');">>,
-	"INSERT INTO __adb (id,val) VALUES (10,'",base64:encode(crypto:rand_bytes(1024*1024*10)),"');", % worst case scenario, incompressible data
+	"INSERT INTO __adb (id,val) VALUES (10,'",base64:encode(crypto:strong_rand_bytes(1024*1024*10)),"');", % worst case scenario, incompressible data
 	"INSERT INTO __adb (id,val) VALUES (?1, ?2);",
 	"INSERT INTO __adb (id,val) VALUES (?1, ?2);",
 	"DELETE from __adb where id=10;",
