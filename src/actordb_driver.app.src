@@ -1,7 +1,7 @@
 {application, actordb_driver,
  [
   {description, "actordb sqlite nif interface"},
-  {vsn, "0.10.25"},
+  {vsn, "0.10.26"},
   {modules, [actordb_driver, actordb_driver_nif]},
   {registered, []},
   {applications, [
