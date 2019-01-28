@@ -3493,7 +3493,7 @@ static int start_threads(priv_data *priv)
 				if (mdb_env_set_mapsize(menv,priv->dbsize) != MDB_SUCCESS)
 					return -1;
 				// Syncs are handled from erlang.
-				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|flags, 0664) != MDB_SUCCESS) //MDB_NOSYNC
+				if (mdb_env_open(menv, lmpath, MDB_NOSUBDIR|MDB_NOTLS|MDB_NORDAHEAD|flags, 0664) != MDB_SUCCESS) //MDB_NOSYNC
 					return -1;
 
 				// Create databases if they do not exist yet
