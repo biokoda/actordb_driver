@@ -301,6 +301,7 @@ static void wal_page_hook(void *data,void *buff,int buffUsed,void* header, int h
 void fail_send(int i)
 {
 	db_thread *thr = g_tsd_thread;
+	DBG("fail_send %d", i);
 	enif_send(NULL, &g_pd->tunnelConnector, thr->env,
 		enif_make_tuple4(thr->env,
 			atom_tcpfail, atom_drivername,
@@ -1313,50 +1314,83 @@ static ERL_NIF_TERM do_stmt_info(db_command *cmd, db_thread *thread, ErlNifEnv *
 	return res;
 }
 
-static ERL_NIF_TERM do_set_socket(db_command *cmd, db_thread *thread, ErlNifEnv *env)
+// static ERL_NIF_TERM do_set_socket(db_command *cmd, db_thread *thread, ErlNifEnv *env)
+static ERL_NIF_TERM do_set_socket(db_thread *thread)
 {
-	int fd = 0;
-	int pos = -1;
-	int type = 1;
-	int opts;
-
-	if (!enif_get_int(env,cmd->arg,&fd))
-		return atom_error;
-	if (!enif_get_int(env,cmd->arg1,&pos))
-		return atom_error;
-	if (!enif_get_int(env,cmd->arg2,&type))
-		return atom_error;
-
-#ifndef _WIN32
-	opts = fcntl(fd,F_GETFL);
-	if (fcntl(fd, F_SETFL, opts & (~O_NONBLOCK)) == -1 || fcntl(fd,F_GETFL) & O_NONBLOCK)
-#else
-	opts = 0;
-	if (ioctlsocket(fd, FIONBIO, &opts) != 0)
-#endif
+	while (1)
 	{
-		DBG("Can not set to blocking socket");
-		fail_send(pos);
-		return atom_false;
-	}
-#ifdef SO_NOSIGPIPE
-	opts = 1;
-	if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&opts, sizeof(int)) != 0)
-	{
-		DBG("Unable to set nosigpipe");
-		fail_send(pos);
-		return atom_false;
-	}
-#endif
-	if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&opts, sizeof(int)) != 0)
-	{
-		DBG("Unable to set socket nodelay");
-		fail_send(pos);
-		return atom_false;
+		int opts;
+		int fd = 0;
+		int pos = -1;
+		int type = 1;
+		int i;
+		struct timeval send_time;
+
+		for (i = 0; i < MAX_CONNECTIONS; i++)
+		{
+			int index = thread->nEnv * g_pd->nWriteThreads * MAX_CONNECTIONS + thread->nThread * MAX_CONNECTIONS + i;
+			int sfd = atomic_load(&g_pd->sockets[index]);
+			if (thread->sockets[i] != sfd)
+			{
+				fd = sfd;
+				pos = i;
+				type = atomic_load(&g_pd->socketTypes[index]);
+				break;
+			}
+		}
+		if (fd == 0)
+		{
+			return atom_ok;
+		}
+		DBG("Write thread %d update socket %d %d", thread->nThread, pos, fd);
+
+		// if (!enif_get_int(env,cmd->arg,&fd))
+		// 	return atom_error;
+		// if (!enif_get_int(env,cmd->arg1,&pos))
+		// 	return atom_error;
+		// if (!enif_get_int(env,cmd->arg2,&type))
+		// 	return atom_error;
+
+	#ifndef _WIN32
+		opts = fcntl(fd,F_GETFL);
+		if (fcntl(fd, F_SETFL, opts & (~O_NONBLOCK)) == -1 || fcntl(fd,F_GETFL) & O_NONBLOCK)
+	#else
+		opts = 0;
+		if (ioctlsocket(fd, FIONBIO, &opts) != 0)
+	#endif
+		{
+			DBG("Can not set to blocking socket");
+			fail_send(pos);
+			return atom_false;
+		}
+	#ifdef SO_NOSIGPIPE
+		opts = 1;
+		if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *)&opts, sizeof(int)) != 0)
+		{
+			DBG("Unable to set nosigpipe");
+			fail_send(pos);
+			return atom_false;
+		}
+	#endif
+		if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&opts, sizeof(int)) != 0)
+		{
+			DBG("Unable to set socket nodelay");
+			fail_send(pos);
+			return atom_false;
+		}
+		send_time.tv_sec=2;
+		send_time.tv_usec=0;
+		if (setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&send_time,sizeof(send_time)) != 0)
+		{
+			DBG("Unable to set socket send timeout");
+			fail_send(pos);
+			return atom_false;
+		}
+
+		thread->sockets[pos] = fd;
+		thread->socket_types[pos] = type;
 	}
 
-	thread->sockets[pos] = fd;
-	thread->socket_types[pos] = type;
 
 	return atom_ok;
 }
@@ -2114,8 +2148,8 @@ static ERL_NIF_TERM evaluate_command(db_command *cmd, db_thread *thread, ErlNifE
 		return do_actorsdb_add(cmd,thread,env);
 	case cmd_synced:
 		return atom_ok;
-	case cmd_set_socket:
-		return do_set_socket(cmd, thread, env);
+	// case cmd_set_socket:
+	// 	return do_set_socket(cmd, thread, env);
 	default:
 		return make_error_tuple(env, "invalid_command");
 	}
@@ -2290,6 +2324,7 @@ static void *processing_thread_func(void *arg)
 	qitem *itemsWaiting = NULL;
 	u64 waitingCommit = 0;
 	int rc;
+	u64 knownSockIndex = 0;
 	qitem *nitem = NULL;
 	g_tsd_cursync = 0;
 	g_tsd_conn    = NULL;
@@ -2316,6 +2351,16 @@ static void *processing_thread_func(void *arg)
 		data->pagesChanged = 0;
 		atomic_store(&data->reqRunning, cmd->type);
 		atomic_fetch_add(&data->nReqs, 1);
+
+		if (!data->isreadonly)
+		{
+			u64 sockUpdate = atomic_load_explicit(&g_pd->sockUpdate, memory_order_relaxed);
+			if (sockUpdate != knownSockIndex)
+			{
+				knownSockIndex = sockUpdate;
+				do_set_socket(data);
+			}
+		}
 
 		DBG("rthread=%d command=%d.",data->nThread,cmd->type);
 
@@ -2762,15 +2807,21 @@ static ERL_NIF_TERM set_thread_fd(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 	if (pos > 8 || pos < 0 || fd < 3 || thread >= g_pd->nWriteThreads * g_pd->nEnvs)
 		return atom_false;
 
-	item = command_create(thread,-1,g_pd);
-	if (!item)
-		return atom_again;
-	cmd = (db_command*)item->cmd;
-	cmd->type = cmd_set_socket;
-	cmd->arg = enif_make_int(item->env,fd);
-	cmd->arg1 = enif_make_int(item->env,pos);
-	cmd->arg2 = enif_make_int(item->env,type);
-	push_command(thread, -1, g_pd, item);
+	DBG("Set thread fd %d %d %d", thread, pos, fd);
+	
+	atomic_store(&g_pd->sockets[thread*MAX_CONNECTIONS + pos], fd);
+	atomic_store(&g_pd->socketTypes[thread*MAX_CONNECTIONS + pos], type);
+	atomic_fetch_add(&g_pd->sockUpdate, 1);
+
+	// item = command_create(thread,-1,g_pd);
+	// if (!item)
+	// 	return atom_again;
+	// cmd = (db_command*)item->cmd;
+	// cmd->type = cmd_set_socket;
+	// cmd->arg = enif_make_int(item->env,fd);
+	// cmd->arg1 = enif_make_int(item->env,pos);
+	// cmd->arg2 = enif_make_int(item->env,type);
+	// push_command(thread, -1, g_pd, item);
 	enif_consume_timeslice(env,90);
 	return atom_ok;
 }
@@ -3532,7 +3583,14 @@ static int start_threads(priv_data *priv)
 
 			curThread->nEnv = i;
 			if (k < priv->nWriteThreads)
+			{
 				curThread->nThread = k;
+				for (j = 0; j < MAX_CONNECTIONS; j++)
+				{
+					atomic_init(&priv->sockets[i*priv->nWriteThreads*MAX_CONNECTIONS + k*MAX_CONNECTIONS + j], 0);
+					atomic_init(&priv->socketTypes[i*priv->nWriteThreads*MAX_CONNECTIONS + k*MAX_CONNECTIONS + j], 0);
+				}
+			}
 			else
 			{
 				curThread->isreadonly = 1;
@@ -3785,6 +3843,8 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	if(!iterate_type)
 		return -1;
 
+	priv->sockets = calloc(priv->nEnvs*priv->nWriteThreads,sizeof(int)*MAX_CONNECTIONS);
+	priv->socketTypes = calloc(priv->nEnvs*priv->nWriteThreads,sizeof(int)*MAX_CONNECTIONS);
 	priv->actorIndexes = malloc(sizeof(_Atomic(u64))*priv->nEnvs);
 	priv->wtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nWriteThreads+1));
 	priv->rtasks = malloc(sizeof(queue*)*(priv->nEnvs*priv->nReadThreads));
@@ -3795,6 +3855,7 @@ static int on_load(ErlNifEnv* env, void** priv_out, ERL_NIF_TERM info)
 	priv->wmdb = malloc(sizeof(mdbinf)*priv->nEnvs);
 
 	memset(priv->wmdb, 0, sizeof(mdbinf)*priv->nEnvs);
+	atomic_init(&priv->sockUpdate,0);
 	// priv->writeBufs = malloc(sizeof(u8*)*priv->nEnvs);
 
 	return start_threads(priv);
@@ -3876,6 +3937,8 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	free(priv->wmdb);
 	free(priv->wthreads);
 	free(priv->rthreads);
+	free(priv->sockets);
+	free(priv->socketTypes);
 	// free(priv->writeBufs);
 	// free(priv->sqlite_pgcache);
 	free(pd);

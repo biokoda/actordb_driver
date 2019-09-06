@@ -76,11 +76,18 @@ struct priv_data
 	mdbinf *wmdb;
 
 	#ifndef _TESTAPP_
+	ErlNifMutex *sockMutex;
 	ErlNifMutex *prepMutex;
 	ErlNifMutex **wthrMutexes;
 	ErlNifTid *tids;    // tids for every write thread + control
 	ErlNifTid *rtids;    // tids for every read thread
 	#endif
+
+	// set when sockets array changes
+	_Atomic(u64) sockUpdate;
+	// per write thread socket array
+	_Atomic(int)* sockets;
+	_Atomic(int)* socketTypes;
 
 	// For actorsdb, when opening a new actor
 	// do an atomic increment to get a unique index. Then send a write
