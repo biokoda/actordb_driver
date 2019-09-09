@@ -86,8 +86,8 @@ struct priv_data
 	// set when sockets array changes
 	_Atomic(u64) sockUpdate;
 	// per write thread socket array
-	_Atomic(int)* sockets;
-	_Atomic(int)* socketTypes;
+	int* sockets;
+	int* socketTypes;
 
 	// For actorsdb, when opening a new actor
 	// do an atomic increment to get a unique index. Then send a write

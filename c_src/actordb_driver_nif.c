@@ -1326,18 +1326,20 @@ static ERL_NIF_TERM do_set_socket(db_thread *thread)
 		int i;
 		struct timeval send_time;
 
+		enif_mutex_lock(g_pd->sockMutex);
 		for (i = 0; i < MAX_CONNECTIONS; i++)
 		{
 			int index = thread->nEnv * g_pd->nWriteThreads * MAX_CONNECTIONS + thread->nThread * MAX_CONNECTIONS + i;
-			int sfd = atomic_load(&g_pd->sockets[index]);
+			int sfd = g_pd->sockets[index];
 			if (thread->sockets[i] != sfd)
 			{
 				fd = sfd;
 				pos = i;
-				type = atomic_load(&g_pd->socketTypes[index]);
+				type = g_pd->socketTypes[index];
 				break;
 			}
 		}
+		enif_mutex_unlock(g_pd->sockMutex);
 		if (fd == 0)
 		{
 			return atom_ok;
@@ -2792,8 +2794,8 @@ static ERL_NIF_TERM counter_inc(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
 static ERL_NIF_TERM set_thread_fd(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
 	int thread, fd, type, pos;
-	qitem *item;
-	db_command *cmd;
+	// qitem *item;
+	// db_command *cmd;
 
 	if (!enif_get_int(env,argv[0],&thread))
 		return make_error_tuple(env, "not_int");
@@ -2809,9 +2811,11 @@ static ERL_NIF_TERM set_thread_fd(ErlNifEnv *env, int argc, const ERL_NIF_TERM a
 
 	DBG("Set thread fd %d %d %d", thread, pos, fd);
 	
-	atomic_store(&g_pd->sockets[thread*MAX_CONNECTIONS + pos], fd);
-	atomic_store(&g_pd->socketTypes[thread*MAX_CONNECTIONS + pos], type);
+	enif_mutex_lock(g_pd->sockMutex);
+	g_pd->sockets[thread*MAX_CONNECTIONS + pos] = fd;
+	g_pd->socketTypes[thread*MAX_CONNECTIONS + pos] = type;
 	atomic_fetch_add(&g_pd->sockUpdate, 1);
+	enif_mutex_unlock(g_pd->sockMutex);
 
 	// item = command_create(thread,-1,g_pd);
 	// if (!item)
@@ -3505,6 +3509,7 @@ static int start_threads(priv_data *priv)
 	}
 
 	priv->prepMutex = enif_mutex_create("prepmutex");
+	priv->sockMutex = enif_mutex_create("sockmutex");
 
 	DBG("Driver starting, paths=%d, threads (w=%d, r=%d). Dbsize %llu, nbatch=%d, tsy=%d",
 		priv->nEnvs,priv->nWriteThreads,priv->nReadThreads,priv->dbsize,g_nbatch,(int)g_transsync);
@@ -3585,11 +3590,11 @@ static int start_threads(priv_data *priv)
 			if (k < priv->nWriteThreads)
 			{
 				curThread->nThread = k;
-				for (j = 0; j < MAX_CONNECTIONS; j++)
-				{
-					atomic_init(&priv->sockets[i*priv->nWriteThreads*MAX_CONNECTIONS + k*MAX_CONNECTIONS + j], 0);
-					atomic_init(&priv->socketTypes[i*priv->nWriteThreads*MAX_CONNECTIONS + k*MAX_CONNECTIONS + j], 0);
-				}
+				// for (j = 0; j < MAX_CONNECTIONS; j++)
+				// {
+				// 	atomic_init(&priv->sockets[i*priv->nWriteThreads*MAX_CONNECTIONS + k*MAX_CONNECTIONS + j], 0);
+				// 	atomic_init(&priv->socketTypes[i*priv->nWriteThreads*MAX_CONNECTIONS + k*MAX_CONNECTIONS + j], 0);
+				// }
 			}
 			else
 			{
@@ -3924,6 +3929,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 		free(priv->pluginFiles);
 	}
 	enif_mutex_destroy(priv->prepMutex);
+	enif_mutex_destroy(priv->sockMutex);
 	free(g_counters);
 	g_counters = NULL;
 	free(priv->paths);
