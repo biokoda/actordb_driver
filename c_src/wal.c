@@ -966,6 +966,7 @@ static int doundo(Wal *pWal, int (*xUndo)(void *, Pgno), void *pUndoCtx, u8 delP
 			pgop = MDB_FIRST_DUP;
 			if (mdb_cursor_get(mdb->cursorPages,&pgKey,&pgVal,MDB_SET) != MDB_SUCCESS)
 			{
+				logop = MDB_NEXT_DUP;
 				DBG("Key not found in log for undo");
 				continue;
 			}
