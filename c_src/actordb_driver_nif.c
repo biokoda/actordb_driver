@@ -2370,6 +2370,12 @@ static void *processing_thread_func(void *arg)
 		{
 			queue_recycle(item);
 			mdb_txn_abort(mdb->txn);
+
+			if (g_tsd_wmdb != NULL)
+			{
+				char commit = 1;
+				unlock_write_txn(data->nEnv, 1, &commit, data->pagesChanged > 0);
+			}
 			break;
 		}
 		else
@@ -3871,6 +3877,7 @@ static void on_unload(ErlNifEnv* env, void* pd)
 	int i,j,k;
 	priv_data *priv = (priv_data*)pd;
 	db_command *cmd = NULL;
+	DBG("on_unload");
 
 	qitem *item = command_create(-1,-1,priv);
 	cmd = (db_command*)item->cmd;
