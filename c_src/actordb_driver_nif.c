@@ -177,10 +177,14 @@ static void unlock_write_txn(int nEnv, char syncForce, char *commit, char hasWri
 			qitem *item;
 			db_command *cmd;
 			int thrind = nEnv*g_pd->nWriteThreads + i;
+			if (g_tsd_thread->nThread == i) {
+				continue;
+			}
 			if (g_pd->wtasks[thrind] == NULL)
 				break;
-			while ((item = command_create(thrind,-1, g_pd)) == NULL)
-			{
+			item = command_create(thrind,-1, g_pd);
+			if (!item) {
+				continue;
 			}
 			cmd = (db_command*)item->cmd;
 			cmd->type = cmd_synced;

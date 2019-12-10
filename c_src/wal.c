@@ -349,8 +349,9 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 				if (term > limitTerm || evnum > limitEvnum)
 				{
 					rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_PREV_DUP);
-					if (rc == MDB_SUCCESS)
+					if (rc == MDB_SUCCESS) {
 						continue;
+					}
 					else
 					{
 						DBG("Cant move to prev dup, term=%llu, evnum=%llu,"
@@ -371,11 +372,16 @@ static int findframe(db_thread *thr, Wal *pWal, Pgno pgno, u32 *piRead, u64 limi
 				while (frag >= 0)
 				{
 					rc = mdb_cursor_get(mdb->cursorPages,&key,&data,MDB_PREV_DUP);
+					if (rc != MDB_SUCCESS) {
+						break;
+					}
 					frag = *(((u8*)data.mv_data)+sizeof(u64)*2);
 					// DBG("SUCCESS? %d frag=%d, size=%ld",pgno,frag,data.mv_size);
 					thr->resFrames[frag--] = data;
 				}
-				*piRead = 1;
+				if (rc == MDB_SUCCESS) {
+					*piRead = 1;
+				}
 				break;
 			}
 		}
